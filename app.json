@@ -7,15 +7,16 @@
     "icon": "./assets/images/app-icon.jpg",
     "scheme": "kaburlu",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": false,
+  "newArchEnabled": true,
     "ios": {
       "supportsTablet": true
     },
     "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
-      },
+        "icon": "./assets/images/app-icon.jpg",
+        "adaptiveIcon": {
+          "foregroundImage": "./assets/images/app-icon-foreground.png",
+          "backgroundColor": "#ffffff"
+        },
       "edgeToEdgeEnabled": true,
       "package": "com.media.kaburlu",
       "googleServicesFile": "./google-services.json",
@@ -34,6 +35,7 @@
       [
         "expo-splash-screen",
         {
+          "image": "./assets/images/splash-icon.png",
           "resizeMode": "contain",
           "backgroundColor": "#000000"
         }

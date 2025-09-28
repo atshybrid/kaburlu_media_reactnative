@@ -2,19 +2,6 @@ apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 
-// --- Release signing (conditional) -------------------------------------------------------------
-// We load keystore properties only if a keystore.properties file exists. This allows local devs
-// to build a release variant signed with their own keystore without committing secrets. If the
-// file is absent we fall back to the debug keystore for the release build (NOT for Play Store!).
-def keystoreProperties = new Properties()
-def keystorePropertiesFile = file("keystore.properties") // located in android/app/
-def hasReleaseKeystore = false
-if (keystorePropertiesFile.exists()) {
-    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
-    hasReleaseKeystore = keystoreProperties.containsKey('storeFile')
-}
-// -----------------------------------------------------------------------------------------------
-
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 
 /**
@@ -102,11 +89,11 @@ android {
 
     namespace 'com.media.kaburlu'
     defaultConfig {
-    applicationId 'com.media.kaburlu'
+        applicationId 'com.media.kaburlu'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 2
-        versionName "1.0.1"
+        versionCode 1
+        versionName "1.0.0"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
@@ -117,23 +104,15 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
-        if (hasReleaseKeystore) {
-            release {
-                storeFile file(keystoreProperties['storeFile'])
-                storePassword keystoreProperties['storePassword']
-                keyAlias keystoreProperties['keyAlias']
-                keyPassword keystoreProperties['keyPassword']
-            }
-        }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
-            // If keystore.properties is present we use the real release keystore, otherwise we
-            // fall back to debug signing (NOT for Play Store distribution!).
-            signingConfig hasReleaseKeystore ? signingConfigs.release : signingConfigs.debug
+            // Caution! In production, you need to generate your own keystore file.
+            // see https://reactnative.dev/docs/signed-apk-android.
+            signingConfig signingConfigs.debug
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
             minifyEnabled enableMinifyInReleaseBuilds
