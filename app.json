@@ -1,0 +1,76 @@
+{
+  "expo": {
+    "name": "kaburlu",
+    "slug": "kaburlu",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/app-icon.jpg",
+    "scheme": "kaburlu",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": false,
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "package": "com.media.kaburlu",
+      "googleServicesFile": "./google-services.json",
+      "softwareKeyboardLayoutMode": "pan",
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "resizeMode": "contain",
+          "backgroundColor": "#000000"
+        }
+      ],
+      "expo-notifications",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow kaburlu to access your photos to attach media to your posts.",
+          "cameraPermission": "Allow kaburlu to use your camera to capture photos and videos.",
+          "microphonePermission": "Allow kaburlu to record audio with videos."
+        }
+      ],
+      "@react-native-google-signin/google-signin"
+    ],
+    "extra": {
+      "google": {
+        "androidClientId": "__AUTO_FROM_GOOGLE_SERVICES_JSON__",
+        "iosClientId": "YOUR_IOS_CLIENT_ID.apps.googleusercontent.com",
+        "webClientId": "572758255210-gubenuc6g6p9j5tudgaqo5m6lc8irtn4.apps.googleusercontent.com",
+        "mode": "native"
+      },
+      "firebase": {
+        "webApiKey": "AIzaSyAIwciUGr4JgSo7keO0TiSPzS3E70SeUyw",
+        "projectId": "khabarx-f0365",
+        "appId": "1:572758255210:android:4ee81e7bc477d728f44c13",
+        "messagingSenderId": "572758255210",
+        "storageBucket": "khabarx-f0365.firebasestorage.app"
+      },
+      "router": {},
+      "eas": {
+        "projectId": "c7881aa5-9bf6-4eb0-a143-f6008e905458"
+      }
+    },
+    "experiments": {
+      "typedRoutes": true
+    },
+    "owner": "amoghnya"
+  }
+}
