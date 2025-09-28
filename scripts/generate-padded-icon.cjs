@@ -1,25 +1,22 @@
+/* eslint-disable no-undef */
 // Generate a padded adaptive icon foreground PNG from the base app icon.
 // - Input:  assets/images/app-icon.jpg (existing)
 // - Output: assets/images/app-icon-foreground.png (transparent with padding)
 // Padding strategy: place the source image within ~75% of a 1024x1024 canvas,
 // centered, preserving aspect ratio, leaving transparent margins to avoid mask cropping.
 
-import { Jimp } from 'jimp';
-import { existsSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const { Jimp } = require('jimp');
+const path = require('node:path');
+const fs = require('node:fs');
 
 async function main() {
-  const root = path.resolve(__dirname, '..');
+  const projectRoot = path.resolve(__dirname, '..');
   const srcRel = 'assets/images/app-icon.jpg';
   const outRel = 'assets/images/app-icon-foreground.png';
-  const srcPath = path.resolve(root, srcRel);
-  const outPath = path.resolve(root, outRel);
+  const srcPath = path.resolve(projectRoot, srcRel);
+  const outPath = path.resolve(projectRoot, outRel);
 
-  if (!existsSync(srcPath)) {
+  if (!fs.existsSync(srcPath)) {
     console.error(`Source icon not found at ${srcRel}. Update the script if your icon is elsewhere.`);
     process.exit(1);
   }
@@ -29,7 +26,7 @@ async function main() {
   const TARGET = Math.round(CANVAS * CONTENT_RATIO);
 
   const [canvas, src] = await Promise.all([
-    new Jimp({ width: CANVAS, height: CANVAS, color: 0x00000000 }), // transparent background
+    new Jimp({ width: CANVAS, height: CANVAS, color: 0x00000000 }), // transparent
     Jimp.read(srcPath),
   ]);
 
@@ -40,16 +37,16 @@ async function main() {
   const newW = Math.round(srcW * scale);
   const newH = Math.round(srcH * scale);
 
-  // Jimp v1 API expects an options object; valid modes include 'bilinearInterpolation'
-  src.resize({ w: newW, h: newH, mode: 'bilinearInterpolation' });
+  // Jimp v1 API: resize expects an options object
+  src.resize({ w: newW, h: newH, mode: 'bilinear' });
 
   // Center the resized image on canvas
   const x = Math.round((CANVAS - newW) / 2);
   const y = Math.round((CANVAS - newH) / 2);
   canvas.composite(src, x, y);
 
-  await canvas.write(outPath);
-  console.log(`Wrote padded adaptive icon foreground: ${path.relative(root, outPath)}`);
+  await canvas.writeAsync(outPath);
+  console.log(`Wrote padded adaptive icon foreground: ${path.relative(projectRoot, outPath)}`);
 }
 
 main().catch((err) => {
