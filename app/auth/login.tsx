@@ -252,6 +252,19 @@ export default function LoginScreen() {
       try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
       // Enforce Citizen Reporter role
       const userRole = res?.user?.role;
+      if (userRole === 'TENANT_ADMIN') {
+        // Tenant admin lands on News; dashboard opens only on tap from Account.
+        try { await AsyncStorage.setItem('profile_mobile', mobile); await AsyncStorage.setItem('last_login_mobile', mobile); } catch {}
+        setAttemptsLeft(MAX_ATTEMPTS);
+        setMpinError(null);
+        setLoginSuccessMsg('Login success');
+        setShowCongrats(true);
+        setTimeout(() => {
+          setShowCongrats(false);
+          router.replace('/news');
+        }, 1200);
+        return;
+      }
       if (userRole && userRole !== 'CITIZEN_REPORTER') {
         Alert.alert('Access Restricted', 'You must be a Citizen Reporter to continue.');
         router.replace('/news');

@@ -9,8 +9,9 @@ const outJsonPath = path.join(root, 'assets', 'lotti', 'splash_screen.json');
 
 try {
   if (!fs.existsSync(inputPath)) {
-    console.error(`❌ Input not found: ${inputPath}`);
-    process.exit(1);
+    // Treat as optional so platform builds don't fail when this asset isn't present.
+    console.warn(`⚠️ Input not found (skipping): ${inputPath}`);
+    process.exit(0);
   }
   const raw = fs.readFileSync(inputPath);
   const files = unzipSync(new Uint8Array(raw));

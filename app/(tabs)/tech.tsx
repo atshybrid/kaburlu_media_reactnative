@@ -34,6 +34,7 @@ export default function AccountScreen() {
   const [notify, setNotify] = useState(true);
   const [autoplay, setAutoplay] = useState(false);
   const [langSheetOpen, setLangSheetOpen] = useState(false);
+  const isTenantAdmin = loggedIn && role === 'TENANT_ADMIN';
 
   // Refresh account/profile state from tokens + storage
   const refreshProfile = useCallback(async () => {
@@ -62,7 +63,33 @@ export default function AccountScreen() {
         prefLang = pickPreferenceLanguage(prefs);
         prefLoc = pickPreferenceLocation(prefs);
       } catch {}
-      if (prefLang) {
+      // IMPORTANT: do not overwrite the locally selected language if it already exists.
+      // Some accounts may have stale server preferences (defaulting to English).
+      let storedLangObj: any = null;
+      try {
+        const raw = await AsyncStorage.getItem('selectedLanguage');
+        if (raw) {
+          try { storedLangObj = JSON.parse(raw); }
+          catch { storedLangObj = raw; }
+        }
+      } catch {}
+      const hasStoredLang = !!(
+        storedLangObj &&
+        (
+          (typeof storedLangObj === 'object' && (storedLangObj.code || storedLangObj.id)) ||
+          (typeof storedLangObj === 'string' && storedLangObj.trim().length > 0)
+        )
+      );
+
+      if (hasStoredLang) {
+        try {
+          if (storedLangObj && typeof storedLangObj === 'object' && storedLangObj.code) {
+            setLanguage(storedLangObj as Language);
+          } else if (typeof storedLangObj === 'string') {
+            setLanguage(LANGUAGES.find(l => l.code === storedLangObj) || LANGUAGES[0]);
+          }
+        } catch {}
+      } else if (prefLang) {
         setLanguage(prefLang);
         try { await AsyncStorage.setItem('selectedLanguage', JSON.stringify(prefLang)); } catch {}
       } else {
@@ -221,6 +248,23 @@ export default function AccountScreen() {
           )}
         </View>
         {/* Welcome card removed as requested */}
+
+        {isTenantAdmin ? (
+          <View style={[styles.card, { backgroundColor: card, borderColor: border }]}>
+            <Text style={[styles.cardTitle, { color: text }]}>Tenant</Text>
+            <Pressable
+              onPress={() => router.push('/tenant/dashboard')}
+              accessibilityLabel="Open Tenant Dashboard"
+              style={({ pressed }) => [styles.rowBetween, pressed && { opacity: 0.85 }]}
+            >
+              <View style={{ flex: 1, paddingRight: 12 }}>
+                <Text style={[styles.label, { color: text }]}>Tenant Dashboard</Text>
+                <Text style={[styles.helper, { color: muted }]}>Open overview cards and metrics</Text>
+              </View>
+              <MaterialIcons name="chevron-right" size={22} color={scheme === 'dark' ? '#fff' : Colors.light.primary} />
+            </Pressable>
+          </View>
+        ) : null}
 
         {/* Location Card */}
         <View style={[styles.card, { backgroundColor: card, borderColor: border }]}>

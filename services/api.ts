@@ -294,25 +294,77 @@ export const getNews = async (lang: string, category?: string, cursor?: string):
       return mockArticles;
     }
 
+    const baseUrl = getBaseUrl();
+
     // Build cache key for offline support
     const key = `news_cache:${lang}:${category || 'all'}`;
     // Correct endpoint: /shortnews with limit and optional cursor
-    // Resolve languageId (required by public endpoint)
+    // Resolve languageId (required by public endpoint). Prefer tokens/storage, but be resilient to stale ids.
     let languageId: string | undefined;
+    let selectedLanguageObj: any | null = null;
+    let selectedLanguageCode: string | undefined;
     try {
       const t = await loadTokens();
       languageId = t?.languageId;
       if (!languageId) {
         const raw = await AsyncStorage.getItem('selectedLanguage');
-        languageId = raw ? (JSON.parse(raw)?.id as string | undefined) : undefined;
+        if (raw) {
+          selectedLanguageObj = JSON.parse(raw);
+          selectedLanguageCode = selectedLanguageObj?.code;
+          languageId = selectedLanguageObj?.id as string | undefined;
+        }
       }
     } catch {}
+
+    const langCode = String(lang || selectedLanguageCode || 'en').toLowerCase();
+
+    const looksLikeServerId = (id: unknown): id is string => {
+      if (typeof id !== 'string') return false;
+      const v = id.trim();
+      // Backend IDs look like "cm..." (cuid-ish). Prevent falling back to local numeric ids like "2".
+      return v.length >= 10 && v.toLowerCase().startsWith('cm');
+    };
+
+    const resolveLanguageIdByCode = async (code: string): Promise<string | undefined> => {
+      try {
+        const res = await request<any>('/languages', { method: 'GET', timeoutMs: 15000, noAuth: true });
+        const arr = Array.isArray(res) ? res
+          : Array.isArray(res?.data) ? res.data
+          : Array.isArray(res?.items) ? res.items
+          : Array.isArray(res?.languages) ? res.languages
+          : Array.isArray(res?.data?.items) ? res.data.items
+          : Array.isArray(res?.data?.languages) ? res.data.languages
+          : null;
+        if (!arr) return undefined;
+        const match = (arr as any[]).find((l) => String(l?.code || l?.lang || '').toLowerCase() === code);
+        const id = String(match?.id || match?._id || '').trim();
+        return looksLikeServerId(id) ? id : undefined;
+      } catch {
+        return undefined;
+      }
+    };
+
+    // Ignore obviously-invalid ids (e.g. "2" from local constants/caches)
+    if (languageId && !looksLikeServerId(languageId)) {
+      if (DEBUG_API) console.warn('[API] Ignoring non-server languageId from storage/tokens:', languageId);
+      languageId = undefined;
+    }
+
+    // If storage has no id (or was corrupted), fall back to /languages by code
+    // Always prefer the canonical server languageId for the requested language code.
+    // This prevents stale token languageId (often default English) from forcing empty results.
+    const canonicalForCode = await resolveLanguageIdByCode(langCode);
+    if (canonicalForCode) {
+      languageId = canonicalForCode;
+    } else if (!languageId) {
+      languageId = await resolveLanguageIdByCode(langCode);
+    }
     const params = new URLSearchParams({ limit: '10' });
     if (languageId) params.set('languageId', languageId);
-  if (cursor) params.set('cursor', cursor);
-  // Do NOT pass category to backend yet; we filter client-side for stability
-  const endpoint = `/shortnews/public?${params.toString()}`;
-  const json = await request<{ data?: any[]; items?: any[]; success?: boolean; nextCursor?: string }>(endpoint, { timeoutMs: 30000, noAuth: true });
+    if (cursor) params.set('cursor', cursor);
+    // Do NOT pass category to backend yet; we filter client-side for stability
+    let endpoint = `/shortnews/public?${params.toString()}`;
+    let json = await request<any>(endpoint, { timeoutMs: 30000, noAuth: true });
     if (DEBUG_API) {
       const keys = json && typeof json === 'object' ? Object.keys(json as any) : [];
       const dataArr = Array.isArray((json as any)?.data) ? (json as any).data : null;
@@ -341,12 +393,57 @@ export const getNews = async (lang: string, category?: string, cursor?: string):
         } : null,
       });
     }
-    const listRaw = (json as any)?.data ?? (json as any)?.items ?? null;
-    if (!Array.isArray(listRaw)) {
+    let list = (() => {
+      const j: any = json as any;
+      // Swagger shape: { success, pageInfo, data: [...] }
+      if (Array.isArray(j?.data)) return j.data;
+      // Some backends wrap: { success, data: { pageInfo, data: [...] } }
+      if (j?.data && typeof j.data === 'object') {
+        if (Array.isArray(j.data.data)) return j.data.data;
+        if (Array.isArray(j.data.items)) return j.data.items;
+      }
+      if (Array.isArray(j?.items)) return j.items;
+      return null;
+    })();
+
+    // If we got a valid but empty list, the stored languageId may be stale.
+    // Retry once by resolving the canonical languageId from /languages using the language code.
+    if (Array.isArray(list) && list.length === 0 && langCode) {
+      const resolved = await resolveLanguageIdByCode(langCode);
+      if (resolved && resolved !== languageId) {
+        try {
+          params.set('languageId', resolved);
+          endpoint = `/shortnews/public?${params.toString()}`;
+          json = await request<any>(endpoint, { timeoutMs: 30000, noAuth: true });
+          const retryList = (() => {
+            const j: any = json as any;
+            if (Array.isArray(j?.data)) return j.data;
+            if (j?.data && typeof j.data === 'object') {
+              if (Array.isArray(j.data.data)) return j.data.data;
+              if (Array.isArray(j.data.items)) return j.data.items;
+            }
+            if (Array.isArray(j?.items)) return j.items;
+            return null;
+          })();
+          if (Array.isArray(retryList) && retryList.length) {
+            list = retryList;
+            languageId = resolved;
+            // Persist corrected id so subsequent API calls (categories/news) are consistent.
+            if (selectedLanguageObj && String(selectedLanguageObj?.code || '').toLowerCase() === langCode) {
+              selectedLanguageObj.id = resolved;
+              try { await AsyncStorage.setItem('selectedLanguage', JSON.stringify(selectedLanguageObj)); } catch {}
+            }
+          }
+        } catch {
+          // Ignore retry failures; original empty list will be handled below.
+        }
+      }
+    }
+
+    if (!Array.isArray(list)) {
       // Hard fail if unexpected shape; caller decides what to do
       throw new Error('Invalid shortnews response');
     }
-    const list = listRaw as any[];
     // Helper: collect URLs from mixed shapes (string | object | array)
     const collectUrls = (input: any): string[] => {
       const urls: string[] = [];
@@ -467,16 +564,29 @@ export const getNews = async (lang: string, category?: string, cursor?: string):
         console.log('[API] extracted image counts (first 3):', sample);
       } catch {}
     }
-    // Cache for offline
+    if (!normalized.length) {
+      const details = {
+        baseUrl,
+        lang: langCode,
+        languageId: languageId || null,
+        endpoint,
+      };
+      console.warn('[API] Empty shortnews list', details);
+      // Empty is a valid state (e.g., language has no shortnews yet). Do not throw.
+      return [];
+    }
+    // Cache for offline (only cache non-empty lists to avoid sticky empty UI)
     try { await AsyncStorage.setItem(key, JSON.stringify(normalized)); } catch {}
-    if (!normalized.length) throw new Error('Empty shortnews list');
     return normalized;
   } catch (err) {
     // Offline-first: try cached data only; do NOT fallback to mock unless mockMode is on
     try {
       const key = `news_cache:${lang}:${category || 'all'}`;
       const cached = await AsyncStorage.getItem(key);
-      if (cached) return JSON.parse(cached) as Article[];
+      if (cached) {
+        const parsed = JSON.parse(cached) as Article[];
+        if (Array.isArray(parsed) && parsed.length) return parsed;
+      }
     } catch {}
     console.warn('getNews failed with no cache available', err);
     throw err;
@@ -1048,9 +1158,11 @@ export const registerGuestUser = async (data: { languageId: string; deviceDetail
   }
 
   let lastErr: any = null;
+  let attemptsMade = 0;
   for (let i = 0; i < variants.length; i++) {
     const { label, body } = variants[i];
     try {
+      attemptsMade++;
       const logBody = JSON.parse(JSON.stringify(body));
       try {
         if (logBody?.deviceDetails?.pushToken) logBody.deviceDetails.pushToken = '[redacted]';
@@ -1095,7 +1207,7 @@ export const registerGuestUser = async (data: { languageId: string; deviceDetail
     const status = (lastErr as any).status;
     const serverBody = (lastErr as any).body;
     const serverMsg = serverBody?.message || serverBody?.error || (lastErr as any).message || `HTTP ${status}`;
-    throw new Error(`Guest registration failed (${status}) after ${variants.length} attempts: ${serverMsg}`);
+    throw new Error(`Guest registration failed (${status}) after ${attemptsMade || 1} attempt(s): ${serverMsg}`);
   }
   throw (lastErr instanceof Error ? lastErr : new Error('Guest registration failed (unknown)'));
 };

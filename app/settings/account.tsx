@@ -34,7 +34,37 @@ export default function AccountScreen() {
       const prefs = await getUserPreferences(t?.user?.id || (t as any)?.user?._id);
       const pl = pickPreferenceLanguage(prefs);
       const loc = pickPreferenceLocation(prefs);
-      if (pl) {
+      // Prefer the locally selected language if already set, to avoid server-side stale defaults.
+      let storedLangObj: any = null;
+      try {
+        const raw = await AsyncStorage.getItem('selectedLanguage');
+        if (raw) {
+          try { storedLangObj = JSON.parse(raw); }
+          catch { storedLangObj = raw; }
+        }
+      } catch {}
+      const hasStoredLang = !!(
+        storedLangObj &&
+        (
+          (typeof storedLangObj === 'object' && (storedLangObj.code || storedLangObj.id)) ||
+          (typeof storedLangObj === 'string' && storedLangObj.trim().length > 0)
+        )
+      );
+
+      if (hasStoredLang) {
+        try {
+          const j = storedLangObj;
+          if (j && typeof j === 'object' && j.name) {
+            setLangName(j.name);
+          } else if (j && typeof j === 'object' && j.code) {
+            const found = LANGUAGES.find(l => l.code === j.code);
+            if (found) setLangName(found.name);
+          } else if (typeof j === 'string') {
+            const found = LANGUAGES.find(l => l.code === j);
+            if (found) setLangName(found.name);
+          }
+        } catch {}
+      } else if (pl) {
         setLangName(pl.name);
         try { await AsyncStorage.setItem('selectedLanguage', JSON.stringify(pl)); } catch {}
       } else {

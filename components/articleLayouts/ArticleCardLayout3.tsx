@@ -2,6 +2,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { Image, ImageStyle, StyleSheet, Text, TextStyle, TouchableOpacity, View, ViewStyle } from 'react-native';
 import { Colors } from '../../constants/Colors';
 import { pickTitleColorTheme } from '../../constants/TitleColorRules';
+import { useColorScheme } from '../../hooks/useColorScheme';
 
 export type ReporterType = 'citizen' | 'newspaper';
 
@@ -53,7 +54,7 @@ const ArticleCardLayout3: React.FC<Props> = ({
   const [liked, setLiked] = useState(false);
   const [likes, setLikes] = useState<number>(item.likes ?? 0);
 
-  const scheme: 'light' | 'dark' = 'light'; // TODO integrate useColorScheme/useThemeColor
+  const scheme = useColorScheme();
   const palette = Colors[scheme];
 
   const dynamicTitleTheme = useMemo(() => {

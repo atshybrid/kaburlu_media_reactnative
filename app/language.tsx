@@ -50,7 +50,7 @@ const LanguageSelectionScreen = () => {
     setSelectedLanguage(language);
     await AsyncStorage.setItem('selectedLanguage', JSON.stringify(language));
 
-  const deviceDetails = await getDeviceIdentity();
+    const deviceDetails = await getDeviceIdentity();
 
     try {
       setSubmitting(true);
@@ -93,9 +93,17 @@ const LanguageSelectionScreen = () => {
       // await requestPermissions();
       router.replace('/news');
     } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      console.error('Failed to register guest user:', msg);
-      setSubmitError(msg || 'Failed to register. Please try again.');
+      const rawMsg = error instanceof Error ? error.message : String(error);
+      // In Expo dev, console.error triggers the red error overlay; treat this as a handled UI error.
+      try {
+        console.warn('[AUTH] Guest registration failed', rawMsg);
+      } catch {}
+
+      const friendlyMsg = /\(500\)/.test(rawMsg)
+        ? 'Server error (500). Please try again in a moment.'
+        : rawMsg || 'Failed to register. Please try again.';
+
+      setSubmitError(friendlyMsg);
     } finally {
       setSubmitting(false);
     }

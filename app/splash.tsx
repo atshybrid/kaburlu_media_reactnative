@@ -34,6 +34,12 @@ export default function SplashScreen() {
         let tokens: Tokens | null = await loadTokens();
         const valid = !!(tokens && tokens.expiresAt && !isExpired(tokens.expiresAt));
 
+        if (valid && tokens?.user?.role === 'TENANT_ADMIN') {
+          // Never auto-open tenant dashboard; always land on News first.
+          targetRouteRef.current = '/news';
+          return;
+        }
+
         let storedLanguage: any = null;
         try {
           const langRaw = await AsyncStorage.getItem('selectedLanguage');

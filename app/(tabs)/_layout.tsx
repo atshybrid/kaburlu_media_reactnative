@@ -10,8 +10,8 @@ import { Colors } from '@/constants/Colors';
 import { CategoryProvider, useCategory } from '@/context/CategoryContext';
 import { CategorySheetProvider, useCategorySheet } from '@/context/CategorySheetContext';
 import {
-  TabBarVisibilityProvider,
-  useTabBarVisibility,
+    TabBarVisibilityProvider,
+    useTabBarVisibility,
 } from '@/context/TabBarVisibilityContext';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { LolzIcon, NewsIcon, PostArticleIcon, ProfileIcon } from '@/icons';
@@ -74,8 +74,6 @@ function InnerLayout() {
   <Tabs.Screen name="trending" options={{ href: null }} />
   <Tabs.Screen name="media" options={{ href: null }} />
   {/* We'll surface Post (explore) as a tab below */}
-  {/* Hide Ka Chat route from tabs */}
-  <Tabs.Screen name="kachat" options={{ href: null }} />
 
       <Tabs.Screen
         name="news"
