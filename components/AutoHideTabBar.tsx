@@ -1,35 +1,39 @@
 import { Colors } from '@/constants/Colors';
-import { useCategorySheet } from '@/context/CategorySheetContext';
 import { useTabBarVisibility } from '@/context/TabBarVisibilityContext';
 import { useColorScheme } from '@/hooks/useColorScheme';
-import { PostArticleIcon } from '@/icons';
-import { checkPostArticleAccess } from '@/services/auth';
+// Center FAB shows language icon if available, otherwise branded text (Ka / chat)
+import { getLanguageIcon } from '@/icons/languageIcons';
+// Ka Chat FAB navigation, no post auth needed
+import AsyncStorage from '@react-native-async-storage/async-storage';
+// no AsyncStorage needed for FAB content now
 import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { usePathname, useRouter } from 'expo-router';
 import React, { useRef, useState } from 'react';
-import { Alert, Animated, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function AutoHideTabBar(props: BottomTabBarProps) {
   const colorScheme = useColorScheme();
   const theme = Colors[colorScheme ?? 'light'];
   const router = useRouter();
-  const { isTabBarVisible, setTabBarVisible } = useTabBarVisibility();
-  const { open: openCategorySheet } = useCategorySheet();
+  const { isTabBarVisible } = useTabBarVisibility();
   const insets = useSafeAreaInsets();
   const [measuredHeight, setMeasuredHeight] = useState(0);
   const [containerWidth, setContainerWidth] = useState(0);
   const animatedRef = useRef(new Animated.Value(isTabBarVisible ? 1 : 0));
   const scaleRef = useRef(new Animated.Value(0.98));
   const fabScale = useRef(new Animated.Value(1));
+  const [langCode, setLangCode] = useState<string>('');
+  const LanguageIcon = getLanguageIcon(langCode);
 
   const routes = props.state.routes;
   const activeIndex = props.state.index;
   const activeRouteName = routes[activeIndex]?.name;
   const pathname = usePathname();
-  // Hide the tab bar on full-screen flows like Post Article (explore) or Account (tech)
+  // Hide the tab bar on full-screen flows like Post Article (explore), Ka Chat, or Account (tech)
   const onExplore = typeof pathname === 'string' && /(^|\/)explore$/.test(pathname);
-  const hiddenOnRoute = onExplore || activeRouteName === 'tech';
+  const onKaChat = typeof pathname === 'string' && /(^|\/)kachat$/.test(pathname);
+  const hiddenOnRoute = onExplore || onKaChat || activeRouteName === 'tech';
   const shouldShow = isTabBarVisible && !hiddenOnRoute;
 
   React.useEffect(() => {
@@ -64,58 +68,39 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
   const pillLeft = Math.max(0, activeIndex * tabWidth + (tabWidth - pillWidth) / 2);
 
   React.useEffect(() => {
-    // scale FAB when Post Article (explore) is focused
-    const focused = onExplore;
+    // scale FAB when Post Article (explore) or Ka Chat is focused
+    const focused = onExplore || onKaChat;
     Animated.spring(fabScale.current, {
       toValue: focused ? 1.06 : 1,
       useNativeDriver: true,
       bounciness: 8,
       speed: 10,
     }).start();
-  }, [pillLeft, onExplore]);
+  }, [pillLeft, onExplore, onKaChat]);
+
+  // Load selected language for optional center FAB icon
+  React.useEffect(() => {
+    (async () => {
+      try {
+        const stored = await AsyncStorage.getItem('selectedLanguage');
+        const code = stored ? JSON.parse(stored)?.code ?? '' : '';
+        setLangCode(code || '');
+      } catch {}
+    })();
+  }, []);
 
   const onContainerLayout = (e: any) => setContainerWidth(e.nativeEvent.layout.width);
-  const goToPostArticle = async () => {
-    // Comprehensive auth check before allowing post article access
+  const goToKaChat = () => {
     try {
-      const authCheck = await checkPostArticleAccess();
-      
-      if (!authCheck.canAccess) {
-        // For guest users or expired tokens, direct navigate to login
-        if (authCheck.isGuest || !authCheck.hasToken) {
-          router.push('/auth/login?from=post');
-          return;
-        }
-        
-        // For authenticated users without proper role, show alert with options
-        Alert.alert(
-          'Access Denied',
-          authCheck.reason || 'You need to be a Citizen Reporter to create posts.',
-          [
-            {
-              text: 'Cancel',
-              style: 'cancel'
-            },
-            {
-              text: 'Go to Login',
-              onPress: () => router.push('/auth/login?from=post')
-            }
-          ]
-        );
-        return;
-      }
-      
-      // All checks passed - navigate to post article screen
-      router.push('/explore');
-    } catch (error) {
-      console.warn('[FAB] goToPostArticle auth check failed:', error);
-      // On error, default to login
-      router.push('/auth/login');
+      // use object form to satisfy expo-router types
+      router.push({ pathname: '/kachat' as any });
+    } catch (e) {
+      console.warn('[FAB] navigate to Ka Chat failed:', e);
     }
   };
 
   // Debounce map for tab presses
-  const lastPressMap = React.useRef<Record<string, number>>({}).current;
+  // removed debounce map (was used for career sheet)
 
   return (
     <Animated.View
@@ -179,7 +164,7 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
               );
             })}
 
-            {/* Center slot placeholder - shows the Post News label to align like a tab */}
+            {/* Center slot placeholder - shows the Ka Chat label to align like a tab */}
             <View style={styles.tabItem} pointerEvents="none">
               <View style={{ height: 24 }} />
               <Text
@@ -189,12 +174,12 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
                 ]}
                 numberOfLines={1}
               >
-                Post News
+                Ka Chat
               </Text>
             </View>
 
-            {/* Right two tabs */}
-            {(['career', 'tech'] as const).map((name) => {
+            {/* Right two tabs: Post (explore) and Account (tech) */}
+            {(['explore', 'tech'] as const).map((name) => {
               const route = routes.find((r) => r.name === name);
               if (!route) return <View key={`missing-${name}`} style={styles.tabItem} />;
               const isFocused = activeRouteName === route.name;
@@ -207,20 +192,6 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
                   ? options.tabBarIcon({ focused: isFocused, color, size })
                   : null;
               const onPress = () => {
-                if (name === 'career') {
-                  // Debounce rapid double taps and force-show the tab bar before opening
-                  const now = Date.now();
-                  const last = lastPressMap[name] || 0;
-                  if (now - last < 250) return;
-                  lastPressMap[name] = now;
-                  // Hide the tab bar immediately to avoid a brief flash before opening the sheet
-                  setTabBarVisible(false);
-                  // Short delay to avoid racing with the previous sheet close animation/backdrop timers
-                  setTimeout(() => {
-                    openCategorySheet();
-                  }, 180);
-                  return;
-                }
                 if (!isFocused) {
                   // @ts-ignore expo-router compatible
                   props.navigation.navigate(route.name as never);
@@ -257,14 +228,21 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
             ]}
           >
             <Pressable
-              onPress={goToPostArticle}
+              onPress={goToKaChat}
               accessibilityRole="button"
-              accessibilityLabel="Post News"
+              accessibilityLabel="Ka Chat"
               style={({ pressed }) => [styles.fab, { backgroundColor: theme.secondary }, pressed && styles.fabPressed]}
               android_ripple={{ color: 'rgba(0,0,0,0.08)', borderless: true }}
             >
               <View style={styles.fabInner}>
-                <PostArticleIcon size={30} color="#ffffff" active />
+                {LanguageIcon ? (
+                  <LanguageIcon width={28} height={28} fill="#ffffff" />
+                ) : (
+                  <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={styles.fabKa}>Ka</Text>
+                    <Text style={styles.fabChat}>chat</Text>
+                  </View>
+                )}
               </View>
             </Pressable>
           </Animated.View>
@@ -338,6 +316,20 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  fabKa: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '800',
+    lineHeight: 20,
+  },
+  fabChat: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '700',
+    lineHeight: 12,
+    marginTop: -2,
+    opacity: 0.95,
   },
   fabLabel: {
     marginTop: 8,

@@ -72,7 +72,7 @@ function isAuthError(err: any): boolean {
   return s === 401 || s === 403 || (s === 400 && (msg.includes('unauthor') || msg.includes('expired') || msg.includes('token')));
 }
 
-async function tryRefreshJwt(): Promise<string> {
+export async function tryRefreshJwt(): Promise<string> {
   const refreshToken = await AsyncStorage.getItem(REFRESH_KEY);
   if (!refreshToken) throw new Error('No refresh token');
   const res = await withTimeout(fetch(`${BASE_URL}/auth/refresh`, {
@@ -98,7 +98,7 @@ async function tryRefreshJwt(): Promise<string> {
   return token;
 }
 
-async function clearStoredTokens() {
+export async function clearStoredTokens() {
   await AsyncStorage.multiRemove([JWT_KEY, REFRESH_KEY, EXPIRES_AT_KEY]);
 }
 

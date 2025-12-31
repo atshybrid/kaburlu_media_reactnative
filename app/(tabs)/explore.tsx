@@ -90,8 +90,9 @@ export default function PostCreateScreen() {
         Alert.alert('Permission needed', 'Please allow media library access.');
         return;
       }
+      const mediaTypeAll = (ImagePicker as any).MediaType?.All ?? (ImagePicker as any).MediaTypeOptions?.All ?? undefined;
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.All,
+        mediaTypes: mediaTypeAll,
         allowsMultipleSelection: true,
         quality: 0.85,
         selectionLimit: 5,
@@ -503,6 +504,11 @@ export default function PostCreateScreen() {
           placeId: null,
           placeName: effectivePerms.place?.fullName || effectivePerms.place?.name || null,
           address: effectivePerms.place?.fullName || null,
+          // New address breakdown fields
+          cityName: effectivePerms.place?.city || null,
+          districtName: (effectivePerms.place?.district || effectivePerms.place?.subregion) || null,
+          stateName: effectivePerms.place?.region || null,
+          postalCode: effectivePerms.place?.postalCode || null,
           source: 'gps',
         },
       };

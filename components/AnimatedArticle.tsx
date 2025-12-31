@@ -4,7 +4,7 @@ import React, { useEffect } from 'react';
 import { Dimensions, StyleSheet, useWindowDimensions } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { runOnJS, SharedValue, useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
-import ArticlePage from './ArticlePage';
+import { pickLayoutForArticle } from './articleLayouts/registry';
 
 interface AnimatedArticleProps {
   article: Article;
@@ -76,7 +76,7 @@ const AnimatedArticle: React.FC<AnimatedArticleProps> = ({
   return (
     <GestureDetector gesture={gesture}>
       <Animated.View style={[styles.container, animatedStyle]}>
-        <ArticlePage article={article} index={index} totalArticles={totalArticles} />
+  {React.createElement(pickLayoutForArticle(article, index), { article, index, totalArticles })}
       </Animated.View>
     </GestureDetector>
   );

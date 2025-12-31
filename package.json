@@ -5,10 +5,11 @@
   "scripts": {
     "agent:smoke": "node ./scripts/agent-smoke.test.mjs",
     "start": "expo start",
+    "server": "node server.js",
     "reset-project": "node ./scripts/reset-project.js",
     "lottie:build": "node ./scripts/convert-dotlottie.mjs",
     "lottie:inline": "node ./scripts/inline-lottie-images.mjs",
-  "icon:foreground": "node ./scripts/generate-padded-icon.mjs",
+    "icon:foreground": "node ./scripts/generate-padded-icon.mjs",
     "android": "npm run lottie:build && expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
@@ -18,6 +19,8 @@
     "android:bundle:release": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/use-jdk17.ps1 -- ./android/gradlew.bat bundleRelease --no-daemon --stacktrace --console=plain"
   },
   "dependencies": {
+    "@expo-google-fonts/anek-telugu": "^0.4.1",
+    "@expo-google-fonts/mandali": "^0.4.1",
     "@expo-google-fonts/ramabhadra": "^0.4.0",
     "@expo/metro-runtime": "~6.1.2",
     "@expo/ngrok": "^4.1.3",
@@ -32,6 +35,7 @@
     "@react-navigation/native": "^7.1.6",
     "bcryptjs": "^3.0.2",
     "body-parser": "^2.2.0",
+    "dotenv": "^16.6.1",
     "expo": "~54.0.7",
     "expo-auth-session": "^5.5.2",
     "expo-blur": "~15.0.7",
@@ -76,7 +80,8 @@
     "react-native-web": "^0.21.0",
     "react-native-webview": "13.15.0",
     "react-native-worklets": "0.5.1",
-    "sanscript": "^0.0.2"
+    "sanscript": "^0.0.2",
+    "zustand": "^4.5.7"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
@@ -88,6 +93,7 @@
     "eslint-config-expo": "~10.0.0",
     "fflate": "^0.8.2",
     "jimp": "^1.6.0",
+    "react-native-svg-transformer": "^1.5.0",
     "typescript": "~5.9.2"
   },
   "private": true

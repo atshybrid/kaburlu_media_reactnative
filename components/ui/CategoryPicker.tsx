@@ -52,8 +52,17 @@ export default function CategoryPicker({ categories, value, onChange, label = 'C
         } else if (!cachedList) {
           // Hydrate from service cache first, else generic
           let raw: string | null = null;
-          if (svcKey) raw = await AsyncStorage.getItem(svcKey);
-          if (!raw) raw = await AsyncStorage.getItem(genericKey);
+          if (svcKey) {
+            // Language-specific cache takes precedence; if present, use it.
+            raw = await AsyncStorage.getItem(svcKey);
+          }
+          if (!raw) {
+            // Only use a generic categories cache when there is no selected language available.
+            // This avoids cross-language leakage (e.g., showing English while Telugu is selected).
+            if (!langId) {
+              raw = await AsyncStorage.getItem(genericKey);
+            }
+          }
           if (raw) {
             const arr = JSON.parse(raw) as CategoryItem[];
             if (Array.isArray(arr)) setCachedList(arr);

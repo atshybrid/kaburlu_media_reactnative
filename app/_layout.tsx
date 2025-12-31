@@ -10,6 +10,7 @@ import { StatusBar } from 'expo-status-bar';
 import React from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
 // removed duplicate react-native import (merged above)
+import { useAppFonts } from '@/components/fonts';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 import { AuthProvider } from '../context/AuthContext';
@@ -39,7 +40,8 @@ function ThemedApp() {
   const { themePref } = useThemePref();
   const effective = themePref === 'system' ? system : themePref;
   const router = useRouter();
-  // Font loading temporarily disabled for debugging blank screen
+  // Non-blocking font loader (Mandali)
+  useAppFonts();
 
   // Dev-only keep-awake guard to avoid activation errors on some devices
   React.useEffect(() => {

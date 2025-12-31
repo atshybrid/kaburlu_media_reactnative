@@ -77,6 +77,8 @@ const NewsScreen = () => {
     })();
   }, [selectedCategory]);
 
+  // removed right-side language FAB state
+
   const handleSwipeUp = () => {
   if (activeIndex < articles.length - 1) {
       const newIndex = activeIndex + 1;
@@ -133,6 +135,7 @@ const NewsScreen = () => {
           </View>
         )}
       </View>
+      {/* Language FAB removed - center FAB now reflects language */}
     </View>
   );
 };

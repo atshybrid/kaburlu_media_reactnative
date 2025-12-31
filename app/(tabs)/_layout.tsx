@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Tabs } from 'expo-router';
+import { Tabs, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
@@ -10,11 +10,11 @@ import { Colors } from '@/constants/Colors';
 import { CategoryProvider, useCategory } from '@/context/CategoryContext';
 import { CategorySheetProvider, useCategorySheet } from '@/context/CategorySheetContext';
 import {
-    TabBarVisibilityProvider,
-    useTabBarVisibility,
+  TabBarVisibilityProvider,
+  useTabBarVisibility,
 } from '@/context/TabBarVisibilityContext';
 import { useColorScheme } from '@/hooks/useColorScheme';
-import { CategoriesIcon, DonationIcon, NewsIcon, ProfileIcon } from '@/icons';
+import { LolzIcon, NewsIcon, PostArticleIcon, ProfileIcon } from '@/icons';
 import { CategoryItem, getCategories } from '@/services/api';
 import { log } from '@/services/logger';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -25,6 +25,7 @@ function InnerLayout() {
   useTabBarVisibility();
   const theme = Colors[colorScheme ?? 'light'];
   useSafeAreaInsets();
+  const router = useRouter();
 
   const { close, visible, currentOnSelect, _clearHandler } = useCategorySheet() as any;
   const { selectedCategory, setSelectedCategory } = useCategory();
@@ -72,7 +73,9 @@ function InnerLayout() {
   <Tabs.Screen name="index" options={{ href: null }} />
   <Tabs.Screen name="trending" options={{ href: null }} />
   <Tabs.Screen name="media" options={{ href: null }} />
-  <Tabs.Screen name="explore" options={{ href: null }} />
+  {/* We'll surface Post (explore) as a tab below */}
+  {/* Hide Ka Chat route from tabs */}
+  <Tabs.Screen name="kachat" options={{ href: null }} />
 
       <Tabs.Screen
         name="news"
@@ -86,19 +89,22 @@ function InnerLayout() {
       <Tabs.Screen
         name="donations"
         options={{
-          title: 'Donations',
+          title: 'LOLz',
           tabBarIcon: ({ color, focused }) => (
-            <DonationIcon size={focused ? 28 : 24} color={color} />
+            <LolzIcon size={focused ? 34 : 28} color={color} active={focused} />
           ),
           tabBarLabelStyle: { fontSize: 11 },
         }}
       />
+      {/* Hide the old Category tab */}
+      <Tabs.Screen name="career" options={{ href: null }} />
+      {/* Show Post creation as a main tab (was explore) */}
       <Tabs.Screen
-        name="career"
+        name="explore"
         options={{
-          title: 'Category',
+          title: 'Post',
           tabBarIcon: ({ color, focused }) => (
-            <CategoriesIcon size={focused ? 28 : 24} color={color} active={focused} />
+            <PostArticleIcon size={focused ? 28 : 24} color={color} active={focused as any} />
           ),
         }}
       />
@@ -137,6 +143,41 @@ function InnerLayout() {
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.rowScroll}
       >
+        {/* Quick action: Post News */}
+        <Pressable
+          key="__post_news__"
+          style={({ pressed }) => [styles.tileH, pressed && styles.tilePressed]}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          onPress={() => {
+            if (pressLocked) return;
+            setPressLocked(true);
+            try { close(); } catch {}
+            // Allow close animation to start before navigating
+            setTimeout(() => {
+              try { router.push('/explore'); } catch {}
+              setPressLocked(false);
+            }, 160);
+          }}
+          accessibilityRole="button"
+          accessibilityLabel="Post News"
+        >
+          <View
+            style={[
+              styles.iconCircle,
+              {
+                backgroundColor: colorScheme === 'dark' ? '#223042' : '#eef2ff',
+                borderWidth: StyleSheet.hairlineWidth,
+                borderColor: theme.border,
+              },
+            ]}
+          >
+            <PostArticleIcon size={22} color={colorScheme === 'dark' ? '#fff' : theme.primary} active />
+          </View>
+          <Text style={[styles.tileText, { color: theme.text }]} numberOfLines={1}>
+            Post
+          </Text>
+        </Pressable>
+
         {categories.map((c) => {
           const active = selectedCategory === c.id;
           return (

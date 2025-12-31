@@ -26,7 +26,7 @@ export default function SplashScreen() {
     // No early hide; we'll hide in onReadyForDisplay, and also when navigating as a final safety.
   }, []);
 
-  // Decide route fast (no network), and navigate after exactly 8 seconds (video length).
+  // Decide route fast (no network). We'll navigate on video end, with a safe fallback timeout.
   useEffect(() => {
     (async () => {
       try {
@@ -50,24 +50,51 @@ export default function SplashScreen() {
       }
     })();
 
-    const timer = setTimeout(() => {
+    // Fallback: in case events never fire, navigate after a short timeout (approx video length)
+    const fallback = setTimeout(() => {
       if (navigatedRef.current) return;
       navigatedRef.current = true;
       (async () => {
         try { await ExpoSplashScreen.hideAsync(); } catch {}
         router.replace(targetRouteRef.current || '/language');
       })();
-    }, 3000);
+    }, 4000);
     return () => {
-      clearTimeout(timer);
+      clearTimeout(fallback);
     };
   }, []);
+
+  // Navigate as soon as the video finishes playing
+  useEffect(() => {
+    // Listen for time updates and navigate when we reach the end
+    const sub = (player as any)?.addListener?.('timeUpdate', (e: any) => {
+      const ct: number = e?.currentTime ?? e?.position ?? 0;
+      const dur: number = e?.duration ?? e?.seekableDuration ?? 0;
+      if (!navigatedRef.current && dur > 0 && ct >= dur - 0.05) {
+        navigatedRef.current = true;
+        (async () => {
+          try { await ExpoSplashScreen.hideAsync(); } catch {}
+          router.replace(targetRouteRef.current || '/language');
+        })();
+      }
+    });
+    return () => {
+      try {
+        if (sub && typeof sub.remove === 'function') sub.remove();
+      } catch {}
+    };
+  }, [player]);
 
   // Handled by Video's onPlaybackStatusUpdate and onReadyForDisplay below
 
   return (
     <View style={styles.container}>
       <StatusBar hidden />
+      {/*
+        To avoid any logo/black screen before the splash video:
+        - Set your native splash in app.json and android/app/src/main/res/drawable/splash.xml to pure black (no logo).
+        - The video will show instantly as soon as it is ready.
+      */}
       <Animated.View style={[styles.video, { opacity: fade }]}>
         <VideoView
           player={player}
@@ -77,10 +104,10 @@ export default function SplashScreen() {
           fullscreenOptions={{ enable: false }}
           allowsPictureInPicture={false}
           onLayout={() => {
-            // When the view is laid out, give the decoder a brief moment, then reveal smoothly
+            // Instantly show video, no fade
             if (!videoReadyRef.current) {
               videoReadyRef.current = true;
-              Animated.timing(fade, { toValue: 1, duration: 150, useNativeDriver: true }).start();
+              fade.setValue(1); // no animation
               ExpoSplashScreen.hideAsync().catch(() => {});
             }
           }}

@@ -233,10 +233,13 @@ export default function BottomSheet({
               elevation: shadowEnabled ? 24 : 0,
             },
           ]}
-          {...(dragEnabled ? panResponder.panHandlers : {})}
         >
-          <View style={styles.handleContainer}>
-            <View style={[styles.handleBar, { backgroundColor: colorScheme === 'dark' ? 'rgba(255,255,255,0.28)' : 'rgba(0,0,0,0.2)' }]} />
+          <View style={styles.handleContainer} {...(dragEnabled ? panResponder.panHandlers : {})}>
+            <View
+              accessibilityLabel="Drag handle"
+              accessibilityHint="Drag down to close"
+              style={[styles.handleBar, { backgroundColor: colorScheme === 'dark' ? 'rgba(255,255,255,0.28)' : 'rgba(0,0,0,0.2)' }]}
+            />
             <View style={styles.handleHintRow}>
               <View style={[styles.handleDot, { backgroundColor: colorScheme === 'dark' ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.15)' }]} />
               <View style={[styles.handleDot, { backgroundColor: colorScheme === 'dark' ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.15)' }]} />

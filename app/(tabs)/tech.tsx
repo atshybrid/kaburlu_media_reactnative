@@ -151,8 +151,9 @@ export default function AccountScreen() {
         Alert.alert('Permission needed', 'Please allow photo library access to update your profile picture.');
         return;
       }
+      const mediaType = (ImagePicker as any).MediaType?.Images ?? (ImagePicker as any).MediaTypeOptions?.Images ?? (ImagePicker as any).MediaTypeOptions?.All;
       const res = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: mediaType,
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.8,

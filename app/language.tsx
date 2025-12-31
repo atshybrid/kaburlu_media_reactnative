@@ -13,6 +13,7 @@ import {
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { LanguageSkeleton } from '@/components/ui/LanguageSkeleton';
+import { getLanguageIcon } from '@/icons/languageIcons';
 import { saveTokens } from '@/services/auth';
 import { getDeviceIdentity } from '@/services/device';
 import { requestAppPermissions } from '@/services/permissions';
@@ -142,10 +143,22 @@ const LanguageSelectionScreen = () => {
           <Text style={[styles.nativeName, { color: item.color }]}>{item.nativeName}</Text>
           <Text style={styles.englishName}>{item.name}</Text>
         </View>
-        <View style={styles.checkmarkContainer}>
+        <View style={styles.rightMeta}>
+          {/* Language SVG Icon (optional) */}
+          {(() => {
+            const Icon = getLanguageIcon(item.code);
+            if (!Icon) return null;
+            return (
+              <View style={styles.langIconWrap}>
+                <Icon width={28} height={28} />
+              </View>
+            );
+          })()}
+          <View style={styles.checkmarkContainer}>
             {isSelected && (
               <MaterialCommunityIcons name="check-circle" size={24} color="green" />        
             )}
+          </View>
         </View>
       </View>
     </TouchableOpacity>
@@ -271,6 +284,18 @@ const styles = StyleSheet.create({
       height: 24, // same as the icon size
       alignItems: 'center',
       justifyContent: 'center',
+  },
+  rightMeta: {
+    width: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  langIconWrap: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   // Error and retry UI
   errorBox: {

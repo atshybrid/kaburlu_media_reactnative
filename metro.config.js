@@ -68,4 +68,18 @@ config.resolver.assetExts = Array.from(
   new Set([...(config.resolver.assetExts || []), 'lottie'])
 );
 
+// Enable importing .svg as React components via react-native-svg-transformer
+config.transformer = {
+  ...(config.transformer || {}),
+  babelTransformerPath: require.resolve('react-native-svg-transformer'),
+};
+
+// Treat .svg as source (not asset) so it gets transformed
+const assetExts = new Set(config.resolver.assetExts || []);
+assetExts.delete('svg');
+config.resolver.assetExts = Array.from(assetExts);
+config.resolver.sourceExts = Array.from(
+  new Set([...(config.resolver.sourceExts || []), 'svg'])
+);
+
 module.exports = config;

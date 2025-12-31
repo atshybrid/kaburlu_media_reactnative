@@ -8,7 +8,7 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { loadTokens, refreshTokens, saveTokens } from './auth';
 import { getDeviceIdentity } from './device';
-import { HttpError, getBaseUrl, request } from './http';
+import { HttpError, getBaseUrl, request, tryRefreshJwt } from './http';
 
 // ---- Mock Mode (ON/OFF) ----
 // Env override: EXPO_PUBLIC_FORCE_MOCK=true|1|on
@@ -221,6 +221,18 @@ export async function afterPreferencesUpdated(opts: { languageIdChanged?: string
     // Best-effort: if languageId changed, persist hint in tokens for downstream readers
     if (opts.languageIdChanged) {
       await saveTokens({ ...next, languageId: opts.languageIdChanged });
+      // Invalidate categories cache for old/new languages to ensure refetch
+      try {
+        const old = await AsyncStorage.getItem('selectedLanguage');
+        let oldId: string | undefined;
+        if (old) {
+          try { oldId = JSON.parse(old)?.id; } catch { /* ignore */ }
+        }
+        const ids = new Set<string>();
+        if (oldId) ids.add(String(oldId));
+        if (opts.languageIdChanged) ids.add(String(opts.languageIdChanged));
+        await Promise.all(Array.from(ids).map(id => AsyncStorage.removeItem(CATEGORIES_CACHE_KEY(String(id)))));
+      } catch {}
     }
   } catch (e) {
     if (DEBUG_API) console.warn('[API] afterPreferencesUpdated refreshTokens failed', (e as any)?.message || e);
@@ -1338,21 +1350,54 @@ const CATEGORIES_CACHE_KEY = (langId: string) => `categories_cache:${langId}`;
 
 
 export async function getCategories(languageId?: string): Promise<CategoryItem[]> {
-  // Always use English for categories as per backend expectation
-  // Ignore any provided languageId or selected language; force 'en'
-  let langId: string | undefined = 'en';
-  // Normalize if a language code was passed accidentally
+  // Determine effective language id. Prefer:
+  // 1) explicit argument
+  // 2) tokens.languageId
+  // 3) AsyncStorage('selectedLanguage').id
+  // If a language CODE (e.g., 'en', 'te') is supplied, normalize to its id via getLanguages.
+  let langId: string | undefined = languageId;
+  let langCodeHint: string | undefined;
   try {
-    if (langId && !/^cmf/i.test(String(langId))) {
-      const list = await getLanguages();
-      const found = list.find(l => (l.code || '').toLowerCase() === String(langId).toLowerCase());
-      if (found?.id) {
-        try { console.log('[CAT] getCategories: normalize code→id', { code: langId, id: found.id }); } catch {}
-        langId = String(found.id);
-      }
+    if (!langId) {
+      const t = await loadTokens();
+      langId = t?.languageId;
     }
   } catch {}
-  // If we don't have a language yet, return empty (or cached fallback from any lang if needed)
+  if (!langId) {
+    try {
+      const raw = await AsyncStorage.getItem('selectedLanguage');
+      if (raw) {
+        try {
+          const j = JSON.parse(raw);
+          langId = j?.id || undefined;
+          langCodeHint = j?.code || undefined;
+        } catch {
+          // if stored as a code string
+          langCodeHint = raw;
+        }
+      }
+    } catch {}
+  }
+  // Normalize codes like 'en'/'te' to real ids via languages list
+  try {
+    const list = await getLanguages();
+    const ids = new Set(list.map(l => String(l.id)));
+    const codeLower = (langId || langCodeHint || '').toString().toLowerCase();
+    if (!langId || !ids.has(String(langId))) {
+      const byCode = list.find(l => (l.code || '').toLowerCase() === codeLower);
+      if (byCode?.id) {
+        langId = String(byCode.id);
+      }
+    }
+    // Final fallback: pick English id if available
+    if (!langId) {
+      const en = list.find(l => (l.code || '').toLowerCase() === 'en');
+      langId = en?.id ? String(en.id) : 'en';
+    }
+  } catch {
+    // If languages API failed, fallback to a sensible default
+    langId = langId || langCodeHint || 'en';
+  }
   if (!langId) {
     try { console.warn('[CAT] getCategories: no languageId resolved'); } catch {}
     return [];
@@ -1593,7 +1638,7 @@ export async function uploadMedia(file: { uri: string | undefined | null; type: 
   })();
   const name = file.name || inferredName;
   const mime = guessMime(file.uri, file.type);
-  const jwt = await AsyncStorage.getItem('jwt');
+  let currentJwt: string | null = await AsyncStorage.getItem('jwt');
   const endpoint = `${getBaseUrl()}/media/upload`;
 
   // Build strategies to accommodate different backend contracts
@@ -1646,17 +1691,27 @@ export async function uploadMedia(file: { uri: string | undefined | null; type: 
   ];
 
   let lastError: { status?: number; body?: any; message?: string } | null = null;
+  let triedRefresh = false;
   for (const s of strategies) {
     try {
-      const res = await fetch(endpoint, {
+      const doPost = async (jwtOverride?: string | null) => fetch(endpoint, {
         method: 'POST',
         headers: {
           Accept: 'application/json',
-          ...(jwt ? { Authorization: `Bearer ${jwt}` } : {}),
+          ...((jwtOverride ?? currentJwt) ? { Authorization: `Bearer ${jwtOverride ?? currentJwt}` } : {}),
           // Do NOT set Content-Type; RN sets proper multipart boundary automatically
         } as any,
         body: s.build() as any,
       });
+      let res = await doPost();
+      if (res.status === 401 && !triedRefresh) {
+        try {
+          const newJwt = await tryRefreshJwt();
+          currentJwt = newJwt;
+          triedRefresh = true;
+          res = await doPost(newJwt);
+        } catch {}
+      }
       const text = await res.text();
       let json: any = undefined;
       if (text) { try { json = JSON.parse(text); } catch { json = undefined; } }
@@ -1738,6 +1793,11 @@ export type CreateShortNewsInput = {
     placeId?: string | null;
     placeName?: string | null;
     address?: string | null;
+    // New address breakdown fields (optional)
+    cityName?: string | null;
+    districtName?: string | null;
+    stateName?: string | null;
+    postalCode?: string | null;
     source?: 'gps' | 'network' | 'fused' | 'manual' | 'unknown' | string;
   };
   role?: 'CITIZEN_REPORTER';
@@ -1843,6 +1903,15 @@ export async function createShortNews(input: CreateShortNewsInput): Promise<Crea
       lat: input.location?.latitude,
       lng: input.location?.longitude,
       accuracy: input.location?.accuracyMeters,
+      // Address breakdown aliases at top-level for backend flexibility
+      city: input.location?.cityName || undefined,
+      cityName: input.location?.cityName || undefined,
+      district: input.location?.districtName || undefined,
+      districtName: input.location?.districtName || undefined,
+      state: input.location?.stateName || undefined,
+      stateName: input.location?.stateName || undefined,
+      postalCode: input.location?.postalCode || undefined,
+      pincode: input.location?.postalCode || undefined,
       role: input.role || 'CITIZEN_REPORTER',
     };
     // Provide idempotency key to backend too (header and body), best-effort
