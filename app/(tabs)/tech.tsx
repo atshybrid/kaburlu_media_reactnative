@@ -15,6 +15,34 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, BackHandler, Image, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+function isValidHexColor(v?: string | null) {
+  if (!v) return false;
+  return /^#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})$/.test(String(v).trim());
+}
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+  const h = hex.trim();
+  if (!isValidHexColor(h)) return null;
+  const raw = h.slice(1);
+  const full = raw.length === 3 ? raw.split('').map((c) => c + c).join('') : raw;
+  const n = parseInt(full, 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+function pickReadableTextColor(bgHex?: string | null) {
+  const rgb = bgHex ? hexToRgb(bgHex) : null;
+  if (!rgb) return null;
+  const lum = (0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b) / 255;
+  return lum < 0.55 ? '#ffffff' : '#0f172a';
+}
+
+function withAlpha(hex: string, alpha: number) {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return hex;
+  const a = Math.max(0, Math.min(1, alpha));
+  return `rgba(${rgb.r},${rgb.g},${rgb.b},${a})`;
+}
+
 export default function AccountScreen() {
   const router = useRouter();
   const scheme = useColorScheme();
@@ -34,7 +62,14 @@ export default function AccountScreen() {
   const [notify, setNotify] = useState(true);
   const [autoplay, setAutoplay] = useState(false);
   const [langSheetOpen, setLangSheetOpen] = useState(false);
+  const [tenantName, setTenantName] = useState<string>('');
+  const [tenantId, setTenantId] = useState<string>('');
+  const [tenantLogoUrl, setTenantLogoUrl] = useState<string>('');
+  const [tenantPrimary, setTenantPrimary] = useState<string>('');
+  const [tenantSecondary, setTenantSecondary] = useState<string>('');
+
   const isTenantAdmin = loggedIn && role === 'TENANT_ADMIN';
+  const isTenantRole = loggedIn && (role === 'TENANT_ADMIN' || role === 'TENANT_REPORTER');
 
   // Refresh account/profile state from tokens + storage
   const refreshProfile = useCallback(async () => {
@@ -53,6 +88,30 @@ export default function AccountScreen() {
         if (savedRole) setRole(savedRole);
         const savedPhoto = await AsyncStorage.getItem('profile_photo_url');
         if (savedPhoto) setPhotoUrl(savedPhoto);
+      }
+
+      // Tenant branding/session extras (for TENANT_* roles)
+      try {
+        const session: any = (t as any)?.session;
+        const ds = session?.domainSettings;
+        const colors = ds?.data?.theme?.colors;
+        const primary = colors?.primary || colors?.accent;
+        const secondary = colors?.secondary || colors?.accent;
+        const logo = ds?.data?.seo?.ogImageUrl || ds?.data?.branding?.logoUrl;
+        const tn = session?.tenant?.name;
+        const tid = session?.tenant?.id || session?.tenantId;
+
+        setTenantName(typeof tn === 'string' ? tn : '');
+        setTenantId(typeof tid === 'string' ? tid : '');
+        setTenantLogoUrl(typeof logo === 'string' ? logo.trim() : '');
+        setTenantPrimary(isValidHexColor(primary) ? String(primary) : '');
+        setTenantSecondary(isValidHexColor(secondary) ? String(secondary) : '');
+      } catch {
+        setTenantName('');
+        setTenantId('');
+        setTenantLogoUrl('');
+        setTenantPrimary('');
+        setTenantSecondary('');
       }
 
       // Try server preferences first
@@ -168,6 +227,12 @@ export default function AccountScreen() {
   const changeLocation = () => router.push({ pathname: '/settings/location' as any });
   const languageDisplay = useMemo(() => language?.name ?? 'English', [language]);
 
+  const tenantCardBg = tenantPrimary ? tenantPrimary : card;
+  const tenantCardFg = tenantPrimary ? (pickReadableTextColor(tenantPrimary) || text) : text;
+  const tenantSubtle = tenantPrimary ? withAlpha(tenantCardFg, 0.86) : muted;
+  const tenantBorder = tenantPrimary ? withAlpha(tenantCardFg, 0.18) : border;
+  const tenantPillBg = tenantSecondary ? tenantSecondary : (tenantPrimary ? withAlpha(tenantCardFg, 0.14) : card);
+
   const pickAndUploadAvatar = useCallback(async () => {
     if (!loggedIn) { router.push('/auth/login'); return; }
     try {
@@ -249,20 +314,59 @@ export default function AccountScreen() {
         </View>
         {/* Welcome card removed as requested */}
 
-        {isTenantAdmin ? (
-          <View style={[styles.card, { backgroundColor: card, borderColor: border }]}>
-            <Text style={[styles.cardTitle, { color: text }]}>Tenant</Text>
-            <Pressable
-              onPress={() => router.push('/tenant/dashboard')}
-              accessibilityLabel="Open Tenant Dashboard"
-              style={({ pressed }) => [styles.rowBetween, pressed && { opacity: 0.85 }]}
-            >
-              <View style={{ flex: 1, paddingRight: 12 }}>
-                <Text style={[styles.label, { color: text }]}>Tenant Dashboard</Text>
-                <Text style={[styles.helper, { color: muted }]}>Open overview cards and metrics</Text>
+        {isTenantRole ? (
+          <View style={[styles.card, { backgroundColor: tenantCardBg, borderColor: tenantBorder }]}>
+            <View style={styles.tenantHeaderRow}>
+              <View
+                style={[
+                  styles.tenantLogoWrap,
+                  {
+                    borderColor: withAlpha(tenantCardFg, tenantCardFg === '#ffffff' ? 0.35 : 0.18),
+                    backgroundColor: withAlpha(tenantCardFg, tenantCardFg === '#ffffff' ? 0.92 : 0.08),
+                  },
+                ]}
+              >
+                {tenantLogoUrl ? (
+                  <Image
+                    source={{ uri: tenantLogoUrl }}
+                    style={styles.tenantLogoImg}
+                    resizeMode="contain"
+                    onError={() => {
+                      // If logo fails to load, fall back to initial
+                      setTenantLogoUrl('');
+                    }}
+                  />
+                ) : (
+                  <Text style={[styles.tenantLogoFallback, { color: tenantCardFg }]}>
+                    {(tenantName || 'T').charAt(0).toUpperCase()}
+                  </Text>
+                )}
               </View>
-              <MaterialIcons name="chevron-right" size={22} color={scheme === 'dark' ? '#fff' : Colors.light.primary} />
-            </Pressable>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.tenantName, { color: tenantCardFg }]} numberOfLines={1}>
+                  {tenantName || ''}
+                </Text>
+              </View>
+              <View style={[styles.tenantRolePill, { backgroundColor: tenantPillBg, borderColor: tenantBorder }]}>
+                <Text style={[styles.tenantRolePillText, { color: tenantCardFg }]} numberOfLines={1}>
+                  {role}
+                </Text>
+              </View>
+            </View>
+
+            {isTenantAdmin ? (
+              <Pressable
+                onPress={() => router.push('/tenant/dashboard')}
+                accessibilityLabel="Open Tenant Dashboard"
+                style={({ pressed }) => [styles.rowBetween, pressed && { opacity: 0.85 }]}
+              >
+                <View style={{ flex: 1, paddingRight: 12 }}>
+                  <Text style={[styles.label, { color: tenantCardFg }]}>Tenant Dashboard</Text>
+                  <Text style={[styles.helper, { color: tenantSubtle }]}>Open overview cards and metrics</Text>
+                </View>
+                <MaterialIcons name="chevron-right" size={22} color={tenantCardFg} />
+              </Pressable>
+            ) : null}
           </View>
         ) : null}
 
@@ -454,6 +558,13 @@ const styles = StyleSheet.create({
   rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 },
   label: { fontSize: 15 },
   helper: { fontSize: 12, marginTop: 2 },
+  tenantHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 0 },
+  tenantLogoWrap: { width: 52, height: 52, borderRadius: 16, borderWidth: 1, alignItems: 'center', justifyContent: 'center', overflow: 'hidden', padding: 4 },
+  tenantLogoImg: { width: '100%', height: '100%' },
+  tenantLogoFallback: { fontWeight: '900', fontSize: 18 },
+  tenantName: { fontSize: 16, fontWeight: '800' },
+  tenantRolePill: { maxWidth: 140, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999, borderWidth: 1 },
+  tenantRolePillText: { fontSize: 11, fontWeight: '800' },
   langPills: { flexDirection: 'row', gap: 8 },
   pill: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: 14, borderWidth: 1 },
   pillActive: { backgroundColor: Colors.light.secondary, borderColor: Colors.light.secondary },

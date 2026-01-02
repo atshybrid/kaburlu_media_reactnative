@@ -105,7 +105,15 @@ export default function LoginScreen() {
       const expiresAt = expiresIn ? Date.now() + expiresIn * 1000 : undefined;
       const user = data.user;
       const languageId = user?.languageId || data.languageId;
-      await saveTokens({ jwt, refreshToken, expiresAt, user, languageId });
+      const session = {
+        tenantId: data?.tenantId,
+        domainId: data?.domainId,
+        tenant: data?.tenant,
+        domain: data?.domain,
+        domainSettings: data?.domainSettings,
+      };
+      const hasSessionExtras = !!(session.tenantId || session.domainId || session.tenant || session.domain || session.domainSettings);
+      await saveTokens({ jwt, refreshToken, expiresAt, user, languageId, session: hasSessionExtras ? session : undefined });
   if (user?.role) await AsyncStorage.setItem('profile_role', user.role);
   // Persist authenticated session flag (replaces legacy is_guest_session logic)
   try { await AsyncStorage.setItem('is_authenticated', '1'); } catch {}
@@ -250,9 +258,9 @@ export default function LoginScreen() {
       await persistAuthResponse(res);
       try { console.log('[UI] MPIN login success', { ms: Date.now() - t0, role: res?.user?.role }); } catch {}
       try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
-      // Enforce Citizen Reporter role
+      // Enforce allowed roles
       const userRole = res?.user?.role;
-      if (userRole === 'TENANT_ADMIN') {
+      if (userRole === 'TENANT_ADMIN' || userRole === 'TENANT_REPORTER') {
         // Tenant admin lands on News; dashboard opens only on tap from Account.
         try { await AsyncStorage.setItem('profile_mobile', mobile); await AsyncStorage.setItem('last_login_mobile', mobile); } catch {}
         setAttemptsLeft(MAX_ATTEMPTS);

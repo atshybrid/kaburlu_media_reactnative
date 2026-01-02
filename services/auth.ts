@@ -9,6 +9,8 @@ export type Tokens = {
   // optional extras we persist if provided by backend
   languageId?: string;
   user?: any;
+  // optional session payload (e.g., tenant/domain/domainSettings)
+  session?: any;
 };
 
 const JWT_KEY = 'jwt';
@@ -16,6 +18,7 @@ const REFRESH_KEY = 'refreshToken';
 const EXPIRES_AT_KEY = 'jwtExpiresAt';
 const LANGUAGE_ID_KEY = 'authLanguageId';
 const USER_JSON_KEY = 'authUserJSON';
+const SESSION_JSON_KEY = 'authSessionJSON';
 
 export async function saveTokens(t: Tokens) {
   const items: [string, string][] = [
@@ -25,25 +28,28 @@ export async function saveTokens(t: Tokens) {
   ];
   if (t.languageId) items.push([LANGUAGE_ID_KEY, t.languageId]);
   if (t.user) items.push([USER_JSON_KEY, JSON.stringify(t.user)]);
+  if (t.session) items.push([SESSION_JSON_KEY, JSON.stringify(t.session)]);
   await AsyncStorage.multiSet(items);
 }
 
 export async function loadTokens(): Promise<Tokens | null> {
-  const [[, jwt], [, refreshToken], [, expiresAtStr], [, languageId], [, userJson]] = await AsyncStorage.multiGet([
+  const [[, jwt], [, refreshToken], [, expiresAtStr], [, languageId], [, userJson], [, sessionJson]] = await AsyncStorage.multiGet([
     JWT_KEY,
     REFRESH_KEY,
     EXPIRES_AT_KEY,
     LANGUAGE_ID_KEY,
     USER_JSON_KEY,
+    SESSION_JSON_KEY,
   ]);
   if (!jwt || !refreshToken) return null;
   const expiresAt = expiresAtStr ? Number(expiresAtStr) : undefined;
   const user = userJson ? JSON.parse(userJson) : undefined;
-  return { jwt, refreshToken, expiresAt, languageId: languageId || undefined, user };
+  const session = sessionJson ? JSON.parse(sessionJson) : undefined;
+  return { jwt, refreshToken, expiresAt, languageId: languageId || undefined, user, session };
 }
 
 export async function clearTokens() {
-  await AsyncStorage.multiRemove([JWT_KEY, REFRESH_KEY, EXPIRES_AT_KEY, LANGUAGE_ID_KEY, USER_JSON_KEY]);
+  await AsyncStorage.multiRemove([JWT_KEY, REFRESH_KEY, EXPIRES_AT_KEY, LANGUAGE_ID_KEY, USER_JSON_KEY, SESSION_JSON_KEY]);
 }
 
 // Soft logout: keep non-auth profile data & last used mobile number for faster re-login.

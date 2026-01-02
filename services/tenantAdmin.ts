@@ -19,6 +19,20 @@ export type TenantAdminLoginResponse = {
     expiresIn?: number;
     expiresAt?: number;
     user: TenantAdminAuthUser;
+    // Tenant-scoped extras (present for TENANT_* roles)
+    tenantId?: string;
+    domainId?: string;
+    tenant?: { id: string; name: string; slug?: string };
+    domain?: { id: string; domain: string; isPrimary?: boolean; status?: string };
+    domainSettings?: {
+      id?: string;
+      data?: {
+        seo?: { ogImageUrl?: string };
+        theme?: { colors?: { primary?: string; secondary?: string; accent?: string } };
+        branding?: { logoUrl?: string };
+      };
+      updatedAt?: string;
+    };
   };
 };
 
