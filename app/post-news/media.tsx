@@ -1,19 +1,23 @@
 import { ThemedText } from '@/components/ThemedText';
+import CategoryPicker, { type LiteCategory } from '@/components/ui/CategoryPicker';
 import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
-import { createPost, uploadMedia, type UploadedMedia } from '@/services/api';
+import { createNewspaperArticle, getTenantCategories, uploadMedia, type CategoryItem, type UploadedMedia } from '@/services/api';
+import { loadTokens } from '@/services/auth';
 import { requestMediaPermissionsOnly } from '@/services/permissions';
 import { usePostNewsDraftStore } from '@/state/postNewsDraftStore';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import LottieView from 'lottie-react-native';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
     Image,
     KeyboardAvoidingView,
+    Modal,
     Platform,
     Pressable,
     ScrollView,
@@ -23,47 +27,22 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-async function readSelectedLanguageId(): Promise<string> {
+async function readSelectedLanguageCode(): Promise<string> {
   try {
     const raw = await AsyncStorage.getItem('selectedLanguage');
     if (!raw) return 'en';
     const parsed = JSON.parse(raw);
-    return String(parsed?.id || parsed?.code || 'en');
+    return String(parsed?.code || parsed?.id || 'en');
   } catch {
     return 'en';
   }
 }
 
-function buildPostContent(draft: ReturnType<typeof usePostNewsDraftStore.getState>['draft']): string {
-  const lines: string[] = [];
-  const subtitle = String(draft.subtitle || '').trim();
-  if (subtitle) lines.push(subtitle);
-
-  const dl = draft.dateLine;
-  const dlText = String(dl?.text || '').trim();
-  if (dlText) {
-    lines.push(dlText);
-  }
-
-  const bullets = Array.isArray(draft.bullets) ? draft.bullets.map((b) => String(b || '').trim()).filter(Boolean) : [];
-  if (bullets.length) {
-    lines.push('');
-    for (const b of bullets.slice(0, 5)) lines.push(`- ${b}`);
-  }
-
-  const body = String(draft.body || '').trim();
-  if (body) {
-    lines.push('');
-    lines.push(body);
-  }
-
-  const caption = String(draft.coverCaption || '').trim();
-  if (caption) {
-    lines.push('');
-    lines.push(`Cover caption: ${caption}`);
-  }
-
-  return lines.join('\n');
+function splitParagraphs(text: string): string[] {
+  return String(text || '')
+    .split(/\n\s*\n+/g)
+    .map((s) => String(s || '').trim())
+    .filter(Boolean);
 }
 
 export default function PostNewsMediaScreen() {
@@ -74,8 +53,55 @@ export default function PostNewsMediaScreen() {
 
   const { draft, setDraft, setImageUris, resetDraft } = usePostNewsDraftStore();
 
+  const [tenantId, setTenantId] = useState<string>('');
+  const [tenantCategories, setTenantCategories] = useState<CategoryItem[] | null>(null);
+  const [tenantCategoriesBusy, setTenantCategoriesBusy] = useState(false);
+
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<string>('');
+  const [showCongrats, setShowCongrats] = useState(false);
+
+  const congratsAnim = useMemo(() => require('../../assets/lotti/congratulation.json'), []);
+
+  // Load tenantId for categories
+  React.useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const t = await loadTokens();
+        const tid = String((t as any)?.session?.tenant?.id || (t as any)?.session?.tenant?._id || '').trim();
+        if (alive) setTenantId(tid);
+      } catch {
+        if (alive) setTenantId('');
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Fetch tenant categories
+  React.useEffect(() => {
+    let alive = true;
+    (async () => {
+      const tid = String(tenantId || '').trim();
+      if (!tid) return;
+      setTenantCategoriesBusy(true);
+      try {
+        // Use selected language if available; backend also provides tenantLanguageCode.
+        const langCode = String(draft.languageCode || draft.languageId || 'en');
+        const list = await getTenantCategories({ tenantId: tid, langCode });
+        if (alive) setTenantCategories(list);
+      } catch {
+        if (alive) setTenantCategories([]);
+      } finally {
+        if (alive) setTenantCategoriesBusy(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [draft.languageCode, draft.languageId, tenantId]);
 
   const pickImage = useCallback(async (opts: { cover?: boolean }) => {
     const perm = await requestMediaPermissionsOnly();
@@ -84,8 +110,9 @@ export default function PostNewsMediaScreen() {
       return;
     }
 
+    const mediaTypeImages = (ImagePicker as any).MediaType?.Images ?? 'images';
     const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: mediaTypeImages,
       allowsEditing: !!opts.cover,
       quality: 0.85,
     });
@@ -112,10 +139,15 @@ export default function PostNewsMediaScreen() {
     const titleOk = String(draft.title || '').trim().length >= 3;
     const bodyOk = String(draft.body || '').trim().length >= 20;
     const coverOk = !!draft.coverImageUri;
-    return titleOk && bodyOk && coverOk && !busy;
-  }, [busy, draft.body, draft.coverImageUri, draft.title]);
+    const categoryOk = !!String(draft.categoryId || '').trim();
+    return titleOk && bodyOk && coverOk && categoryOk && !busy;
+  }, [busy, draft.body, draft.categoryId, draft.coverImageUri, draft.title]);
 
   const onSubmit = useCallback(async () => {
+    if (!String(draft.categoryId || '').trim()) {
+      Alert.alert('Category required', 'Please select a category to continue.');
+      return;
+    }
     if (!draft.coverImageUri) {
       Alert.alert('Cover image required', 'Please choose a cover image to continue.');
       return;
@@ -137,27 +169,74 @@ export default function PostNewsMediaScreen() {
       }
 
       setProgress('Posting…');
-      const languageId = draft.languageId || (await readSelectedLanguageId());
-      const content = buildPostContent(draft);
+      const languageCode = String(draft.languageCode || (await readSelectedLanguageCode()) || 'en');
 
-      const res = await createPost({
+      // Status rule (per product requirement):
+      // - TENANT_REPORTER/REPORTER: autoPublish=true => published, else pending
+      // - Other roles: pending by default (we don't have an explicit "save draft" UI here)
+      let status: 'draft' | 'pending' | 'published' = 'pending';
+      try {
+        const t = await loadTokens();
+        const roleRaw = (t as any)?.user?.role;
+        const roleSaved = await AsyncStorage.getItem('profile_role');
+        const role = String(roleRaw || roleSaved || '').trim().toUpperCase().replace(/[^A-Z0-9_]+/g, '_');
+        if (role === 'TENANT_REPORTER' || role === 'REPORTER') {
+          const autoPublish = !!(
+            (t as any)?.session?.tenantReporter?.autoPublish ??
+            (t as any)?.session?.reporter?.autoPublish ??
+            (t as any)?.user?.autoPublish
+          );
+          status = autoPublish ? 'published' : 'pending';
+        }
+      } catch {
+        // ignore; keep default
+      }
+
+      const paragraphs = splitParagraphs(String(draft.body || ''));
+      const lead = paragraphs[0] || '';
+      const content = paragraphs.slice(1).map((p) => ({ type: 'paragraph' as const, text: p }));
+
+      const locId = String(draft.dateLine?.locationId || '').trim();
+      const locType = String((draft.dateLine as any)?.locationType || '').toUpperCase();
+      const location: any = {};
+      if (locId) {
+        if (locType === 'STATE') location.stateId = locId;
+        else if (locType === 'DISTRICT') location.districtId = locId;
+        else if (locType === 'MANDAL') location.mandalId = locId;
+        else if (locType === 'VILLAGE') location.villageId = locId;
+        else location.districtId = locId; // fallback for older drafts
+      }
+
+      const imageUrls = uploaded.filter((m) => m.type === 'image').map((m) => m.url).filter(Boolean);
+      const coverUrl = imageUrls[0];
+
+      const res = await createNewspaperArticle({
+        languageCode,
+        categoryId: String(draft.categoryId || '').trim(),
         title: String(draft.title || '').trim(),
-        content,
-        languageId,
-        category: 'news',
-        media: uploaded,
-        locationId: draft.dateLine?.locationId,
-        dateLineText: draft.dateLine?.text,
+        subTitle: String(draft.subtitle || '').trim() || undefined,
+        dateLine: String(draft.dateLine?.text || '').trim() || undefined,
+        bulletPoints: Array.isArray(draft.bullets) ? draft.bullets.map((b) => String(b || '').trim()).filter(Boolean).slice(0, 5) : undefined,
+        lead: lead || undefined,
+        content: content.length ? content : undefined,
+        coverImageUrl: coverUrl || undefined,
+        images: imageUrls.length ? imageUrls : undefined,
+        mediaUrls: imageUrls.length ? imageUrls : undefined,
+        location,
+        status,
       });
 
-      Alert.alert('Posted', 'Your news was posted successfully.');
+      // Show success animation after 200 OK
+      setShowCongrats(true);
       resetDraft();
-      try {
-        // Prefer going back to the dashboard the user came from.
-        router.back();
-      } catch {
-        // ignore
-      }
+      setTimeout(() => {
+        try {
+          setShowCongrats(false);
+          router.back();
+        } catch {
+          // ignore
+        }
+      }, 1400);
       return res;
     } catch (e: any) {
       Alert.alert('Post failed', e?.message || 'Could not post your news');
@@ -191,8 +270,48 @@ export default function PostNewsMediaScreen() {
         <View style={styles.appBarRightSpacer} />
       </View>
 
+      <Modal visible={showCongrats} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: c.text, opacity: 0.25 }]} />
+          <View style={[styles.modalCard, { backgroundColor: c.card, borderColor: c.border, alignItems: 'center' }]}
+          >
+            <LottieView
+              source={congratsAnim}
+              autoPlay
+              loop={false}
+              style={{ width: 220, height: 220 }}
+            />
+            <ThemedText type="defaultSemiBold" style={{ color: c.text, marginTop: 6 }}>
+              Posted successfully
+            </ThemedText>
+          </View>
+        </View>
+      </Modal>
+
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.select({ ios: 'padding', android: undefined })}>
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+          <View style={[styles.section, { borderColor: c.border, backgroundColor: c.card }]}
+          >
+            <CategoryPicker
+              categories={tenantCategories}
+              value={
+                draft.categoryId
+                  ? ({
+                      id: draft.categoryId,
+                      name: String(draft.categoryName || '').trim() || 'Category',
+                      slug: draft.categorySlug,
+                    } as LiteCategory)
+                  : null
+              }
+              onChange={(item) => {
+                setDraft({ categoryId: item.id, categoryName: item.name, categorySlug: item.slug });
+              }}
+              label="Category"
+              placeholder={tenantCategoriesBusy ? 'Loading…' : 'Select Category'}
+              recentKey={tenantId ? `recentCategories:tenant:${tenantId}` : 'recentCategories'}
+            />
+          </View>
+
           <View style={[styles.section, { borderColor: c.border, backgroundColor: c.card }]}>
             <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Cover image (required)</ThemedText>
 
@@ -387,6 +506,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   bottomPad: { height: 70 },
+
+  modalOverlay: { flex: 1, justifyContent: 'center', padding: 16 },
+  modalCard: { borderWidth: 1, borderRadius: 16, padding: 14 },
 
   pressed: { opacity: 0.85 },
 });

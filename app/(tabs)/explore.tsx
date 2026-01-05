@@ -90,7 +90,7 @@ export default function PostCreateScreen() {
         Alert.alert('Permission needed', 'Please allow media library access.');
         return;
       }
-      const mediaTypeAll = (ImagePicker as any).MediaType?.All ?? (ImagePicker as any).MediaTypeOptions?.All ?? undefined;
+      const mediaTypeAll = (ImagePicker as any).MediaType?.All ?? 'all';
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: mediaTypeAll,
         allowsMultipleSelection: true,

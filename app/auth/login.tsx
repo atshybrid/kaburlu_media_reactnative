@@ -111,8 +111,17 @@ export default function LoginScreen() {
         tenant: data?.tenant,
         domain: data?.domain,
         domainSettings: data?.domainSettings,
+        // Reporter extras (needed for autoPublish-based status)
+        tenantReporter: data?.tenantReporter ?? data?.reporter ?? data?.reporterProfile ?? undefined,
       };
-      const hasSessionExtras = !!(session.tenantId || session.domainId || session.tenant || session.domain || session.domainSettings);
+      const hasSessionExtras = !!(
+        session.tenantId ||
+        session.domainId ||
+        session.tenant ||
+        session.domain ||
+        session.domainSettings ||
+        session.tenantReporter
+      );
       await saveTokens({ jwt, refreshToken, expiresAt, user, languageId, session: hasSessionExtras ? session : undefined });
   if (user?.role) await AsyncStorage.setItem('profile_role', user.role);
   // Persist authenticated session flag (replaces legacy is_guest_session logic)

@@ -4,9 +4,25 @@ import type { CategoryItem } from '@/services/api';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Image } from 'expo-image';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import BottomSheet from './BottomSheet';
+import { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Keyboard, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+
+function withAlpha(hexColor: string, alpha: number): string {
+  const hex = String(hexColor || '').replace('#', '').trim();
+  if (hex.length === 3) {
+    const r = parseInt(hex[0] + hex[0], 16);
+    const g = parseInt(hex[1] + hex[1], 16);
+    const b = parseInt(hex[2] + hex[2], 16);
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+  if (hex.length === 6) {
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+  return `rgba(0,0,0,${alpha})`;
+}
 
 export type LiteCategory = { id: string; name: string; slug?: string; iconUrl?: string | null };
 
@@ -22,15 +38,18 @@ type Props = {
 const DEFAULT_RECENT_KEY = 'recentCategories';
 
 export default function CategoryPicker({ categories, value, onChange, label = 'Category', placeholder = 'Select Category', recentKey = DEFAULT_RECENT_KEY }: Props) {
-  const scheme = useColorScheme();
-  const isDark = scheme === 'dark';
+  const scheme = useColorScheme() ?? 'light';
+  const c = Colors[scheme];
+  const chipBg = withAlpha(c.tint, 0.12);
+  const iconBg = withAlpha(c.tint, 0.12);
+  const ripple = withAlpha(c.tint, 0.12);
+  const scrim = withAlpha(c.primary, 0.55);
   const [visible, setVisible] = useState(false);
   const [query, setQuery] = useState('');
-  const pressLockedRef = useRef(false);
   const [recents, setRecents] = useState<LiteCategory[]>([]);
   const [currentParent, setCurrentParent] = useState<LiteCategory | null>(null);
   const [cachedList, setCachedList] = useState<CategoryItem[] | null>(null);
-  const list = useMemo(() => (categories && categories.length ? categories : (cachedList || [])), [categories, cachedList]);
+  const list = useMemo(() => (categories != null ? categories : (cachedList || [])), [categories, cachedList]);
 
   // Persist categories locally to improve first render performance and second-open speed
   useEffect(() => {
@@ -44,7 +63,7 @@ export default function CategoryPicker({ categories, value, onChange, label = 'C
         } catch {}
         const svcKey = langId ? `categories_cache:${langId}` : null;
         const genericKey = 'cached_categories_generic';
-        if (categories && categories.length) {
+        if (categories != null && categories.length) {
           // Update both caches
           if (svcKey) await AsyncStorage.setItem(svcKey, JSON.stringify(categories));
           await AsyncStorage.setItem(genericKey, JSON.stringify(categories));
@@ -85,12 +104,6 @@ export default function CategoryPicker({ categories, value, onChange, label = 'C
 
   const title = value?.name || placeholder;
 
-  // Ensure the first tap after opening is never blocked
-  useEffect(() => {
-    // reset ref lock whenever visibility changes
-    pressLockedRef.current = false;
-  }, [visible]);
-
   // Derived list per view
   const currentList: CategoryItem[] = useMemo(() => {
     if (!currentParent) return list;
@@ -124,64 +137,62 @@ export default function CategoryPicker({ categories, value, onChange, label = 'C
     return [...starts, ...contains] as any;
   }, [query, currentList]);
 
-  const onPick = async (item?: LiteCategory | null) => {
-  if (pressLockedRef.current) return;
-  pressLockedRef.current = true;
+  const onPick = (item?: LiteCategory | null) => {
+    if (!item || !item.id) return;
+    // Update UI immediately
+    onChange({ id: item.id, name: item.name, slug: item.slug, iconUrl: item.iconUrl });
+    setVisible(false);
+    setQuery('');
+    setCurrentParent(null);
+
+    // Persist recents in background (don't block closing)
     try {
-      if (!item || !item.id) return;
-      onChange({ id: item.id, name: item.name, slug: item.slug, iconUrl: item.iconUrl });
-      // update recents (move to front, unique by id)
-      try {
-        const next = [item, ...recents.filter(r => r.id !== item.id)].slice(0, 8);
-        setRecents(next);
-        await AsyncStorage.setItem(recentKey, JSON.stringify(next));
-      } catch {}
-      setVisible(false);
-    } finally {
-      // keep lock brief to avoid ignoring initial taps after quick reopen
-      setTimeout(() => { pressLockedRef.current = false; }, 150);
-    }
+      const next = [item, ...recents.filter(r => r.id !== item.id)].slice(0, 8);
+      setRecents(next);
+      AsyncStorage.setItem(recentKey, JSON.stringify(next)).catch(() => {});
+    } catch {}
   };
 
-  const renderRow = (c: CategoryItem, i: number) => {
-    const hasChildren = Array.isArray(c.children) && c.children.length > 0;
+  const renderRow = (cat: CategoryItem, i: number) => {
+    const hasChildren = Array.isArray(cat.children) && cat.children.length > 0;
     return (
       <Pressable
-        key={`${c.id}:${i}`}
+        key={`${cat.id}:${i}`}
         style={({ pressed }) => [styles.row, pressed && styles.pressed]}
         hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-        android_ripple={{ color: '#e9edf9' }}
-        onPressIn={() => {
+        android_ripple={{ color: ripple }}
+        onPress={() => {
           try { Keyboard.dismiss(); } catch {}
           // If in children view and this is the synthetic parent option
-          if (currentParent && c.id === currentParent.id) {
+          if (currentParent && cat.id === currentParent.id) {
             onPick(currentParent);
             return;
           }
           // Default: single-tap selects the category (even if it has children)
-          onPick(c as any);
+          onPick(cat as any);
         }}
       >
-        <View style={styles.iconCircle}>
-          {c.iconUrl ? (
-            <Image source={{ uri: c.iconUrl }} style={{ width: 22, height: 22, borderRadius: 4 }} contentFit="cover" />
+        <View style={[styles.iconCircle, { backgroundColor: iconBg }]}>
+          {cat.iconUrl ? (
+            <Image source={{ uri: cat.iconUrl }} style={{ width: 22, height: 22, borderRadius: 4 }} contentFit="cover" />
           ) : (
-            <MaterialCommunityIcons name="shape" size={22} color={Colors.light.primary} />
+            <MaterialCommunityIcons name="shape" size={22} color={c.tint} />
           )}
         </View>
-        <Text style={styles.rowText} numberOfLines={1}>
-          {currentParent && c.id === currentParent.id ? `Use "${c.name}"` : c.name}
+        <Text style={[styles.rowText, { color: c.text }]} numberOfLines={1}>
+          {currentParent && cat.id === currentParent.id ? `Use "${cat.name}"` : cat.name}
         </Text>
         {hasChildren && !currentParent ? (
           <Pressable
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            onPress={() => {
+            onPress={(e) => {
+              try { (e as any)?.stopPropagation?.(); } catch {}
               try { Keyboard.dismiss(); } catch {}
-              setCurrentParent({ id: c.id, name: c.name, slug: c.slug, iconUrl: c.iconUrl });
+              setCurrentParent({ id: cat.id, name: cat.name, slug: cat.slug, iconUrl: cat.iconUrl });
             }}
             style={{ paddingHorizontal: 2, paddingVertical: 2 }}
           >
-            <Feather name="chevron-right" size={18} color={isDark ? '#fff' : '#666'} />
+            <Feather name="chevron-right" size={18} color={c.muted} />
           </Pressable>
         ) : null}
       </Pressable>
@@ -190,7 +201,7 @@ export default function CategoryPicker({ categories, value, onChange, label = 'C
 
   return (
     <View>
-      {label ? <Text style={styles.label}>{label}</Text> : null}
+      {label ? <Text style={[styles.label, { color: c.text }]}>{label}</Text> : null}
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Select category"
@@ -199,97 +210,124 @@ export default function CategoryPicker({ categories, value, onChange, label = 'C
           // reset state before showing to prevent layout jump flicker
           setQuery('');
           setCurrentParent(null);
-          pressLockedRef.current = false;
           setVisible(true);
         }}
-        style={[styles.card]}
+        style={[styles.card, { borderColor: c.border, backgroundColor: c.background }]}
       >
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <Feather name="tag" size={16} color={isDark ? '#fff' : Colors.light.primary} />
-          <Text style={[styles.cardText, { color: isDark ? '#fff' : undefined }]}>{title}</Text>
+          <Feather name="tag" size={16} color={c.tint} />
+          <Text style={[styles.cardText, { color: c.text }]} numberOfLines={1}>{title}</Text>
         </View>
-  <Feather name="chevron-right" size={18} color={isDark ? '#fff' : '#666'} />
+        <Feather name="chevron-right" size={18} color={c.muted} />
       </Pressable>
 
-      <BottomSheet
+      <Modal
         visible={visible}
-        onClose={() => { setVisible(false); setQuery(''); setCurrentParent(null); }}
-        snapPoints={[0.5, 0.88]}
-        initialSnapIndex={1}
-        dragEnabled={false}
-        header={
-          <View style={styles.headerRow}>
+        transparent
+        animationType="fade"
+        onRequestClose={() => { setVisible(false); setQuery(''); setCurrentParent(null); }}
+      >
+        <Pressable style={[styles.modalOverlay, { backgroundColor: scrim }]} onPress={() => { setVisible(false); setQuery(''); setCurrentParent(null); }} />
+
+        <View style={[styles.modalCard, { backgroundColor: c.card, borderColor: c.border }]}>
+          <View style={styles.modalTopRow}>
             {currentParent ? (
               <Pressable onPress={() => setCurrentParent(null)} style={styles.backBtn} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
-                <Feather name="chevron-left" size={20} color={isDark ? '#fff' : Colors.light.primary} />
-                <Text style={[styles.backText, { color: isDark ? '#fff' : undefined }]}>Back</Text>
+                <Feather name="chevron-left" size={20} color={c.tint} />
+                <Text style={[styles.backText, { color: c.text }]}>Back</Text>
               </Pressable>
             ) : (
-              <Text style={[styles.sheetTitle, { color: isDark ? '#fff' : undefined }]}>Choose category</Text>
+              <Text style={[styles.sheetTitle, { color: c.text }]}>Choose category</Text>
             )}
-            <View style={styles.searchBox}>
-              <Feather name="search" size={16} color={isDark ? '#fff' : '#666'} />
-              <TextInput
-                value={query}
-                onChangeText={setQuery}
-                placeholder="Search categories"
-                placeholderTextColor={isDark ? '#9BA1A6' : '#999'}
-                style={styles.searchInput}
-              />
-            </View>
-          </View>
-        }
-      >
-        {list.length === 0 ? (
-          <View style={styles.loading}>
-            <ActivityIndicator />
-          </View>
-        ) : (
-          <ScrollView contentContainerStyle={{ paddingBottom: 24 }} keyboardShouldPersistTaps="always">
-            {!currentParent && recents.length > 0 && !query ? (
-              <View style={{ marginBottom: 12 }}>
-                <Text style={styles.sectionTitle}>Recent</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingVertical: 8 }}>
-                  {recents.map((r) => (
-                    <Pressable key={r.id} onPressIn={() => onPick(r)} style={({ pressed }) => [styles.chip, pressed && styles.pressed]} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                      <Text style={styles.chipText}>{r.name}</Text>
-                    </Pressable>
-                  ))}
-                </ScrollView>
-              </View>
-            ) : null}
 
-            {filteredList.length === 0 ? (
-              <Text style={styles.empty}>No categories</Text>
-            ) : (
-              <View>
-                {filteredList.map((c, i) => renderRow(c as any, i))}
-              </View>
-            )}
-          </ScrollView>
-        )}
-      </BottomSheet>
+            <Pressable
+              onPress={() => { setVisible(false); setQuery(''); setCurrentParent(null); }}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Feather name="x" size={20} color={c.muted} />
+            </Pressable>
+          </View>
+
+          <View style={[styles.searchBox, { borderColor: c.border, backgroundColor: c.background }]}>
+            <Feather name="search" size={16} color={c.muted} />
+            <TextInput
+              value={query}
+              onChangeText={setQuery}
+              placeholder="Search categories"
+              placeholderTextColor={c.muted}
+              style={[styles.searchInput, { color: c.text }]}
+            />
+          </View>
+
+          {list.length === 0 ? (
+            <View style={styles.loading}>
+              <ActivityIndicator color={c.muted} />
+            </View>
+          ) : (
+            <ScrollView contentContainerStyle={{ paddingBottom: 24 }} keyboardShouldPersistTaps="handled">
+              {!currentParent && recents.length > 0 && !query ? (
+                <View style={{ marginBottom: 12 }}>
+                  <Text style={[styles.sectionTitle, { color: c.muted }]}>Recent</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingVertical: 8 }}>
+                    {recents.map((r) => (
+                      <Pressable
+                        key={r.id}
+                        onPress={() => onPick(r)}
+                        style={({ pressed }) => [styles.chip, { backgroundColor: chipBg }, pressed && styles.pressed]}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                      >
+                        <Text style={[styles.chipText, { color: c.tint }]}>{r.name}</Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                </View>
+              ) : null}
+
+              {filteredList.length === 0 ? (
+                <Text style={[styles.empty, { color: c.muted }]}>No categories</Text>
+              ) : (
+                <View>
+                  {filteredList.map((c, i) => renderRow(c as any, i))}
+                </View>
+              )}
+            </ScrollView>
+          )}
+        </View>
+      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  label: { fontSize: 14, fontWeight: '600', color: '#333', marginTop: 12, marginBottom: 6 },
-  card: { borderWidth: 1, borderColor: '#e5e7eb', backgroundColor: '#fff', borderRadius: 10, paddingVertical: 12, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  cardText: { fontSize: 14, color: '#333' },
+  label: { fontSize: 14, fontWeight: '600', marginTop: 12, marginBottom: 6 },
+  card: { borderWidth: 1, borderRadius: 12, paddingVertical: 12, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  cardText: { fontSize: 14, fontWeight: '600', flexShrink: 1 },
   headerRow: { flexDirection: 'column', gap: 8 },
-  sheetTitle: { fontSize: 16, fontWeight: '700', color: Colors.light.primary },
-  searchBox: { flexDirection: 'row', gap: 8, alignItems: 'center', borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, backgroundColor: '#fff' },
-  searchInput: { flex: 1, color: '#333', padding: 0, margin: 0 },
-  sectionTitle: { fontSize: 12, fontWeight: '700', color: '#666', marginBottom: 4 },
-  chip: { backgroundColor: '#eef2ff', borderRadius: 16, paddingHorizontal: 10, paddingVertical: 6, marginRight: 8 },
-  chipText: { fontSize: 12, color: Colors.light.primary, fontWeight: '600' },
+  sheetTitle: { fontSize: 16, fontWeight: '800' },
+  searchBox: { flexDirection: 'row', gap: 8, alignItems: 'center', borderWidth: 1, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 10 },
+  searchInput: { flex: 1, padding: 0, margin: 0 },
+  sectionTitle: { fontSize: 12, fontWeight: '800', marginBottom: 4 },
+  chip: { borderRadius: 16, paddingHorizontal: 10, paddingVertical: 6, marginRight: 8 },
+  chipText: { fontSize: 12, fontWeight: '700' },
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#eee' },
   pressed: { opacity: 0.7 },
-  rowText: { flex: 1, fontSize: 14, color: '#032557', fontWeight: '700' },
-  iconCircle: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: '#eef2ff', marginRight: 10 },
-  empty: { paddingVertical: 16, textAlign: 'center', color: '#666' },
+  rowText: { flex: 1, fontSize: 14, fontWeight: '700' },
+  iconCircle: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', marginRight: 10 },
+  empty: { paddingVertical: 16, textAlign: 'center' },
   loading: { paddingVertical: 24, alignItems: 'center', justifyContent: 'center' },
   backBtn: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  backText: { color: Colors.light.primary, fontWeight: '700' },
+  backText: { fontWeight: '800' },
+
+  modalOverlay: { ...StyleSheet.absoluteFillObject },
+  modalCard: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    top: 80,
+    bottom: 24,
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+  },
+  modalTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
 });

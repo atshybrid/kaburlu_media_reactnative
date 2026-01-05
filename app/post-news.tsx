@@ -2,14 +2,14 @@ import { ThemedText } from '@/components/ThemedText';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
-import { translateText } from '@/services/api';
 import { loadTokens } from '@/services/auth';
-import { getBaseUrl, request } from '@/services/http';
+import { getBaseUrl } from '@/services/http';
 import { searchCombinedLocations, type CombinedLocationItem } from '@/services/locations';
 import { usePostNewsDraftStore } from '@/state/postNewsDraftStore';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
+import LottieView from 'lottie-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     ActivityIndicator,
@@ -20,6 +20,7 @@ import {
     Pressable,
     ScrollView,
     StyleSheet,
+    Switch,
     TextInput,
     View
 } from 'react-native';
@@ -103,15 +104,6 @@ function titlePlaceholderForLang(code?: string): string {
   return 'Type title here';
 }
 
-function bulletsPlaceholderForLang(code?: string): string {
-  const c = String(code || '').toLowerCase();
-  if (c.startsWith('te')) return 'ఇక్కడ 5 బులెట్ పాయింట్లు టైప్ చేయండి';
-  if (c.startsWith('hi')) return 'यहाँ 5 बुलेट पॉइंट्स टाइप करें';
-  if (c.startsWith('kn')) return 'ಇಲ್ಲಿ 5 ಬುಲೆಟ್ ಪಾಯಿಂಟ್‌ಗಳನ್ನು ಟೈಪ್ ಮಾಡಿ';
-  if (c.startsWith('ta')) return 'இங்கே 5 புல்லெட் பாயிண்ட்களை தட்டச்சு செய்யவும்';
-  return 'Type 5 bullet points here';
-}
-
 function articlePlaceholderForLang(code?: string): string {
   const c = String(code || '').toLowerCase();
   if (c.startsWith('te')) return 'ఇక్కడ పూర్తి వార్తను టైప్ చేయండి';
@@ -147,6 +139,319 @@ function normalizeBullets(raw: string): string[] {
     cleaned.push(x);
   }
   return cleaned;
+}
+
+const BULLET_PREFIX_RE = /^\s*(?:[•*\-–—+]|\d+[\).])\s+/;
+function isBulletLine(line: string): boolean {
+  return BULLET_PREFIX_RE.test(String(line || '').trim());
+}
+
+function stripBulletPrefix(line: string): string {
+  return String(line || '').replace(BULLET_PREFIX_RE, '').trim();
+}
+
+const TELUGU_MONTHS = [
+  'జనవరి',
+  'ఫిబ్రవరి',
+  'మార్చి',
+  'ఏప్రిల్',
+  'మే',
+  'జూన్',
+  'జూలై',
+  'ఆగస్టు',
+  'సెప్టెంబర్',
+  'అక్టోబర్',
+  'నవంబర్',
+  'డిసెంబర్',
+];
+const EN_MONTHS = [
+  'january',
+  'february',
+  'march',
+  'april',
+  'may',
+  'june',
+  'july',
+  'august',
+  'september',
+  'october',
+  'november',
+  'december',
+];
+
+function looksLikeDateLineLine(line: string): boolean {
+  const s = String(line || '').trim();
+  if (!s) return false;
+  const lower = s.toLowerCase();
+  const hasNewsTag = s.includes('ప్రశ్న') || s.includes('న్యూస్') || lower.includes('news');
+  const hasTeluguMonth = TELUGU_MONTHS.some((m) => s.includes(m));
+  const hasEnMonth = EN_MONTHS.some((m) => lower.includes(m));
+  const hasDay = /\b\d{1,2}\b/.test(lower);
+  // Allow either explicit month names OR common newsroom tag lines that contain a day number.
+  return hasDay && (hasTeluguMonth || hasEnMonth || hasNewsTag);
+}
+
+function stripLeadingDecorators(line: string): string {
+  return String(line || '').replace(/^\s*[:：\-–—•*]+\s*/, '').trim();
+}
+
+function sanitizePlaceCandidate(input: string): string {
+  let s = String(input || '').trim();
+  if (!s) return '';
+  s = s
+    .replace(/^[\s\(\)\[\]{}:：]+/, '')
+    .replace(/[\s\(\)\[\]{}:：]+$/g, '')
+    .trim();
+  if (!s) return '';
+  const lower = s.toLowerCase();
+  if (s.includes('ప్రశ్న') || s.includes('న్యూస్') || lower.includes('news')) return '';
+  if (!/\p{L}/u.test(s)) return '';
+  return s;
+}
+
+function extractPlaceQueryFromDateLine(line: string): string {
+  const sRaw = String(line || '').trim();
+  const s = sRaw
+    // Remove newsroom tag parentheses which must never become the place query.
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/[:：]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!s) return '';
+
+  // Pattern: "<place...> <month> <day>" (your case: "కామారెడ్డి జిల్లా జనవరి 05 ...")
+  for (const m of TELUGU_MONTHS) {
+    const idx = s.indexOf(m);
+    if (idx > 0) {
+      const before = s.slice(0, idx).trim();
+      if (before) {
+        const cleanedBefore = before
+          .replace(/\s*(జిల్లా|మండలం|గ్రామం|తాలూకా|నగరం)\s*$/u, '')
+          .trim();
+        const cand = sanitizePlaceCandidate(cleanedBefore.split(',')[0]?.split('/')[0] || cleanedBefore);
+        if (cand) return cand;
+      }
+    }
+  }
+
+  for (const m of EN_MONTHS) {
+    const idx = s.toLowerCase().indexOf(m);
+    if (idx > 0) {
+      const before = s.slice(0, idx).trim();
+      if (before) {
+        const cleanedBefore = before.replace(/\s*(district|mandal|village|city)\s*$/i, '').trim();
+        const cand = sanitizePlaceCandidate(cleanedBefore.split(',')[0]?.split('/')[0] || cleanedBefore);
+        if (cand) return cand;
+      }
+    }
+  }
+
+  // Pattern: "Place/Place, జనవరి 05 (ప్రశ్న ఆయుధం న్యూస్):"  => take before comma
+  const commaIdx = s.indexOf(',');
+  if (commaIdx > 0 && commaIdx < 40) {
+    const before = s.slice(0, commaIdx).trim();
+    if (before) {
+      const first = before.split('/').map((x) => x.trim()).filter(Boolean)[0];
+      const cand = sanitizePlaceCandidate(first);
+      if (cand) return cand;
+    }
+  }
+
+  // Telugu: "జనవరి 5 <place...>" (common WhatsApp patterns)
+  for (const m of TELUGU_MONTHS) {
+    const re = new RegExp(`${m}\\s*(\\d{1,2})\\s*(.+)$`);
+    const match = s.match(re);
+    if (match?.[2]) {
+      const rest = String(match[2] || '').trim();
+      const parts = rest.split(/\s+/).filter(Boolean);
+      const cand = sanitizePlaceCandidate(String(parts[0] || '').trim());
+      if (cand) return cand;
+    }
+  }
+
+  // English: "January 5 <place...>"
+  for (const m of EN_MONTHS) {
+    const re = new RegExp(`${m}\\s*(\\d{1,2})\\s*(.+)$`, 'i');
+    const match = s.match(re);
+    if (match?.[2]) {
+      const rest = String(match[2] || '').trim();
+      const parts = rest.split(/\s+/).filter(Boolean);
+      const cand = sanitizePlaceCandidate(String(parts[0] || '').trim());
+      if (cand) return cand;
+    }
+  }
+
+  // Pattern: "... న్యూస్ 3 కొత్తగూడెం ..." (no month) => take token after day number
+  const toks = s.split(/\s+/).filter(Boolean);
+  const dayIdx = toks.findIndex((t) => /^\d{1,2}$/.test(t));
+  if (dayIdx >= 0 && toks[dayIdx + 1]) {
+    const cand = String(toks[dayIdx + 1] || '').trim();
+    const cleaned = sanitizePlaceCandidate(cand);
+    if (cleaned && cleaned.length >= 2) return cleaned;
+  }
+
+  return '';
+}
+
+function stripWhatsAppPrefix(line: string): string {
+  const s = String(line || '').trim();
+  if (!s) return '';
+  // Example: "[5:23 pm, 4/1/2026] Name: message" => keep "message"
+  const m1 = /^\[[^\]]+\]\s*[^:]{1,60}:\s*(.*)$/.exec(s);
+  if (m1?.[1]) return String(m1[1]).trim();
+
+  // Example: "+91 9xxxx: message" => keep "message"
+  const m2 = /^\+?\d[\d\s-]{6,}:\s*(.*)$/.exec(s);
+  if (m2?.[1]) return String(m2[1]).trim();
+
+  return s;
+}
+
+function stripWhatsAppStyling(line: string): string {
+  let s = String(line || '').replace(/[\u200B\u200E\u200F\u202A-\u202E]/g, '').trim();
+  if (!s) return '';
+
+  // WhatsApp emphasis markers when a whole line is wrapped: *bold* _italic_ ~strike~
+  const wrappers: [RegExp, string][] = [
+    [/^\*(.+)\*$/s, '*'],
+    [/^_(.+)_$/s, '_'],
+    [/^~(.+)~$/s, '~'],
+  ];
+  for (const [re] of wrappers) {
+    const m = re.exec(s);
+    if (m?.[1]) {
+      s = String(m[1]).trim();
+      break;
+    }
+  }
+
+  // Remove trailing/leading stray markers that often appear around bullets/lines
+  s = s.replace(/^[\s*]+(?!\d+[\).]\s)/, '').replace(/[\s*]+$/g, '').trim();
+  return s;
+}
+
+function isSeparatorLine(line: string): boolean {
+  const s = String(line || '').trim().toLowerCase();
+  return s === 'next' || s === '---' || s === '--' || s === '…' || s === '...';
+}
+
+function parsePastedNews(text: string): {
+  title: string;
+  subtitle?: string;
+  bullets: string[];
+  body: string;
+  dateLineLine?: string;
+  placeQuery?: string;
+} {
+  const MAX_BULLETS = 5;
+  const raw = String(text || '').replace(/\r/g, '');
+  const lines = raw
+    .split('\n')
+    .map(stripWhatsAppPrefix)
+    .map(stripWhatsAppStyling)
+    .map((l) => String(l || '').trimEnd())
+    .filter((l) => !isSeparatorLine(l));
+  const nonEmptyIdx: number[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (String(lines[i] || '').trim()) nonEmptyIdx.push(i);
+  }
+  if (!nonEmptyIdx.length) {
+    return { title: '', bullets: [], body: '' };
+  }
+
+  const titleIdx = nonEmptyIdx[0];
+  const title = stripLeadingDecorators(stripWhatsAppStyling(String(lines[titleIdx] || '').trim()));
+
+  // Find a date line candidate among early lines (after the title)
+  let dateLineIdx: number | undefined;
+  for (const idx of nonEmptyIdx.slice(1, 10)) {
+    const ln = String(lines[idx] || '').trim();
+    if (looksLikeDateLineLine(ln)) {
+      dateLineIdx = idx;
+      break;
+    }
+  }
+  const dateLineLine = dateLineIdx !== undefined ? String(lines[dateLineIdx] || '').trim() : undefined;
+  const placeQuery = dateLineLine ? extractPlaceQueryFromDateLine(dateLineLine) : undefined;
+
+  // Subtitle: 2nd non-empty line if it's not a bullet and not the date line
+  let subtitleIdx: number | undefined;
+  const maybeSubIdx = nonEmptyIdx[1];
+  if (maybeSubIdx !== undefined && maybeSubIdx !== dateLineIdx) {
+    const subLine = String(lines[maybeSubIdx] || '').trim();
+    if (subLine && !isBulletLine(subLine) && subLine.length <= 140) {
+      subtitleIdx = maybeSubIdx;
+    }
+  }
+  const subtitle = subtitleIdx !== undefined
+    ? stripLeadingDecorators(stripWhatsAppStyling(String(lines[subtitleIdx] || '').trim()))
+    : undefined;
+
+  // Bullets: collect bullet-style lines (up to MAX_BULLETS), skipping title/subtitle/date line
+  const bullets: string[] = [];
+  for (const idx of nonEmptyIdx) {
+    if (idx === titleIdx) continue;
+    if (idx === subtitleIdx) continue;
+    if (idx === dateLineIdx) continue;
+    const ln = stripWhatsAppStyling(String(lines[idx] || '').trim());
+    if (!ln) continue;
+    if (!isBulletLine(ln)) {
+      // Only collect bullets if they are explicitly marked (WhatsApp style).
+      continue;
+    }
+    const cleaned = stripBulletPrefix(ln);
+    if (cleaned) bullets.push(stripWhatsAppStyling(cleaned));
+    if (bullets.length >= MAX_BULLETS) break;
+  }
+
+  // If there are no explicit bullets, infer from a block of short plain lines near the top.
+  // (Your sample: multiple short lines before the long paragraph.)
+  if (!bullets.length) {
+    const topCandidates: { idx: number; text: string }[] = [];
+    for (const idx of nonEmptyIdx.slice(1, 18)) {
+      if (idx === subtitleIdx || idx === dateLineIdx) continue;
+      const t = stripWhatsAppStyling(String(lines[idx] || '').trim());
+      if (!t) continue;
+      if (looksLikeDateLineLine(t)) continue;
+      if (t.length > 65) break; // stop when long paragraph starts
+      // Avoid capturing obvious attribution blocks / phone lines
+      if (t.includes(']') && t.includes('[')) continue;
+      topCandidates.push({ idx, text: t });
+      if (topCandidates.length >= Math.min(MAX_BULLETS + 2, 12)) break;
+    }
+    if (topCandidates.length >= 2) {
+      for (const it of topCandidates.slice(0, MAX_BULLETS)) {
+        const cleaned = it.text.replace(/[:。\.]+$/g, '').trim();
+        if (cleaned) bullets.push(cleaned);
+      }
+    }
+  }
+
+  // Body: everything except title/subtitle/date line and bullet lines
+  const bodyLines: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (i === titleIdx || i === subtitleIdx || i === dateLineIdx) continue;
+    const lnRaw = String(lines[i] || '');
+    const ln = stripWhatsAppStyling(lnRaw);
+    if (!ln) continue;
+    if (isBulletLine(ln)) continue;
+    if (bullets.length) {
+      // If we inferred bullets from plain lines, remove those exact lines from body too.
+      const trimmed = String(ln || '').trim();
+      if (trimmed && bullets.includes(trimmed.replace(/[:。\.]+$/g, '').trim())) continue;
+    }
+    bodyLines.push(ln);
+  }
+  const body = bodyLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+
+  return {
+    title,
+    subtitle,
+    bullets,
+    body,
+    dateLineLine,
+    placeQuery,
+  };
 }
 
 async function readSelectedLanguage(): Promise<{ id?: string; code?: string; name?: string } | null> {
@@ -193,21 +498,24 @@ async function aiHeadlines(opts: { mainTitle: string; bullets?: string[]; maxTit
   if (Array.isArray(opts.bullets) && opts.bullets.length) {
     payload.bullets = opts.bullets;
   }
-  return await request<AiHeadlinesResponse>('/ai/headlines', { method: 'POST', body: payload });
-}
-
-function hasNonAscii(text: string): boolean {
-  return /[^\x00-\x7F]/.test(String(text || ''));
-}
-
-function stripDiacritics(text: string): string {
-  const s = String(text || '');
+  // Use fetch directly (instead of services/http request) so a missing AI endpoint (404)
+  // does not trigger global HTTP error toasts while navigating.
   try {
-    // NFKD splits accented chars into base + diacritic marks
-    return s.normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+    const res = await fetch(`${getBaseUrl()}/ai/headlines`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(`AI headlines failed (${res.status})`);
+    const json: any = await res.json();
+    return (json?.data ?? json) as AiHeadlinesResponse;
   } catch {
-    return s;
+    return {} as AiHeadlinesResponse;
   }
+}
+
+function normalizeLocationQuery(input: string): string {
+  return String(input || '').trim();
 }
 
 function localeForLangCode(code?: string): string {
@@ -234,30 +542,18 @@ function formatMonthDay(langCode?: string, d = new Date()): string {
   return fallback;
 }
 
-async function toEnglishQuery(input: string): Promise<string> {
-  const raw = String(input || '').trim();
-  if (!raw) return '';
-  // If already ASCII, treat as safe to query.
-  if (!hasNonAscii(raw)) return raw;
 
-  // Translate any unicode/native-script input to English for backend search.
-  const translated = await translateText(raw, 'en');
-  const cleaned = stripDiacritics(String(translated || '').trim());
-
-  // IMPORTANT: Never call the locations search endpoint with unicode.
-  if (!cleaned || hasNonAscii(cleaned)) return '';
-  return cleaned;
-}
 
 export default function PostNewsScreen() {
+  const MAX_BULLETS = 5;
   const scheme = useColorScheme() ?? 'light';
   const c = Colors[scheme];
   const router = useRouter();
 
-  const { draft, setDraft, setBullets } = usePostNewsDraftStore();
+  const { draft, setDraft, setBullets, resetDraft } = usePostNewsDraftStore();
 
   const [selectedLangCode, setSelectedLangCode] = useState<string>(draft.languageCode || 'en');
-  const [showSubtitle, setShowSubtitle] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [suggestingTitles, setSuggestingTitles] = useState(false);
   const [titleSuggestions, setTitleSuggestions] = useState<TitleSuggestion[]>([]);
   const [titleSuggestionsVisible, setTitleSuggestionsVisible] = useState(false);
@@ -267,6 +563,7 @@ export default function PostNewsScreen() {
 
   const [dateLineBusy, setDateLineBusy] = useState(false);
   const [dateLineResults, setDateLineResults] = useState<CombinedLocationItem[]>([]);
+  const [autoDateLinePickerVisible, setAutoDateLinePickerVisible] = useState(false);
   const [tenantId, setTenantId] = useState<string>('');
   const [tenantName, setTenantName] = useState<string>('');
   const [tenantNativeName, setTenantNativeName] = useState<string>('');
@@ -274,32 +571,135 @@ export default function PostNewsScreen() {
   const tenantNativeNameRef = useRef<string>('');
   const [bulletsBusy, setBulletsBusy] = useState(false);
 
+  const dateLineInputRef = useRef<TextInput | null>(null);
+  const [bulletsEditing, setBulletsEditing] = useState(false);
+
+  const STYLE2_STORAGE_KEY = 'post_news_compose_style2';
+  const [useStyle2, setUseStyle2] = useState(false);
+
+  // Style 2 (WhatsApp paste + Auto Fill)
+  const [pasteText, setPasteText] = useState('');
+  const [autoFillBusy, setAutoFillBusy] = useState(false);
+  const [autoFillDone, setAutoFillDone] = useState(false);
+  const autoFillTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastAutoFillTextRef = useRef<string>('');
+
+  const newsIconAnim = useMemo(() => require('../assets/lotti/News icon.json'), []);
+
   const [pageLoading, setPageLoading] = useState(true);
   const initDoneRef = useRef<{ lang: boolean; tenant: boolean }>({ lang: false, tenant: false });
 
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSearchKeyRef = useRef<string>('');
 
-  const bulletInputRef = useRef<TextInput | null>(null);
-  const [bulletInput, setBulletInput] = useState('');
-  const lastBulletAddAtRef = useRef<number>(0);
+  const bulletRefs = useRef<(TextInput | null)[]>([]);
 
   const primary = useMemo(() => c.tint, [c.tint]);
 
-  const maybeSuggestTitles = useCallback(async () => {
+  useEffect(() => {
+    let alive = true;
+    AsyncStorage.getItem(STYLE2_STORAGE_KEY)
+      .then((v) => {
+        if (!alive) return;
+        setUseStyle2(v === '1');
+      })
+      .catch(() => {
+        // ignore
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const toggleStyle2 = useCallback((next: boolean) => {
+    setUseStyle2(next);
+    AsyncStorage.setItem(STYLE2_STORAGE_KEY, next ? '1' : '0').catch(() => {
+      // ignore
+    });
+  }, []);
+
+  const onResetDraft = useCallback(() => {
+    Alert.alert('Reset', 'Clear all fields for this post?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Reset',
+        style: 'destructive',
+        onPress: () => {
+          try {
+            resetDraft();
+            setPasteText('');
+            setAutoFillDone(false);
+            setShowAdvanced(false);
+            setTitleSuggestionsVisible(false);
+            setTitleSuggestions([]);
+            setDateLineResults([]);
+            setAutoDateLinePickerVisible(false);
+            setBulletsEditing(false);
+            lastSuggestedTitleRef.current = '';
+            headlinesPayloadRef.current = null;
+            continueAfterHeadlinePickRef.current = false;
+            if (searchTimerRef.current) {
+              clearTimeout(searchTimerRef.current);
+              searchTimerRef.current = null;
+            }
+          } catch {
+            // ignore
+          }
+        },
+      },
+    ]);
+  }, [resetDraft]);
+
+  useEffect(() => {
+    if (!showAdvanced) setBulletsEditing(false);
+  }, [showAdvanced]);
+
+  const showEditor = useMemo(() => {
+    if (!useStyle2) return true;
+    if (autoFillDone) return true;
+    const hasDraft = !!(
+      String(draft.title || '').trim() ||
+      String(draft.body || '').trim() ||
+      String(draft.locationQuery || '').trim() ||
+      (draft.dateLine as any)?.locationId
+    );
+    return hasDraft;
+  }, [autoFillDone, draft.body, draft.dateLine, draft.locationQuery, draft.title, useStyle2]);
+
+  const ensureBulletSlots = useCallback((arr: string[]) => {
+    const next = Array.isArray(arr) ? arr.slice(0, MAX_BULLETS) : [];
+    while (next.length < MAX_BULLETS) next.push('');
+    return next;
+  }, [MAX_BULLETS]);
+
+  const setBulletAt = useCallback((idx: number, value: string) => {
+    const next = Array.isArray(draft.bullets) ? draft.bullets.slice(0, MAX_BULLETS) : [];
+    while (next.length < MAX_BULLETS) next.push('');
+    next[idx] = value;
+    setBullets(next);
+  }, [MAX_BULLETS, draft.bullets, setBullets]);
+
+  const maybeSuggestTitles = useCallback(async (): Promise<boolean> => {
     const title = String(draft.title || '').trim();
-    const shouldCall = title.length >= 100 || wordCount(title) >= 4;
-    if (!shouldCall) return;
-    if (suggestingTitles) return;
-    if (lastSuggestedTitleRef.current === title) return;
+    const shouldCall = title.length >= 100 || wordCount(title) >= 5;
+    if (!shouldCall) return false;
+    if (suggestingTitles) return false;
+
+    // If we already have suggestions for the same title, just re-open the picker.
+    if (lastSuggestedTitleRef.current === title && titleSuggestions.length) {
+      setTitleSuggestionsVisible(true);
+      return true;
+    }
+
     lastSuggestedTitleRef.current = title;
 
     setSuggestingTitles(true);
     try {
-      // Gather bullets (including pending input) but only send when each bullet has > 5 words.
-      const baseBullets = (Array.isArray(draft.bullets) ? draft.bullets : []).slice(0, 5);
-      const pending = normalizeBullets(String(bulletInput || '')).slice(0, 1)[0];
-      const combined = (pending ? [...baseBullets, pending] : baseBullets).slice(0, 5);
+      // Gather bullets but only send when each bullet has > 5 words.
+      const combined = (Array.isArray(draft.bullets) ? draft.bullets : [])
+        .map((b) => String(b || '').trim())
+        .filter(Boolean)
+        .slice(0, 5);
 
       const allBulletsLongEnough = combined.length > 0 && combined.every((b) => wordCount(String(b || '')) > 5);
       const bulletsToSend = allBulletsLongEnough ? combined : undefined;
@@ -320,14 +720,17 @@ export default function PostNewsScreen() {
       if (titles.length) {
         setTitleSuggestions(titles.slice(0, 5).map((t) => ({ title: t })));
         setTitleSuggestionsVisible(true);
+        return true;
       }
+      return false;
     } catch {
       // If AI fails, fall back silently (don't block navigation)
       headlinesPayloadRef.current = null;
+      return false;
     } finally {
       setSuggestingTitles(false);
     }
-  }, [bulletInput, draft.bullets, draft.title, suggestingTitles]);
+  }, [draft.bullets, draft.title, suggestingTitles, titleSuggestions.length]);
 
   useEffect(() => {
     let alive = true;
@@ -341,36 +744,21 @@ export default function PostNewsScreen() {
     return () => { alive = false; };
   }, [draft.languageCode]);
 
-  const addBulletFromText = useCallback((raw: string) => {
-    const next = normalizeBullets(String(raw || '')).slice(0, 1)[0];
-    if (!next) return false;
-
-    const current = Array.isArray(draft.bullets) ? draft.bullets : [];
-    if (current.length >= 5) {
-      Alert.alert('Bullet points', 'Maximum 5 bullet points allowed.');
-      return false;
-    }
-    setBullets([...current, next].slice(0, 5));
-    setBulletInput('');
-    requestAnimationFrame(() => bulletInputRef.current?.focus());
-    return true;
-  }, [draft.bullets, setBullets]);
-
-  const tryAddBullet = useCallback(() => {
-    const now = Date.now();
-    if (now - lastBulletAddAtRef.current < 300) return;
-    lastBulletAddAtRef.current = now;
-    addBulletFromText(bulletInput);
-  }, [addBulletFromText, bulletInput]);
-
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
         const t = await loadTokens();
-        const tid = String((t as any)?.session?.tenant?.id || (t as any)?.session?.tenant?._id || '').trim();
-        const tn = t?.session?.tenant?.name;
-        const tnn = (t as any)?.session?.tenant?.nativeName;
+        const tenantObj = (t as any)?.session?.tenant || (t as any)?.user?.tenant || (t as any)?.tenant || undefined;
+        const tid = String(
+          (tenantObj as any)?.id
+          || (tenantObj as any)?._id
+          || (t as any)?.session?.tenantId
+          || (t as any)?.user?.tenantId
+          || ''
+        ).trim();
+        const tn = (tenantObj as any)?.name ?? (t as any)?.session?.tenant?.name;
+        const tnn = (tenantObj as any)?.nativeName ?? (t as any)?.session?.tenant?.nativeName;
         if (alive) setTenantId(tid);
         if (alive) setTenantName(typeof tn === 'string' ? tn : '');
         if (alive) setTenantNativeName(typeof tnn === 'string' ? tnn : '');
@@ -394,24 +782,22 @@ export default function PostNewsScreen() {
   }, []);
 
   const runDateLineSearch = useCallback(async (rawQuery: string) => {
-    const raw = String(rawQuery || '').trim();
+    const raw = normalizeLocationQuery(rawQuery);
     if (raw.length < 2) {
       setDateLineResults([]);
       return;
     }
     setDateLineBusy(true);
     try {
-      const qEn = await toEnglishQuery(raw);
-      if (!qEn || qEn.trim().length < 2) {
-        setDateLineResults([]);
-        return;
-      }
-      const key = `${raw}→${qEn}`;
+      const key = raw;
       // avoid repeat search loops
       if (lastSearchKeyRef.current === key) return;
       lastSearchKeyRef.current = key;
 
-      const res = await searchCombinedLocations(qEn, 20, tenantId || undefined);
+      // Backend supports Unicode (e.g., Telugu) — search with raw query.
+      const res = await searchCombinedLocations(raw, 20, tenantId || undefined);
+      const tid = String((res as any)?.tenant?.id || '').trim();
+      if (!tenantId && tid) setTenantId(tid);
       // Prefer backend tenant nativeName for date line formatting (e.g., Telugu).
       const tn = String((res as any)?.tenant?.name || '').trim();
       const tnn = String((res as any)?.tenant?.nativeName || '').trim();
@@ -451,8 +837,9 @@ export default function PostNewsScreen() {
     try {
       const lang = await readSelectedLanguage();
       const langCodeRaw = lang?.code || draft.languageCode || 'en';
-      const langCode = String(langCodeRaw || 'en').toLowerCase();
-      const baseCode = langCode.split('-')[0];
+      const normalizedLangCode = normalizeLangCodeMaybe(langCodeRaw);
+      const langCode = String(langCodeRaw || normalizedLangCode || 'en').toLowerCase();
+      const baseCode = normalizedLangCode;
 
       const names = item?.match?.names || {};
       const nameEn = String(names?.en || item?.match?.name || '').trim();
@@ -463,10 +850,10 @@ export default function PostNewsScreen() {
       const nameLocalized = String(names?.[baseCode] || names?.[langCode] || item?.match?.name || nameEn).trim();
       const md = formatMonthDay(baseCode, new Date());
 
-      // For Telugu app language, prefer tenant.nativeName if available.
+      // Prefer tenant.nativeName for the date line (matches user expectation for native branding).
       const tnRaw = tenantNameRef.current || tenantName || 'Kaburlu';
       const tnNative = tenantNativeNameRef.current || tenantNativeName || '';
-      const tnDisplay = baseCode === 'te' && tnNative.trim() ? tnNative.trim() : tnRaw;
+      const tnDisplay = tnNative.trim() ? tnNative.trim() : tnRaw;
 
       const text = `${nameLocalized} (${tnDisplay}) ${md}`;
 
@@ -474,6 +861,7 @@ export default function PostNewsScreen() {
         locationQuery: text,
         dateLine: {
           locationId,
+          locationType: item.type,
           nameEn,
           nameLocalized,
           text,
@@ -485,14 +873,116 @@ export default function PostNewsScreen() {
     }
   }, [draft.languageCode, setDraft, tenantName, tenantNativeName]);
 
+  const autoFillFromPaste = useCallback(async () => {
+    const input = String(pasteText || '').trim();
+    if (!input) {
+      Alert.alert('Paste news', 'Please paste the full news text first.');
+      return;
+    }
+    if (autoFillBusy) return;
+    setAutoFillBusy(true);
+    try {
+      const parsed = parsePastedNews(input);
+      if (!parsed.title || !parsed.body) {
+        Alert.alert('Auto Fill', 'Could not detect title/body. Please check your pasted text.');
+        return;
+      }
+
+      setDraft({
+        title: parsed.title,
+        subtitle: parsed.subtitle || '',
+        body: parsed.body,
+      });
+
+      if (parsed.bullets.length) {
+        setBullets(ensureBulletSlots(parsed.bullets));
+      }
+
+      if (parsed.subtitle || parsed.bullets.length) {
+        setShowAdvanced(true);
+      }
+
+      // Try to resolve Date Line automatically (same UX as Style 1 picker).
+      const place = sanitizePlaceCandidate(String(parsed.placeQuery || '').trim());
+      if (place) {
+        setDraft({ locationQuery: place, dateLine: null as any });
+        setDateLineBusy(true);
+        try {
+          const q = normalizeLocationQuery(place);
+          if (!q || q.trim().length < 2) {
+            // Don't fill wrong data; let user pick manually.
+            setDateLineResults([]);
+            setAutoDateLinePickerVisible(true);
+          } else {
+            const res = await searchCombinedLocations(q, 20, tenantId || undefined);
+            const tid = String((res as any)?.tenant?.id || '').trim();
+            if (!tenantId && tid) setTenantId(tid);
+            const tn = String((res as any)?.tenant?.name || '').trim();
+            const tnn = String((res as any)?.tenant?.nativeName || '').trim();
+            if (tn) {
+              tenantNameRef.current = tn;
+              setTenantName(tn);
+            }
+            if (tnn) {
+              tenantNativeNameRef.current = tnn;
+              setTenantNativeName(tnn);
+            }
+            const items = Array.isArray(res?.items) ? res.items : [];
+            setDateLineResults(items.slice(0, 20));
+            if (items.length === 1) {
+              await pickDateLine(items[0]);
+            } else {
+              // 0 or many: open picker modal to avoid wrong auto-fill.
+              setAutoDateLinePickerVisible(true);
+            }
+          }
+        } catch {
+          setAutoDateLinePickerVisible(true);
+        } finally {
+          setDateLineBusy(false);
+        }
+      } else {
+        // Could not confidently detect place. Open picker modal instead of filling wrong text.
+        setDraft({ locationQuery: '', dateLine: null as any });
+        setDateLineResults([]);
+        setAutoDateLinePickerVisible(true);
+      }
+
+      setAutoFillDone(true);
+    } finally {
+      setAutoFillBusy(false);
+    }
+  }, [autoFillBusy, ensureBulletSlots, pasteText, pickDateLine, setBullets, setDraft, tenantId]);
+
+  // Style 2: Auto-run Auto Fill shortly after paste (no button click needed).
+  useEffect(() => {
+    if (!useStyle2) return;
+    if (showEditor) return;
+    if (autoFillBusy || autoFillDone) return;
+    const text = String(pasteText || '').trim();
+    if (text.length < 60) return;
+    if (!text.includes('\n')) return;
+    if (lastAutoFillTextRef.current === text) return;
+
+    if (autoFillTimerRef.current) clearTimeout(autoFillTimerRef.current);
+    autoFillTimerRef.current = setTimeout(() => {
+      lastAutoFillTextRef.current = text;
+      void autoFillFromPaste();
+    }, 450);
+
+    return () => {
+      if (autoFillTimerRef.current) clearTimeout(autoFillTimerRef.current);
+    };
+  }, [autoFillBusy, autoFillDone, autoFillFromPaste, pasteText, showEditor, useStyle2]);
+
   const parseAndClampBullets = useCallback(async (raw: string) => {
     const lang = await readSelectedLanguage();
     const normalized = normalizeBullets(raw);
-    const limited = normalized.slice(0, 5);
+    const limited = normalized.slice(0, MAX_BULLETS);
     const needsShorten = limited.some((b) => b.length > 100);
     if (!needsShorten) return limited;
     return await aiShortenBullets({ bullets: limited, languageCode: lang?.code });
-  }, []);
+  }, [MAX_BULLETS]);
 
   const canContinue = useMemo(() => {
     const titleOk = String(draft.title || '').trim().length >= 3;
@@ -502,19 +992,17 @@ export default function PostNewsScreen() {
   }, [draft.body, draft.dateLine?.locationId, draft.title]);
 
   const finalizeAndGoMedia = useCallback(async () => {
-    // Build bullets list locally so we don't miss the pending input due to async store updates.
-    const baseBullets = (Array.isArray(draft.bullets) ? draft.bullets : []).slice(0, 5);
-    const pending = normalizeBullets(String(bulletInput || '')).slice(0, 1)[0];
-    const parsedBullets = (pending ? [...baseBullets, pending] : baseBullets).slice(0, 5);
-    setBullets(parsedBullets);
-    if (pending) setBulletInput('');
+    const bullets = (Array.isArray(draft.bullets) ? draft.bullets : [])
+      .map((b) => String(b || '').trim())
+      .filter(Boolean)
+      .slice(0, MAX_BULLETS);
 
-    // If any bullet is too long, shorten on Next click (max 5, each <= 100 chars).
-    const needsShorten = parsedBullets.some((b) => String(b || '').length > 100);
+    // If any bullet is too long, shorten on Next click (each <= 100 chars).
+    const needsShorten = bullets.some((b) => String(b || '').length > 100);
     if (needsShorten && !bulletsBusy) {
       setBulletsBusy(true);
       try {
-        const joined = parsedBullets.join('\n');
+        const joined = bullets.join('\n');
         const next = await parseAndClampBullets(joined);
         setBullets(next);
       } finally {
@@ -523,7 +1011,7 @@ export default function PostNewsScreen() {
     }
 
     router.push('/post-news/media' as any);
-  }, [bulletInput, bulletsBusy, draft.bullets, parseAndClampBullets, router, setBullets]);
+  }, [MAX_BULLETS, bulletsBusy, draft.bullets, parseAndClampBullets, router, setBullets]);
 
   const goNext = useCallback(async () => {
     if (!canContinue) {
@@ -535,8 +1023,7 @@ export default function PostNewsScreen() {
     try {
       const lang = await readSelectedLanguage();
       const langCodeRaw = lang?.code || draft.languageCode || selectedLangCode || 'en';
-      const langCode = String(langCodeRaw || 'en').toLowerCase();
-      const baseCode = langCode.split('-')[0];
+      const baseCode = normalizeLangCodeMaybe(langCodeRaw);
       const cleaned = stripLeadingDuplicateDateLine({
         body: String(draft.body || ''),
         dateLineText: draft.dateLine?.text,
@@ -554,17 +1041,17 @@ export default function PostNewsScreen() {
 
     // Suggest titles/headlines on Next click (based on title length or word count).
     const title = String(draft.title || '').trim();
-    const shouldCall = title.length >= 100 || wordCount(title) >= 4;
-    if (shouldCall && lastSuggestedTitleRef.current !== title) {
+    const shouldCall = title.length >= 100 || wordCount(title) >= 5;
+    if (shouldCall) {
       continueAfterHeadlinePickRef.current = true;
-      await maybeSuggestTitles();
-      // If modal opened, wait for user selection.
-      if (titleSuggestionsVisible) return;
+      const opened = await maybeSuggestTitles();
+      // If picker opened, wait for the user to choose a title.
+      if (opened) return;
       continueAfterHeadlinePickRef.current = false;
     }
 
     await finalizeAndGoMedia();
-  }, [canContinue, draft.body, draft.dateLine?.text, draft.languageCode, draft.title, finalizeAndGoMedia, maybeSuggestTitles, selectedLangCode, setDraft, tenantName, tenantNativeName, titleSuggestionsVisible]);
+  }, [canContinue, draft.body, draft.dateLine, draft.languageCode, draft.title, finalizeAndGoMedia, maybeSuggestTitles, selectedLangCode, setDraft, tenantName, tenantNativeName]);
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['top', 'bottom']}>
@@ -582,12 +1069,34 @@ export default function PostNewsScreen() {
           <MaterialIcons name="arrow-back" size={22} color={c.text} />
         </Pressable>
 
-        <View style={styles.appBarCenter}>
+        <View style={styles.appBarCenter} pointerEvents="none">
           <ThemedText type="defaultSemiBold" style={[styles.title, { color: c.text }]}>Post News</ThemedText>
           <ThemedText style={[styles.step, { color: c.muted }]}>Step 1 of 2</ThemedText>
         </View>
 
-        <View style={styles.appBarRightSpacer} />
+        <View style={styles.appBarRight}>
+          <View style={styles.appBarToggleRow}>
+            <ThemedText style={{ color: useStyle2 ? primary : c.muted, fontSize: 12 }}>Style 2</ThemedText>
+            <Switch
+              value={useStyle2}
+              onValueChange={toggleStyle2}
+              trackColor={{ false: c.border, true: primary }}
+              thumbColor={Platform.OS === 'android' ? (useStyle2 ? c.card : c.background) : undefined}
+            />
+          </View>
+          <Pressable
+            onPress={onResetDraft}
+            style={({ pressed }) => [
+              styles.iconBtn,
+              { borderColor: c.border, backgroundColor: c.card, width: 36, height: 36, borderRadius: 12 },
+              pressed && styles.pressed,
+            ]}
+            hitSlop={10}
+            accessibilityLabel="Reset draft"
+          >
+            <MaterialIcons name="restart-alt" size={20} color={c.text} />
+          </Pressable>
+        </View>
       </View>
 
       {pageLoading ? (
@@ -624,7 +1133,46 @@ export default function PostNewsScreen() {
       ) : (
         <KeyboardAvoidingView style={styles.flex} behavior={Platform.select({ ios: 'padding', android: undefined })}>
           <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-            <View style={[styles.section, { borderColor: c.border, backgroundColor: c.card }]}>
+            {useStyle2 && !showEditor ? (
+              <View style={[styles.section, { borderColor: c.border, backgroundColor: c.card }]}>
+                <View style={styles.rowBetween}>
+                  <View style={styles.sectionHeaderRow}>
+                    <MaterialIcons name="newspaper" size={18} color={primary} />
+                    <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Paste full news</ThemedText>
+                  </View>
+                  {autoFillBusy ? <ActivityIndicator size="small" /> : null}
+                </View>
+                <ThemedText style={{ color: c.muted, marginTop: 6 }}>
+                  Paste WhatsApp message. Auto Fill will prepare Title, Date Line, and Article.
+                </ThemedText>
+                <TextInput
+                  value={pasteText}
+                  onChangeText={setPasteText}
+                  placeholder="Paste from WhatsApp…"
+                  placeholderTextColor={c.muted}
+                  style={[styles.textAreaBig, { borderColor: c.border, color: c.text, backgroundColor: c.background, minHeight: showEditor ? 140 : 220 }]}
+                  multiline
+                  textAlignVertical="top"
+                />
+                <Pressable
+                  onPress={autoFillFromPaste}
+                  style={({ pressed }) => [
+                    styles.smallBtn,
+                    { borderColor: c.border, backgroundColor: c.background, alignSelf: 'flex-end' },
+                    pressed && styles.pressed,
+                  ]}
+                  disabled={autoFillBusy}
+                >
+                  <MaterialIcons name="auto-fix-high" size={18} color={primary} />
+                  <ThemedText style={{ color: primary }}>Auto Fill</ThemedText>
+                </Pressable>
+              </View>
+            ) : null}
+
+            {showEditor ? (
+              <>
+                <View style={[styles.section, { borderColor: c.border, backgroundColor: c.card }]}>
+              <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Title</ThemedText>
               <TextInput
                 value={draft.title || ''}
                 onChangeText={(t) => setDraft({ title: t })}
@@ -638,40 +1186,57 @@ export default function PostNewsScreen() {
             </View>
 
           <View style={[styles.section, { borderColor: c.border, backgroundColor: c.card }]}>
-            <Pressable
-              onPress={() => setShowSubtitle((v) => !v)}
-              style={({ pressed }) => [styles.rowBetween, pressed && styles.pressed]}
-              hitSlop={6}
-            >
-              <ThemedText style={{ color: c.muted }}>Subtitle (optional)</ThemedText>
-              <MaterialIcons name={showSubtitle ? 'expand-less' : 'expand-more'} size={22} color={c.muted} />
-            </Pressable>
-
-            {showSubtitle ? (
-              <TextInput
-                value={draft.subtitle || ''}
-                onChangeText={(t) => setDraft({ subtitle: t })}
-                placeholder="Subtitle…"
-                placeholderTextColor={c.muted}
-                style={[styles.input, styles.subtitleInput, { borderColor: c.border, color: c.text, backgroundColor: c.background }]}
-                maxLength={120}
-              />
-            ) : null}
-          </View>
-
-          <View style={[styles.section, { borderColor: c.border, backgroundColor: c.card }]}>
             <View style={styles.rowBetween}>
               <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Date Line</ThemedText>
               {dateLineBusy ? <ActivityIndicator size="small" /> : null}
             </View>
-            <TextInput
-              value={draft.locationQuery || ''}
-              onChangeText={onDateLineQueryChange}
-              placeholder="Search area / mandal / district…"
-              placeholderTextColor={c.muted}
-              style={[styles.input, styles.dateLineInput, { borderColor: c.border, color: c.text, backgroundColor: c.background }]}
-              autoCorrect={false}
-            />
+
+            {draft.dateLine?.locationId ? (
+              <>
+                <View style={[styles.selectedRow, { borderColor: c.border, backgroundColor: c.background }]}>
+                  <MaterialIcons name="place" size={18} color={primary} />
+                  <View style={{ flex: 1 }}>
+                    <ThemedText type="defaultSemiBold" style={{ color: c.text }} numberOfLines={1}>
+                      {draft.dateLine?.text || 'Selected'}
+                    </ThemedText>
+                  </View>
+                  <Pressable
+                    onPress={() => setDraft({ dateLine: undefined, locationQuery: '' })}
+                    hitSlop={10}
+                    style={({ pressed }) => [styles.chipRemove, pressed && styles.pressed]}
+                    accessibilityLabel="Clear date line"
+                  >
+                    <MaterialIcons name="close" size={18} color={c.muted} />
+                  </Pressable>
+                </View>
+
+                <Pressable
+                  onPress={() => {
+                    setDraft({ dateLine: undefined, locationQuery: '' });
+                    setDateLineResults([]);
+                    setTimeout(() => dateLineInputRef.current?.focus(), 80);
+                  }}
+                  style={({ pressed }) => [styles.linkBtn, { alignSelf: 'flex-end' }, pressed && styles.pressed]}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Change date line"
+                >
+                  <ThemedText style={[styles.linkText, { color: primary }]}>Change</ThemedText>
+                </Pressable>
+              </>
+            ) : null}
+
+            {!draft.dateLine?.locationId ? (
+              <TextInput
+                ref={(r) => { dateLineInputRef.current = r; }}
+                value={draft.locationQuery || ''}
+                onChangeText={onDateLineQueryChange}
+                placeholder="Search area / mandal / district…"
+                placeholderTextColor={c.muted}
+                style={[styles.input, styles.dateLineInput, { borderColor: c.border, color: c.text, backgroundColor: c.background }]}
+                autoCorrect={false}
+              />
+            ) : null}
 
             {(!draft.dateLine?.locationId && (draft.locationQuery || '').trim().length >= 2 && dateLineResults.length > 0) ? (
               <View style={{ marginTop: 10 }}>
@@ -701,68 +1266,6 @@ export default function PostNewsScreen() {
           </View>
 
           <View style={[styles.section, { borderColor: c.border, backgroundColor: c.card }]}>
-            <View style={styles.rowBetween}>
-              <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Bullet points</ThemedText>
-              {bulletsBusy ? <ActivityIndicator size="small" /> : null}
-            </View>
-
-            <View style={styles.bulletRow}>
-              <TextInput
-                ref={(r) => { bulletInputRef.current = r; }}
-                value={bulletInput}
-                onChangeText={setBulletInput}
-                onSubmitEditing={tryAddBullet}
-                onKeyPress={(e) => {
-                  if (e.nativeEvent.key === 'Enter') tryAddBullet();
-                }}
-                placeholder={bulletsPlaceholderForLang(selectedLangCode)}
-                placeholderTextColor={c.muted}
-                style={[styles.input, styles.bulletInput, styles.bulletInputFlex, { borderColor: c.border, color: c.text, backgroundColor: c.background }]}
-                multiline={false}
-                blurOnSubmit={false}
-                returnKeyType="done"
-              />
-
-              <Pressable
-                onPress={tryAddBullet}
-                style={({ pressed }) => [
-                  styles.addBulletBtn,
-                  { borderColor: c.border, backgroundColor: c.background },
-                  pressed && styles.pressed,
-                ]}
-                hitSlop={10}
-                accessibilityLabel="Add bullet"
-              >
-                <MaterialIcons name="add" size={20} color={c.text} />
-              </Pressable>
-            </View>
-
-            {Array.isArray(draft.bullets) && draft.bullets.length > 0 ? (
-              <View style={styles.chipsWrap}>
-                {draft.bullets.slice(0, 5).map((b, idx) => (
-                  <View key={`${idx}-${b}`} style={[styles.chip, { borderColor: c.border, backgroundColor: c.background }]}
-                  >
-                    <ThemedText style={[styles.chipText, { color: c.text }]} numberOfLines={2}>
-                      {b}
-                    </ThemedText>
-                    <Pressable
-                      onPress={() => {
-                        const cur = Array.isArray(draft.bullets) ? draft.bullets : [];
-                        setBullets(cur.filter((_, i) => i !== idx));
-                      }}
-                      hitSlop={10}
-                      style={({ pressed }) => [styles.chipRemove, pressed && styles.pressed]}
-                      accessibilityLabel="Remove bullet"
-                    >
-                      <MaterialIcons name="close" size={16} color={c.muted} />
-                    </Pressable>
-                  </View>
-                ))}
-              </View>
-            ) : null}
-          </View>
-
-          <View style={[styles.section, { borderColor: c.border, backgroundColor: c.card }]}>
             <ThemedText type="defaultSemiBold" style={{ color: c.text, marginBottom: 8 }}>Article</ThemedText>
             <TextInput
               value={draft.body || ''}
@@ -774,6 +1277,114 @@ export default function PostNewsScreen() {
               textAlignVertical="top"
             />
           </View>
+
+          <View style={[styles.section, { borderColor: c.border, backgroundColor: c.card }]}>
+            <Pressable
+              onPress={() => setShowAdvanced((v) => !v)}
+              style={({ pressed }) => [styles.rowBetween, pressed && styles.pressed]}
+              hitSlop={6}
+              accessibilityRole="button"
+              accessibilityLabel="Advanced options"
+            >
+              <View>
+                <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Advanced options</ThemedText>
+                <ThemedText style={{ color: c.muted, marginTop: 2 }}>Subtitle + up to 5 bullets</ThemedText>
+              </View>
+              <MaterialIcons name={showAdvanced ? 'expand-less' : 'expand-more'} size={22} color={c.muted} />
+            </Pressable>
+
+            {showAdvanced ? (
+              <View style={{ marginTop: 8, gap: 12 }}>
+                <View>
+                  <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Subtitle (optional)</ThemedText>
+                  <TextInput
+                    value={draft.subtitle || ''}
+                    onChangeText={(t) => setDraft({ subtitle: t })}
+                    placeholder="Subtitle…"
+                    placeholderTextColor={c.muted}
+                    style={[styles.input, styles.subtitleInput, { borderColor: c.border, color: c.text, backgroundColor: c.background }]}
+                    maxLength={120}
+                  />
+                </View>
+
+                <View>
+                  {(() => {
+                    const rawBullets = Array.isArray(draft.bullets) ? draft.bullets : [];
+                    const preview = rawBullets
+                      .map((t, i) => ({ i, text: String(t || '').trim() }))
+                      .filter((x) => x.text);
+                    const showChips = preview.length > 0 && !bulletsEditing;
+
+                    return (
+                      <>
+                        <View style={styles.rowBetween}>
+                          <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Bullet points</ThemedText>
+                          <View style={styles.rowInline}>
+                            {bulletsBusy ? <ActivityIndicator size="small" /> : null}
+                            {preview.length > 0 ? (
+                              <Pressable
+                                onPress={() => setBulletsEditing((v) => !v)}
+                                hitSlop={8}
+                                style={({ pressed }) => [pressed && styles.pressed]}
+                                accessibilityRole="button"
+                                accessibilityLabel={bulletsEditing ? 'Done editing bullets' : 'Edit bullets'}
+                              >
+                                <ThemedText style={{ color: primary }}>{bulletsEditing ? 'Done' : 'Edit'}</ThemedText>
+                              </Pressable>
+                            ) : null}
+                          </View>
+                        </View>
+
+                        {showChips ? (
+                          <View style={styles.rowWrap}>
+                            {preview.map(({ i, text }) => (
+                              <Pressable
+                                key={i}
+                                onPress={() => {
+                                  setBulletsEditing(true);
+                                  setTimeout(() => bulletRefs.current[i]?.focus(), 80);
+                                }}
+                                style={({ pressed }) => [
+                                  styles.chipPill,
+                                  { borderColor: c.border, backgroundColor: c.background },
+                                  pressed && styles.pressed,
+                                ]}
+                                accessibilityRole="button"
+                                accessibilityLabel={`Edit bullet ${i + 1}`}
+                              >
+                                <ThemedText style={{ color: c.text }} numberOfLines={1}>{text}</ThemedText>
+                              </Pressable>
+                            ))}
+                          </View>
+                        ) : (
+                          <View style={{ marginTop: 8, gap: 10 }}>
+                            {Array.from({ length: MAX_BULLETS }).map((_, idx) => (
+                              <TextInput
+                                key={idx}
+                                ref={(r) => { bulletRefs.current[idx] = r; }}
+                                value={String((Array.isArray(draft.bullets) ? draft.bullets[idx] : '') || '')}
+                                onChangeText={(t) => setBulletAt(idx, t)}
+                                placeholder={`Bullet ${idx + 1}`}
+                                placeholderTextColor={c.muted}
+                                style={[styles.input, styles.bulletLineInput, { borderColor: c.border, color: c.text, backgroundColor: c.background }]}
+                                returnKeyType={idx < MAX_BULLETS - 1 ? 'next' : 'done'}
+                                onSubmitEditing={() => {
+                                  if (idx < MAX_BULLETS - 1) bulletRefs.current[idx + 1]?.focus();
+                                }}
+                              />
+                            ))}
+                          </View>
+                        )}
+                      </>
+                    );
+                  })()}
+                </View>
+              </View>
+            ) : null}
+          </View>
+
+              </>
+            ) : null}
 
             <View style={styles.bottomPad} />
           </ScrollView>
@@ -821,12 +1432,14 @@ export default function PostNewsScreen() {
 
                     const payload = headlinesPayloadRef.current;
                     if (payload?.subtitle) {
-                      setShowSubtitle(true);
                       setDraft({ subtitle: payload.subtitle });
                     }
                     if (payload?.bullets?.length) {
                       setBullets(payload.bullets.slice(0, 5));
-                      setBulletInput('');
+                    }
+
+                    if (payload?.subtitle || (payload?.bullets && payload.bullets.length)) {
+                      setShowAdvanced(true);
                     }
 
                     setTitleSuggestionsVisible(false);
@@ -859,6 +1472,74 @@ export default function PostNewsScreen() {
           </View>
         </View>
       </Modal>
+
+      <Modal visible={suggestingTitles} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: c.text, opacity: 0.25 }]} />
+          <View style={[styles.modalCard, { backgroundColor: c.card, borderColor: c.border, alignItems: 'center' }]}>
+            <LottieView
+              source={newsIconAnim}
+              autoPlay
+              loop
+              style={{ width: 160, height: 160 }}
+            />
+            <ThemedText type="defaultSemiBold" style={{ color: c.text, marginTop: 8 }}>
+              Generating headlines…
+            </ThemedText>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={autoDateLinePickerVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAutoDateLinePickerVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: c.text, opacity: 0.25 }]} />
+          <View style={[styles.modalCard, { backgroundColor: c.card, borderColor: c.border }]}>
+            <View style={styles.rowBetween}>
+              <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Select Date Line</ThemedText>
+              <Pressable
+                onPress={() => setAutoDateLinePickerVisible(false)}
+                hitSlop={10}
+                style={({ pressed }) => [styles.chipRemove, pressed && styles.pressed]}
+                accessibilityLabel="Close"
+              >
+                <MaterialIcons name="close" size={22} color={c.text} />
+              </Pressable>
+            </View>
+
+            <ScrollView style={{ marginTop: 10, maxHeight: 420 }} keyboardShouldPersistTaps="handled">
+              {dateLineResults.slice(0, 20).map((it, idx) => {
+                const label = String(it?.match?.name || '').trim();
+                const meta = [it?.mandal?.name, it?.district?.name, it?.state?.name].filter(Boolean).join(' • ');
+                return (
+                  <Pressable
+                    key={`${it?.match?.id || idx}`}
+                    onPress={async () => {
+                      await pickDateLine(it);
+                      setAutoDateLinePickerVisible(false);
+                    }}
+                    style={({ pressed }) => [
+                      styles.resultRow,
+                      { borderColor: c.border, backgroundColor: c.background },
+                      pressed && styles.pressed,
+                    ]}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <ThemedText type="defaultSemiBold" style={{ color: c.text }} numberOfLines={1}>{label}</ThemedText>
+                      {!!meta ? <ThemedText style={{ color: c.muted }} numberOfLines={1}>{meta}</ThemedText> : null}
+                    </View>
+                    <MaterialIcons name="chevron-right" size={22} color={c.muted} />
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -881,10 +1562,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  appBarCenter: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  appBarCenter: { position: 'absolute', left: 0, right: 0, alignItems: 'center', justifyContent: 'center' },
   title: { fontSize: 16 },
   step: { fontSize: 12, marginTop: 2 },
-  appBarRightSpacer: { width: 40 },
+  appBarRight: { marginLeft: 'auto', flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 10 },
+  appBarToggleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   scroll: { padding: 14, paddingBottom: 24, gap: 12 },
   section: {
     borderWidth: 1,
@@ -892,12 +1574,15 @@ const styles = StyleSheet.create({
     padding: 12,
   },
   rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  rowInline: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   rowWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 10 },
-  bulletRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginTop: 8,
+  chipPill: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    maxWidth: '100%',
   },
   input: {
     borderWidth: 1,
@@ -915,45 +1600,12 @@ const styles = StyleSheet.create({
   dateLineInput: {
     minHeight: 55,
   },
-  bulletInput: {
-    minHeight: 55,
-    marginTop: 0,
-  },
-  bulletInputFlex: {
-    flex: 1,
-  },
-  addBulletBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  chipsWrap: {
-    marginTop: 10,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-  },
-  chip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderRadius: 999,
-    paddingLeft: 12,
-    paddingRight: 6,
-    paddingVertical: 8,
-    marginRight: 8,
-    marginBottom: 8,
-    maxWidth: '100%',
-  },
-  chipText: {
-    flexShrink: 1,
-    paddingRight: 6,
-  },
   chipRemove: {
     padding: 2,
     borderRadius: 999,
+  },
+  bulletLineInput: {
+    minHeight: 52,
   },
   textArea: {
     borderWidth: 1,
@@ -1012,6 +1664,15 @@ const styles = StyleSheet.create({
     gap: 10,
     alignItems: 'center',
     marginBottom: 10,
+  },
+  selectedRow: {
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 12,
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'center',
+    marginTop: 10,
   },
   pressed: { opacity: 0.85 },
 });

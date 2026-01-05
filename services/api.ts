@@ -37,6 +37,12 @@ const DEBUG_API = (() => {
   return raw === '1' || raw === 'true' || raw === 'on' || raw === 'yes';
 })();
 
+// Dev-only: log full request body for /articles/newspaper
+const DEBUG_NEWSPAPER_FULL_BODY = (() => {
+  const raw = String(process.env.EXPO_PUBLIC_NEWSPAPER_FULL_BODY_LOG ?? '').toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'on' || raw === 'yes';
+})();
+
 // -------- User Profile (Google auth enrichment) --------
 export interface UserProfileUpdateInput {
   fullName?: string;
@@ -618,7 +624,7 @@ export async function translateText(text: string, targetLangCode: string): Promi
     }
     const res = await request<any>(`/translate`, {
       method: 'POST',
-      body: { text, target: targetLangCode },
+      body: { text, targetLanguage: targetLangCode },
       timeoutMs: 15000,
       noAuth: true,
     });
@@ -1481,6 +1487,52 @@ export type CategoryItem = {
   children?: CategoryItem[];
 };
 
+export async function getTenantCategories(opts: { tenantId: string; langCode?: string }): Promise<CategoryItem[]> {
+  const tenantId = String(opts.tenantId || '').trim();
+  if (!tenantId) return [];
+
+  const lang = String(opts.langCode || '').toLowerCase();
+  const baseLang = (lang.split('-')[0] || 'en').trim() || 'en';
+
+  const params = new URLSearchParams({ tenantId });
+  const url = `/categories/tenant?${params.toString()}`;
+  const res = await request<any>(url, { method: 'GET' });
+
+  const payload = (res as any)?.data ?? res;
+  const effectiveLang = String(payload?.tenantLanguageCode || baseLang || 'en').toLowerCase();
+
+  const arr = Array.isArray(payload?.categories)
+    ? payload.categories
+    : Array.isArray(payload)
+    ? payload
+    : [];
+
+  return (arr as any[])
+    .map((x) => {
+      const names = x?.names || {};
+      const name = String(names?.[effectiveLang] || names?.[baseLang] || x?.name || x?.nameDefault || x?.title || x?.label || x?.slug || 'Category');
+      return {
+        id: String(x?.id || x?._id || x?.value || x?.key || x?.slug || name),
+        slug: x?.slug,
+        iconUrl: x?.iconUrl || x?.icon || x?.iconURL || x?.imageUrl || null,
+        name,
+        children: Array.isArray(x?.children)
+          ? (x.children as any[]).map((c) => {
+              const cn = c?.names || {};
+              const childName = String(cn?.[effectiveLang] || cn?.[baseLang] || c?.name || c?.nameDefault || c?.title || c?.label || c?.slug || 'Category');
+              return {
+                id: String(c?.id || c?._id || c?.value || c?.key || c?.slug || childName),
+                slug: c?.slug,
+                iconUrl: c?.iconUrl || c?.icon || c?.iconURL || c?.imageUrl || null,
+                name: childName,
+              } as CategoryItem;
+            })
+          : [],
+      } as CategoryItem;
+    })
+    .filter((x) => !!x.id && !!x.name);
+}
+
 const CATEGORIES_CACHE_KEY = (langId: string) => `categories_cache:${langId}`;
 
 
@@ -1882,6 +1934,7 @@ export type CreatePostInput = {
   content: string;
   languageId: string;
   category: string;
+  categoryId?: string;
   media?: UploadedMedia[];
   locationId?: string;
   dateLineText?: string;
@@ -1897,6 +1950,7 @@ export async function createPost(input: CreatePostInput): Promise<CreatePostResp
       content: input.content,
       languageId: input.languageId,
       category: input.category,
+      categoryId: input.categoryId,
       mediaIds: input.media?.map((m) => m.id),
       media: input.media?.map((m) => ({ url: m.url, type: m.type })), // include for flexible backends
     };
@@ -1913,6 +1967,135 @@ export async function createPost(input: CreatePostInput): Promise<CreatePostResp
       return { id: `post_${Date.now()}`, url: undefined, raw: { fallback: true, input } };
     }
     throw err instanceof Error ? err : new Error('Failed to create post');
+  }
+}
+
+// ---------- Newspaper Article Create (Reporter/Admin) ----------
+export type NewspaperLocationInput = {
+  stateId?: string;
+  districtId?: string;
+  mandalId?: string;
+  villageId?: string;
+};
+
+export type CreateNewspaperArticleInput = {
+  languageCode: string;
+  categoryId: string;
+  title: string;
+  subTitle?: string;
+  publishedAt?: string;
+  dateLine?: string;
+  newspaperName?: string;
+  bulletPoints?: string[];
+  lead?: string;
+  content?: Array<{ type: 'paragraph'; text: string }>;
+  // Backward-compatible media fields (backend will normalize)
+  coverImageUrl?: string;
+  images?: string[];
+  videos?: string[];
+  mediaUrls?: string[];
+  // Required: provide at least one location scope
+  location: NewspaperLocationInput;
+  status?: 'draft' | 'published' | string;
+};
+
+export type CreateNewspaperArticleResponse = {
+  articleId?: string;
+  baseArticleId?: string;
+  newspaperArticleId?: string;
+  externalArticleId?: string;
+  raw?: any;
+};
+
+export async function createNewspaperArticle(input: CreateNewspaperArticleInput): Promise<CreateNewspaperArticleResponse> {
+  try {
+    if (await getMockMode()) {
+      return { articleId: `np_${Date.now()}`, raw: { mock: true, input } };
+    }
+
+    // Safety: callers must NOT send these fields. Even if some upstream code
+    // accidentally adds them later, we will never forward them to the backend.
+    const forbiddenCallbackUrl = (input as any)?.callbackUrl;
+    const forbiddenHeading = (input as any)?.heading;
+    if (__DEV__ && (forbiddenCallbackUrl || forbiddenHeading)) {
+      try {
+        console.warn('[API] createNewspaperArticle ignoring forbidden fields', {
+          callbackUrl: !!forbiddenCallbackUrl,
+          heading: !!forbiddenHeading,
+        });
+      } catch {}
+    }
+
+    const body: any = {
+      languageCode: String(input.languageCode || 'en'),
+      categoryId: String(input.categoryId),
+      title: String(input.title || '').trim(),
+      // IMPORTANT: do NOT send `heading` or `callbackUrl` (explicit requirement)
+      ...(input.subTitle ? { subTitle: String(input.subTitle).trim() } : {}),
+      ...(input.publishedAt ? { publishedAt: input.publishedAt } : {}),
+      ...(input.dateLine ? { dateLine: String(input.dateLine).trim() } : {}),
+      ...(input.newspaperName ? { newspaperName: String(input.newspaperName).trim() } : {}),
+      ...(Array.isArray(input.bulletPoints) && input.bulletPoints.length ? { bulletPoints: input.bulletPoints.slice(0, 5) } : {}),
+      ...(input.lead ? { lead: String(input.lead).trim() } : {}),
+      ...(Array.isArray(input.content) && input.content.length ? { content: input.content } : {}),
+      ...(input.coverImageUrl ? { coverImageUrl: input.coverImageUrl } : {}),
+      ...(Array.isArray(input.images) && input.images.length ? { images: input.images } : {}),
+      ...(Array.isArray(input.videos) && input.videos.length ? { videos: input.videos } : {}),
+      ...(Array.isArray(input.mediaUrls) && input.mediaUrls.length ? { mediaUrls: input.mediaUrls } : {}),
+      location: input.location,
+      ...(input.status ? { status: input.status } : {}),
+    };
+
+    // Double-guard: strip forbidden keys if they somehow exist on body.
+    if ('callbackUrl' in body) delete (body as any).callbackUrl;
+    if ('heading' in body) delete (body as any).heading;
+
+    if (__DEV__) {
+      try {
+        console.log('[API] → POST /articles/newspaper', {
+          languageCode: body.languageCode,
+          categoryId: body.categoryId,
+          titleLen: String(body.title || '').length,
+          hasSubTitle: !!body.subTitle,
+          bullets: Array.isArray(body.bulletPoints) ? body.bulletPoints.length : 0,
+          hasLead: !!body.lead,
+          paragraphs: Array.isArray(body.content) ? body.content.length : 0,
+          images: Array.isArray(body.images) ? body.images.length : 0,
+          hasCover: !!body.coverImageUrl,
+          location: body.location,
+          status: body.status,
+        });
+
+        if (DEBUG_NEWSPAPER_FULL_BODY) {
+          console.log('[API] body /articles/newspaper', body);
+        }
+      } catch {}
+    }
+
+    const json = await request<any>('/articles/newspaper', { method: 'POST', body });
+    const payload = (json as any)?.data ?? json;
+
+    if (__DEV__) {
+      try {
+        console.log('[API] ← POST /articles/newspaper', {
+          articleId: payload?.articleId || payload?.id || payload?._id,
+          baseArticleId: payload?.baseArticleId,
+          newspaperArticleId: payload?.newspaperArticleId,
+        });
+      } catch {}
+    }
+    return {
+      articleId: payload?.articleId || payload?.id || payload?._id,
+      baseArticleId: payload?.baseArticleId,
+      newspaperArticleId: payload?.newspaperArticleId,
+      externalArticleId: payload?.externalArticleId,
+      raw: payload,
+    };
+  } catch (err) {
+    if (await getMockMode()) {
+      return { articleId: `np_${Date.now()}`, raw: { fallback: true, input } };
+    }
+    throw err instanceof Error ? err : new Error('Failed to create newspaper article');
   }
 }
 

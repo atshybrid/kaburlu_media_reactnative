@@ -9,6 +9,7 @@ export type DraftLocation = {
 
 export type DraftDateLine = {
   locationId: string;
+  locationType?: string;
   nameEn: string;
   nameLocalized?: string;
   text?: string;
@@ -17,6 +18,9 @@ export type DraftDateLine = {
 export type PostNewsDraft = {
   languageId?: string;
   languageCode?: string;
+  categoryId?: string;
+  categoryName?: string;
+  categorySlug?: string;
   title: string;
   subtitle?: string;
   locationQuery?: string;
@@ -30,6 +34,9 @@ export type PostNewsDraft = {
 };
 
 const emptyDraft: PostNewsDraft = {
+  categoryId: undefined,
+  categoryName: undefined,
+  categorySlug: undefined,
   title: '',
   subtitle: undefined,
   locationQuery: '',

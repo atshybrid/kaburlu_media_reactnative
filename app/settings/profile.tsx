@@ -39,7 +39,7 @@ export default function ProfileScreen() {
         Alert.alert('Permission needed', 'Please allow photo access to change your picture.');
         return;
       }
-  const mediaType = (ImagePicker as any).MediaType?.Images ?? (ImagePicker as any).MediaTypeOptions?.Images ?? (ImagePicker as any).MediaTypeOptions?.All;
+  const mediaType = (ImagePicker as any).MediaType?.Images ?? 'images';
   const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: mediaType, allowsEditing: true, aspect: [1,1], quality: 0.8 });
       if (res.canceled) { setUploading(false); return; }
       const asset = res.assets?.[0];
