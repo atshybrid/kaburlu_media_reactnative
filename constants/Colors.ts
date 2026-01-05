@@ -25,6 +25,7 @@ export const Colors = {
     tabIconDefault: '#687076',
     tabIconSelected: tintColorLight,
     warning: '#e67e22', // orange for warnings
+    danger: '#ef4444', // red for errors/expired states
   },
   dark: {
     text: '#ECEDEE',
@@ -39,5 +40,6 @@ export const Colors = {
     tabIconDefault: '#9BA1A6',
     tabIconSelected: tintColorDark,
     warning: '#e67e22', // orange for warnings
+    danger: '#ef4444', // red for errors/expired states
   },
 };

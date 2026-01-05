@@ -118,11 +118,18 @@ export async function request<T = any>(path: string, options: { method?: HttpMet
     if (DEBUG_HTTP) {
       console.log('[HTTP] →', method, url);
     }
-    const res = await withTimeout(fetch(url, {
-      method,
-      headers,
-      body: options.body ? JSON.stringify(options.body) : undefined,
-    }), options.timeoutMs ?? TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await withTimeout(fetch(url, {
+        method,
+        headers,
+        body: options.body ? JSON.stringify(options.body) : undefined,
+      }), options.timeoutMs ?? TIMEOUT_MS);
+    } catch (e: any) {
+      const msg = String(e?.message || e || '').trim();
+      const tagged = msg ? `${msg} (${method} ${url})` : `Request failed (${method} ${url})`;
+      throw new Error(tagged);
+    }
     const ct = res.headers.get('content-type') || '';
     const text = await res.text();
     let data: any = undefined;

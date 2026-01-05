@@ -38,6 +38,9 @@ export type TenantReporter = {
   subscriptionActive: boolean;
   monthlySubscriptionAmount: number | null;
   idCardCharge: number | null;
+  autoPublish?: boolean;
+  manualLoginEnabled?: boolean;
+  manualLoginDays?: number;
   kycStatus: string;
   profilePhotoUrl: string | null;
   active: boolean;
@@ -79,6 +82,10 @@ export type CreateTenantReporterInput = {
   subscriptionActive?: boolean;
   monthlySubscriptionAmount?: number;
   idCardCharge?: number;
+
+  manualLoginEnabled?: boolean;
+  manualLoginDays?: number;
+  autoPublish?: boolean;
 };
 
 function toQuery(params: Record<string, any>) {
@@ -100,6 +107,10 @@ export async function getTenantReporters(tenantId: string, params: GetTenantRepo
     mandalId: params.mandalId,
   });
   return await request<TenantReporter[]>(`/tenants/${tenantId}/reporters${qs}`);
+}
+
+export async function getTenantReporter(tenantId: string, reporterId: string): Promise<TenantReporter> {
+  return await request<TenantReporter>(`/tenants/${tenantId}/reporters/${reporterId}`);
 }
 
 export async function getReporterDesignations(): Promise<ReporterDesignation[]> {
@@ -151,5 +162,80 @@ export async function checkPublicReporterAvailability(
     method: 'POST',
     body: input,
     noAuth: true,
+  });
+}
+
+export type UpdateReporterAutoPublishResponse = {
+  success: boolean;
+  reporterId: string;
+  tenantId: string;
+  autoPublish: boolean;
+};
+
+export async function updateReporterAutoPublish(
+  tenantId: string,
+  reporterId: string,
+  autoPublish: boolean,
+): Promise<UpdateReporterAutoPublishResponse> {
+  return await request<UpdateReporterAutoPublishResponse>(`/tenants/${tenantId}/reporters/${reporterId}/auto-publish`, {
+    method: 'PATCH',
+    body: { autoPublish },
+  });
+}
+
+export type GenerateReporterIdCardResponse = {
+  success?: boolean;
+  reporterId?: string;
+  tenantId?: string;
+  message?: string;
+  url?: string;
+};
+
+export async function generateReporterIdCard(tenantId: string, reporterId: string): Promise<GenerateReporterIdCardResponse> {
+  return await request<GenerateReporterIdCardResponse>(`/tenants/${tenantId}/reporters/${reporterId}/id-card`, {
+    method: 'POST',
+  });
+}
+
+export type ReporterIdCard = {
+  id: string;
+  reporterId: string;
+  cardNumber: string;
+  issuedAt: string;
+  expiresAt: string;
+  pdfUrl?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export async function getReporterIdCard(tenantId: string, reporterId: string): Promise<ReporterIdCard> {
+  return await request<ReporterIdCard>(`/tenants/${tenantId}/reporters/${reporterId}/id-card`, {
+    method: 'GET',
+  });
+}
+
+export type VerifyReporterKycInput = {
+  status: string;
+  notes?: string;
+  verifiedAadhar?: boolean;
+  verifiedPan?: boolean;
+  verifiedWorkProof?: boolean;
+};
+
+export type VerifyReporterKycResponse = {
+  id: string;
+  tenantId: string;
+  kycStatus: string;
+  kycData?: any;
+};
+
+export async function verifyReporterKyc(
+  tenantId: string,
+  reporterId: string,
+  input: VerifyReporterKycInput,
+): Promise<VerifyReporterKycResponse> {
+  return await request<VerifyReporterKycResponse>(`/tenants/${tenantId}/reporters/${reporterId}/kyc/verify`, {
+    method: 'PATCH',
+    body: input,
   });
 }

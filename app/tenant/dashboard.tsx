@@ -1,4 +1,5 @@
 import { ThemedText } from '@/components/ThemedText';
+import { Skeleton } from '@/components/ui/Skeleton';
 import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { loadTokens } from '@/services/auth';
@@ -10,13 +11,12 @@ import * as Linking from 'expo-linking';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
-  FlatList,
-  Image,
-  Pressable,
-  StyleSheet,
-  useWindowDimensions,
-  View
+    FlatList,
+    Image,
+    Pressable,
+    StyleSheet,
+    useWindowDimensions,
+    View
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -67,6 +67,27 @@ function gradientForCardKey(key: string | undefined, c: (typeof Colors)['light']
   if (a === c.secondary) return [c.secondary, c.tint] as const;
   if (a === c.warning) return [c.warning, c.tint] as const;
   return [c.tint, c.secondary] as const;
+}
+
+function TenantDashboardSkeleton(opts: { styles: ReturnType<typeof makeStyles>; pageWidth: number }) {
+  const { styles, pageWidth } = opts;
+  return (
+    <View style={styles.body}>
+      <View style={styles.carouselArea}>
+        <View style={[styles.page, { width: pageWidth }]}>
+          <View style={{ paddingHorizontal: SCREEN_PADDING_H }}>
+            <Skeleton width={'100%'} height={CAROUSEL_HEIGHT} borderRadius={22} />
+          </View>
+        </View>
+      </View>
+
+      <View style={styles.actionsArea}>
+        <View style={{ paddingHorizontal: SCREEN_PADDING_H }}>
+          <Skeleton width={'100%'} height={56} borderRadius={16} />
+        </View>
+      </View>
+    </View>
+  );
 }
 
 
@@ -198,6 +219,10 @@ export default function TenantDashboardScreen() {
     return [reportersCard, ...list];
   }, [overview]);
 
+  const postNewsPrimaryColor = useMemo(() => {
+    return brandPrimary || Colors[scheme].tint;
+  }, [brandPrimary, scheme]);
+
   const c = Colors[scheme];
   const appBarBg = c.background;
   const appBarFg = c.text;
@@ -275,10 +300,7 @@ export default function TenantDashboardScreen() {
 
       <View style={styles.bodyContainer}>
       {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator />
-          <ThemedText style={styles.centerText}>Loading overview…</ThemedText>
-        </View>
+        <TenantDashboardSkeleton styles={styles} pageWidth={pageWidth} />
       ) : error ? (
         <View style={styles.center}>
           <ThemedText style={styles.errorTitle} type="defaultSemiBold">
@@ -330,6 +352,29 @@ export default function TenantDashboardScreen() {
                 </View>
               )}
             />
+          </View>
+
+          <View style={styles.actionsArea}>
+            <Pressable
+              onPress={() => router.push('/post-news' as any)}
+              style={({ pressed }) => [
+                styles.actionCard,
+                { borderColor: postNewsPrimaryColor, backgroundColor: Colors.light.background },
+                pressed && styles.cardPressed,
+              ]}
+              android_ripple={{ color: c.border }}
+              accessibilityLabel="Post News"
+            >
+              <View style={styles.actionCardRow}>
+                <View style={styles.actionIconPill}>
+                  <MaterialIcons name="newspaper" size={20} color={postNewsPrimaryColor} />
+                </View>
+                <ThemedText type="defaultSemiBold" style={[styles.actionLabel, { color: postNewsPrimaryColor }]}>
+                  Post News
+                </ThemedText>
+                <MaterialIcons name="chevron-right" size={22} color={postNewsPrimaryColor} />
+              </View>
+            </Pressable>
           </View>
 
           <View style={styles.bottomSpacer} />
@@ -460,6 +505,7 @@ function makeStyles(scheme: 'light' | 'dark', cardWidth: number) {
     carousel: { flexGrow: 0 },
     carouselContent: { paddingBottom: 18 },
     page: { height: CAROUSEL_HEIGHT, paddingHorizontal: SCREEN_PADDING_H, paddingBottom: 10, alignItems: 'center' },
+    actionsArea: { paddingHorizontal: SCREEN_PADDING_H, paddingTop: 8, alignItems: 'center' },
     bottomSpacer: { height: 18 },
 
     center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20, gap: 10 },
@@ -504,5 +550,24 @@ function makeStyles(scheme: 'light' | 'dark', cardWidth: number) {
     cardTitle: { fontSize: 18, marginTop: 14 },
     primaryValue: { fontSize: 44, lineHeight: 48, marginTop: 10 },
     primaryLabel: { fontSize: 14, marginTop: 8, opacity: 0.95 },
+
+    actionCard: {
+      width: cardWidth,
+      minHeight: 74,
+      borderWidth: 1,
+      borderRadius: 18,
+      overflow: 'hidden',
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+    },
+    actionCardRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+    actionIconPill: {
+      width: 38,
+      height: 38,
+      borderRadius: 12,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    actionLabel: { flex: 1, fontSize: 16 },
   });
 }

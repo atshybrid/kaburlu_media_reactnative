@@ -49,12 +49,6 @@ function initials(name?: string | null) {
   return letters || 'R';
 }
 
-function formatMoney(v: number | null | undefined) {
-  if (v === null || v === undefined) return '—';
-  if (!Number.isFinite(v)) return '—';
-  return String(v);
-}
-
 function locationNameForReporter(r: TenantReporter): string {
   const lvl = String(r.level || '').toUpperCase();
   if (lvl === 'STATE') return r.state?.name || '—';
@@ -85,10 +79,6 @@ function levelLabel(level: string) {
   }
 }
 
-function formatMonthYear(m?: number, y?: number) {
-  if (!m || !y) return '—';
-  return `${m}/${y}`;
-}
 
 export default function TenantReportersScreen() {
   const scheme = useColorScheme() ?? 'light';
@@ -113,7 +103,6 @@ export default function TenantReportersScreen() {
   const [levelFilter, setLevelFilter] = useState<string | null>(null);
 
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     (async () => {
@@ -135,6 +124,13 @@ export default function TenantReportersScreen() {
     const r = String(role || '').toUpperCase();
     return !!tenantId && (r === 'SUPER_ADMIN' || r === 'TENANT_ADMIN' || r === 'REPORTER' || r === 'TENANT_REPORTER');
   }, [role, tenantId]);
+
+  const openReporter = useCallback(
+    (id: string) => {
+      (router.push as any)({ pathname: '/tenant/reporter/[id]', params: { id } });
+    },
+    [router],
+  );
 
   const load = useCallback(async () => {
     if (!tenantId) return;
@@ -220,10 +216,6 @@ export default function TenantReportersScreen() {
 
   const accent = brandPrimary || c.tint;
   const accentText = pickReadableTextColor(accent) || Colors.light.background;
-
-  const toggleExpanded = useCallback((id: string) => {
-    setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
-  }, []);
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['top', 'bottom']}>
@@ -330,8 +322,7 @@ export default function TenantReportersScreen() {
               item={item}
               scheme={scheme}
               accent={accent}
-              expanded={!!expanded[item.id]}
-              onToggle={() => toggleExpanded(item.id)}
+              onOpen={() => openReporter(item.id)}
             />
           )}
           onEndReachedThreshold={0.3}
@@ -369,14 +360,12 @@ function ReporterCard({
   item,
   scheme,
   accent,
-  expanded,
-  onToggle,
+  onOpen,
 }: {
   item: TenantReporter;
   scheme: 'light' | 'dark';
   accent: string;
-  expanded: boolean;
-  onToggle: () => void;
+  onOpen: () => void;
 }) {
   const c = Colors[scheme];
   const name = item.fullName || 'Unknown';
@@ -385,11 +374,7 @@ function ReporterCard({
   const location = locationNameForReporter(item);
   const kyc = item.kycStatus || '—';
   const subActive = !!item.subscriptionActive;
-
-  const total = item.stats?.newspaperArticles?.total;
-  const month = item.stats?.newspaperArticles?.currentMonth;
-  const web = item.stats?.webArticleViews;
-  const pay = item.stats?.subscriptionPayment?.currentMonth;
+  const autoPublish = item.autoPublish === true;
 
   const chipText = pickReadableTextColor(accent) || Colors.light.background;
   const warn = Colors[scheme].warning;
@@ -406,9 +391,6 @@ function ReporterCard({
   const kycOk = ['APPROVED', 'VERIFIED', 'COMPLETED', 'SUCCESS'].some((t) => kycKey.includes(t));
   const kycPending = ['PENDING', 'IN_PROGRESS', 'SUBMITTED', 'REVIEW'].some((t) => kycKey.includes(t));
 
-  const payKey = String(pay?.status || '').toUpperCase();
-  const payOk = ['PAID', 'SUCCESS', 'COMPLETED'].some((t) => payKey.includes(t));
-  const payPending = ['PENDING', 'DUE', 'INIT', 'IN_PROGRESS'].some((t) => payKey.includes(t));
 
   const level = normalizeLevel(item.level);
   const levelTx = levelLabel(level);
@@ -418,14 +400,9 @@ function ReporterCard({
   const kycTx = kycOk ? chipText : kycPending ? warnText : c.text;
   const kycIcon = kycOk ? 'verified' : kycPending ? 'pending-actions' : 'help-outline';
 
-  const payBg = payOk ? alphaBg(accent, 0.14) : payPending ? alphaBg(warn, 0.14) : c.background;
-  const payBorder = payOk ? alphaBg(accent, 0.35) : payPending ? alphaBg(warn, 0.35) : c.border;
-  const payTx = payOk ? accent : payPending ? warn : c.muted;
-  const payIcon = payOk ? 'credit-score' : payPending ? 'hourglass-bottom' : 'credit-card';
-
   return (
     <Pressable
-      onPress={onToggle}
+      onPress={onOpen}
       android_ripple={{ color: c.border }}
       style={({ pressed }) => [
         styles.card,
@@ -472,10 +449,6 @@ function ReporterCard({
         </View>
 
         <View style={styles.rightCol}>
-          <View style={[styles.expandIconBtn, { borderColor: c.border, backgroundColor: c.background }]}>
-            <MaterialIcons name={expanded ? 'expand-less' : 'expand-more'} size={22} color={c.text} />
-          </View>
-
           <View style={[styles.avatar, { borderColor: c.border, backgroundColor: alphaBg(accent, 0.10) }]}>
             {item.profilePhotoUrl ? (
               <Image source={{ uri: item.profilePhotoUrl }} style={styles.avatarImg} resizeMode="cover" />
@@ -497,15 +470,13 @@ function ReporterCard({
           </ThemedText>
         </View>
 
-        {pay?.status ? (
-          <View style={[styles.chip, { backgroundColor: payBg, borderColor: payBorder }]}
-          >
-            <MaterialIcons name={payIcon as any} size={16} color={payTx} />
-            <ThemedText style={{ color: payTx, fontSize: 12 }} numberOfLines={1}>
-              {pay.status}{pay?.month && pay?.year ? ` • ${formatMonthYear(pay.month, pay.year)}` : ''}
-            </ThemedText>
-          </View>
-        ) : null}
+        <View style={[styles.chip, { backgroundColor: c.background, borderColor: c.border }]}
+        >
+          <MaterialIcons name={autoPublish ? 'publish' : 'pause-circle'} size={16} color={autoPublish ? accent : c.muted} />
+          <ThemedText style={{ color: autoPublish ? c.text : c.muted, fontSize: 12 }} numberOfLines={1}>
+            Auto publish {autoPublish ? 'Yes' : 'No'}
+          </ThemedText>
+        </View>
 
         <View style={[styles.chip, { backgroundColor: c.background, borderColor: c.border }]}
         >
@@ -515,72 +486,6 @@ function ReporterCard({
           </ThemedText>
         </View>
       </View>
-
-      {/* Compact summary */}
-      {!expanded ? (
-        <View style={{ marginTop: 10, gap: 6 }}>
-          <View style={styles.statRow}>
-            <View style={styles.statLabelRow}>
-              <MaterialIcons name="article" size={16} color={c.muted} />
-              <ThemedText style={{ color: c.muted, fontSize: 12 }}>Newspaper</ThemedText>
-            </View>
-            <ThemedText style={{ color: c.text, fontSize: 12 }}>
-              S {total?.submitted ?? 0} • P {total?.published ?? 0} • R {total?.rejected ?? 0}
-            </ThemedText>
-          </View>
-          <View style={styles.statRow}>
-            <View style={styles.statLabelRow}>
-              <MaterialIcons name="public" size={16} color={c.muted} />
-              <ThemedText style={{ color: c.muted, fontSize: 12 }}>Web Views</ThemedText>
-            </View>
-            <ThemedText style={{ color: c.text, fontSize: 12 }}>
-              Total {web?.total ?? 0} • Month {web?.currentMonth ?? 0}
-            </ThemedText>
-          </View>
-        </View>
-      ) : (
-        <View style={{ marginTop: 12, gap: 10 }}>
-          <View style={[styles.detailSection, { borderTopColor: c.border }]}>
-            <ThemedText type="defaultSemiBold" style={{ color: c.text }}>
-              Subscription
-            </ThemedText>
-            <ThemedText style={{ color: c.muted }}>
-              Status: {subActive ? 'Active' : 'Inactive'}
-            </ThemedText>
-            {subActive ? (
-              <>
-                <ThemedText style={{ color: c.text }}>
-                  Monthly: {formatMoney(item.monthlySubscriptionAmount)} • ID Card: {formatMoney(item.idCardCharge)}
-                </ThemedText>
-                <ThemedText style={{ color: c.muted }}>
-                  Payment ({formatMonthYear(pay?.month, pay?.year)}): {pay?.status ?? '—'}
-                </ThemedText>
-              </>
-            ) : null}
-          </View>
-
-          <View style={[styles.detailSection, { borderTopColor: c.border }]}>
-            <ThemedText type="defaultSemiBold" style={{ color: c.text }}>
-              Newspaper Articles
-            </ThemedText>
-            <ThemedText style={{ color: c.text }}>
-              Total: Submitted {total?.submitted ?? 0} • Published {total?.published ?? 0} • Rejected {total?.rejected ?? 0}
-            </ThemedText>
-            <ThemedText style={{ color: c.muted }}>
-              This Month: Submitted {month?.submitted ?? 0} • Published {month?.published ?? 0} • Rejected {month?.rejected ?? 0}
-            </ThemedText>
-          </View>
-
-          <View style={[styles.detailSection, { borderTopColor: c.border }]}>
-            <ThemedText type="defaultSemiBold" style={{ color: c.text }}>
-              Web Article Views
-            </ThemedText>
-            <ThemedText style={{ color: c.text }}>
-              Total {web?.total ?? 0} • This Month {web?.currentMonth ?? 0}
-            </ThemedText>
-          </View>
-        </View>
-      )}
     </Pressable>
   );
 }
@@ -740,15 +645,6 @@ const styles = StyleSheet.create({
 
   metaLine: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
   metaText: { fontSize: 13, flexShrink: 1 },
-
-  expandIconBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
 
   chipRow: { flexDirection: 'row', gap: 8, marginTop: 12, flexWrap: 'wrap', paddingLeft: 6 },
   chip: { paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999, borderWidth: 1, flexDirection: 'row', alignItems: 'center', gap: 6 },

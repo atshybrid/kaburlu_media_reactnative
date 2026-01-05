@@ -14,6 +14,11 @@ import { useEffect, useRef, useState } from 'react';
 import { LayoutChangeEvent, StyleSheet, Text, View } from 'react-native';
 import { useSharedValue, withSpring } from 'react-native-reanimated';
 
+const DEV_MODE = (() => {
+  const raw = String(process.env.EXPO_PUBLIC_DEVELOPER_MODE ?? '').toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'on' || raw === 'yes';
+})();
+
 const NewsScreen = () => {
   const router = useRouter();
   const { setTabBarVisible } = useTabBarVisibility();
@@ -194,7 +199,7 @@ const NewsScreen = () => {
             <Text style={[styles.messageSubText, { color: theme.muted }]} numberOfLines={3}>{error}</Text>
           </View>
         )}
-        {__DEV__ && (
+        {__DEV__ && DEV_MODE && (
           <View style={styles.debugOverlay} pointerEvents="none">
             <Text style={styles.debugText}>articles: {articles.length} | activeIndex: {activeIndex}</Text>
             <Text style={styles.debugText}>langCode: {langCodeDebug || '-'}</Text>

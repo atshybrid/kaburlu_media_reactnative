@@ -113,6 +113,10 @@ export default function CreateReporterScreen() {
   const [monthlyAmount, setMonthlyAmount] = useState('');
   const [idCardCharge, setIdCardCharge] = useState('');
 
+  const [manualLoginEnabled, setManualLoginEnabled] = useState(false);
+  const [manualLoginDays, setManualLoginDays] = useState('');
+  const [autoPublish, setAutoPublish] = useState(false);
+
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -128,9 +132,9 @@ export default function CreateReporterScreen() {
 
   const scrollPadBottom = useMemo(() => {
     if (step !== 3) return 18;
-    if (subscriptionActive) return 300;
-    return 200;
-  }, [step, subscriptionActive]);
+    if (subscriptionActive || manualLoginEnabled) return 320;
+    return 220;
+  }, [step, subscriptionActive, manualLoginEnabled]);
 
   const scrollToBottomSoon = useCallback(() => {
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
@@ -182,6 +186,14 @@ export default function CreateReporterScreen() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isReporterRole]);
+
+  useEffect(() => {
+    // Backend rule: manualLoginEnabled requires subscriptionActive=false.
+    if (subscriptionActive) {
+      setManualLoginEnabled(false);
+      setManualLoginDays('');
+    }
+  }, [subscriptionActive]);
 
   const designationsByLevel = useMemo(() => {
     const q = desigQuery.trim().toLowerCase();
@@ -363,12 +375,19 @@ export default function CreateReporterScreen() {
     if (!fullName.trim()) return false;
     if (digitsOnly(mobileNumber).length !== 10) return false;
     if (subscriptionActive === null) return false;
+
+    if (manualLoginEnabled) {
+      if (subscriptionActive) return false;
+      const days = Number(digitsOnly(manualLoginDays) || '0');
+      if (!Number.isFinite(days) || days < 1 || days > 31) return false;
+    }
+
     if (subscriptionActive) {
       if (!digitsOnly(monthlyAmount).length) return false;
       if (!digitsOnly(idCardCharge).length) return false;
     }
     return true;
-  }, [tenantId, isAllowedRole, selectedDesig?.id, selectedLoc?.match?.id, fullName, mobileNumber, subscriptionActive, monthlyAmount, idCardCharge]);
+  }, [tenantId, isAllowedRole, selectedDesig?.id, selectedLoc?.match?.id, fullName, mobileNumber, subscriptionActive, monthlyAmount, idCardCharge, manualLoginEnabled, manualLoginDays]);
 
   const submit = useCallback(async () => {
     setFormError(null);
@@ -395,12 +414,25 @@ export default function CreateReporterScreen() {
       return;
     }
 
+    if (manualLoginEnabled) {
+      if (subscriptionActive) {
+        setFormError('Manual login requires subscription inactive');
+        return;
+      }
+      const days = Number(digitsOnly(manualLoginDays) || '0');
+      if (!Number.isFinite(days) || days < 1 || days > 31) {
+        setFormError('Manual login days must be between 1 and 31');
+        return;
+      }
+    }
+
     const payload: CreateTenantReporterInput = {
       designationId: selectedDesig.id,
       level: selectedLevel as Exclude<ReporterLevel, null>,
       fullName: fullName.trim(),
       mobileNumber: mobile,
-      subscriptionActive: !!subscriptionActive,
+      subscriptionActive: manualLoginEnabled ? false : !!subscriptionActive,
+      autoPublish,
     };
 
     if (selectedLevel === 'STATE') payload.stateId = selectedLoc.match.id;
@@ -408,7 +440,12 @@ export default function CreateReporterScreen() {
     if (selectedLevel === 'ASSEMBLY') payload.assemblyConstituencyId = selectedLoc.match.id;
     if (selectedLevel === 'MANDAL') payload.mandalId = selectedLoc.match.id;
 
-    if (subscriptionActive) {
+    if (manualLoginEnabled) {
+      payload.manualLoginEnabled = true;
+      payload.manualLoginDays = Number(digitsOnly(manualLoginDays) || '0');
+    }
+
+    if (!manualLoginEnabled && subscriptionActive) {
       payload.monthlySubscriptionAmount = Number(digitsOnly(monthlyAmount) || '0');
       payload.idCardCharge = Number(digitsOnly(idCardCharge) || '0');
     }
@@ -422,7 +459,7 @@ export default function CreateReporterScreen() {
     } finally {
       setSubmitting(false);
     }
-  }, [tenantId, isAllowedRole, selectedDesig, selectedLevel, selectedLoc, fullName, mobileNumber, subscriptionActive, monthlyAmount, idCardCharge, router]);
+  }, [tenantId, isAllowedRole, selectedDesig, selectedLevel, selectedLoc, fullName, mobileNumber, subscriptionActive, monthlyAmount, idCardCharge, router, manualLoginEnabled, manualLoginDays, autoPublish]);
 
   const renderStepContent = () => {
     if (step === 1) {
@@ -702,69 +739,160 @@ export default function CreateReporterScreen() {
           </View>
         </View>
 
+        {!manualLoginEnabled ? (
+          <View style={[styles.card, { borderColor: c.border, backgroundColor: c.card }]}>
+            <View style={styles.cardHeaderRow}>
+              <MaterialIcons name="credit-card" size={18} color={c.text} />
+              <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Subscription</ThemedText>
+            </View>
+
+            <View style={[styles.subSwitchRow, { borderColor: c.border, backgroundColor: c.background }]}>
+              <View style={{ flex: 1 }}>
+                <ThemedText type="defaultSemiBold" style={{ color: c.text }}>
+                  Active
+                </ThemedText>
+                <ThemedText style={{ color: c.muted, fontSize: 12 }}>
+                  Turn on to enter monthly amount and ID card charge
+                </ThemedText>
+              </View>
+              <Switch
+                value={!!subscriptionActive}
+                onValueChange={(v) => {
+                  setSubscriptionActive(v);
+                  if (v) {
+                    // Only one allowed
+                    setManualLoginEnabled(false);
+                    setManualLoginDays('');
+                  }
+                }}
+                disabled={isReporterRole}
+                trackColor={{ false: c.border, true: accent }}
+                thumbColor={c.card}
+              />
+            </View>
+
+            {isReporterRole ? (
+              <ThemedText style={{ color: c.muted, fontSize: 12, marginTop: 8 }}>
+                Reporter role requires subscriptionActive=true
+              </ThemedText>
+            ) : null}
+
+            {subscriptionActive ? (
+              <View style={{ gap: 10, marginTop: 10 }}>
+                <ThemedText style={{ color: c.muted, fontSize: 12, marginBottom: 2 }}>Monthly amount</ThemedText>
+                <View style={[styles.inputRow, { borderColor: c.border, backgroundColor: c.background }]}>
+                  <MaterialIcons name="payments" size={18} color={c.muted} />
+                  <TextInput
+                    value={monthlyAmount}
+                    onChangeText={(v) => setMonthlyAmount(digitsOnly(v))}
+                    placeholder="Monthly amount"
+                    placeholderTextColor={c.muted}
+                    keyboardType="number-pad"
+                    onFocus={scrollToBottomSoon}
+                    editable={canEditPricing}
+                    style={[styles.input, { color: c.text }]}
+                  />
+                </View>
+
+                <ThemedText style={{ color: c.muted, fontSize: 12, marginTop: 4, marginBottom: 2 }}>ID card charge</ThemedText>
+                <View style={[styles.inputRow, { borderColor: c.border, backgroundColor: c.background }]}>
+                  <MaterialIcons name="badge" size={18} color={c.muted} />
+                  <TextInput
+                    value={idCardCharge}
+                    onChangeText={(v) => setIdCardCharge(digitsOnly(v))}
+                    placeholder="ID card charge"
+                    placeholderTextColor={c.muted}
+                    keyboardType="number-pad"
+                    onFocus={scrollToBottomSoon}
+                    editable={canEditPricing}
+                    style={[styles.input, { color: c.text }]}
+                  />
+                </View>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+
         <View style={[styles.card, { borderColor: c.border, backgroundColor: c.card }]}>
           <View style={styles.cardHeaderRow}>
-            <MaterialIcons name="credit-card" size={18} color={c.text} />
-            <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Subscription</ThemedText>
+            <MaterialIcons name="settings" size={18} color={c.text} />
+            <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Settings</ThemedText>
           </View>
 
-          <View style={[styles.subSwitchRow, { borderColor: c.border, backgroundColor: c.background }]}>
+          {!subscriptionActive && !isReporterRole ? (
+            <>
+              <View style={[styles.subSwitchRow, { borderColor: c.border, backgroundColor: c.background }]}>
+                <View style={{ flex: 1 }}>
+                  <ThemedText type="defaultSemiBold" style={{ color: c.text }}>
+                    Manual login
+                  </ThemedText>
+                  <ThemedText style={{ color: c.muted, fontSize: 12 }}>
+                    If enabled, subscription must be inactive (max 31 days)
+                  </ThemedText>
+                </View>
+                <Switch
+                  value={manualLoginEnabled}
+                  onValueChange={(v) => {
+                    if (v) {
+                      // Only one allowed
+                      setSubscriptionActive(false);
+                      setManualLoginEnabled(true);
+                      scrollToBottomSoon();
+                    } else {
+                      setManualLoginEnabled(false);
+                      setManualLoginDays('');
+                    }
+                  }}
+                  trackColor={{ false: c.border, true: accent }}
+                  thumbColor={c.card}
+                />
+              </View>
+
+              {manualLoginEnabled ? (
+                <View style={{ gap: 10, marginTop: 10 }}>
+                  <ThemedText style={{ color: c.muted, fontSize: 12, marginBottom: 2 }}>Days (1 to 31)</ThemedText>
+                  <View style={[styles.inputRow, { borderColor: c.border, backgroundColor: c.background }]}>
+                    <MaterialIcons name="schedule" size={18} color={c.muted} />
+                    <TextInput
+                      value={manualLoginDays}
+                      onChangeText={(v) => {
+                        const raw = digitsOnly(v).slice(0, 2);
+                        const n = Number(raw || '0');
+                        if (!raw) {
+                          setManualLoginDays('');
+                          return;
+                        }
+                        setManualLoginDays(String(Math.min(31, Math.max(0, n))));
+                      }}
+                      placeholder="Days"
+                      placeholderTextColor={c.muted}
+                      keyboardType="number-pad"
+                      onFocus={scrollToBottomSoon}
+                      style={[styles.input, { color: c.text }]}
+                      maxLength={2}
+                    />
+                  </View>
+                </View>
+              ) : null}
+            </>
+          ) : null}
+
+          <View style={[styles.subSwitchRow, { borderColor: c.border, backgroundColor: c.background, marginTop: 12 }]}>
             <View style={{ flex: 1 }}>
               <ThemedText type="defaultSemiBold" style={{ color: c.text }}>
-                Active
+                Auto publish articles
               </ThemedText>
               <ThemedText style={{ color: c.muted, fontSize: 12 }}>
-                Turn on to enter monthly amount and ID card charge
+                Allow reporter articles to be auto published
               </ThemedText>
             </View>
             <Switch
-              value={!!subscriptionActive}
-              onValueChange={(v) => setSubscriptionActive(v)}
-              disabled={isReporterRole}
+              value={autoPublish}
+              onValueChange={setAutoPublish}
               trackColor={{ false: c.border, true: accent }}
               thumbColor={c.card}
             />
           </View>
-
-          {isReporterRole ? (
-            <ThemedText style={{ color: c.muted, fontSize: 12, marginTop: 8 }}>
-              Reporter role requires subscriptionActive=true
-            </ThemedText>
-          ) : null}
-
-          {subscriptionActive ? (
-            <View style={{ gap: 10, marginTop: 10 }}>
-              <ThemedText style={{ color: c.muted, fontSize: 12, marginBottom: 2 }}>Monthly amount</ThemedText>
-              <View style={[styles.inputRow, { borderColor: c.border, backgroundColor: c.background }]}>
-                <MaterialIcons name="payments" size={18} color={c.muted} />
-                <TextInput
-                  value={monthlyAmount}
-                  onChangeText={(v) => setMonthlyAmount(digitsOnly(v))}
-                  placeholder="Monthly amount"
-                  placeholderTextColor={c.muted}
-                  keyboardType="number-pad"
-                  onFocus={scrollToBottomSoon}
-                  editable={canEditPricing}
-                  style={[styles.input, { color: c.text }]}
-                />
-              </View>
-
-              <ThemedText style={{ color: c.muted, fontSize: 12, marginTop: 4, marginBottom: 2 }}>ID card charge</ThemedText>
-              <View style={[styles.inputRow, { borderColor: c.border, backgroundColor: c.background }]}>
-                <MaterialIcons name="badge" size={18} color={c.muted} />
-                <TextInput
-                  value={idCardCharge}
-                  onChangeText={(v) => setIdCardCharge(digitsOnly(v))}
-                  placeholder="ID card charge"
-                  placeholderTextColor={c.muted}
-                  keyboardType="number-pad"
-                  onFocus={scrollToBottomSoon}
-                  editable={canEditPricing}
-                  style={[styles.input, { color: c.text }]}
-                />
-              </View>
-            </View>
-          ) : null}
         </View>
 
         {formError ? (

@@ -23,6 +23,135 @@ const OTP_STORE = new Map();
 const OTP_TTL_MINUTES = Number.parseInt(process.env.WHATSAPP_OTP_TTL_MINUTES || '10', 10);
 const OTP_MAX_ATTEMPTS = Number.parseInt(process.env.WHATSAPP_OTP_MAX_ATTEMPTS || '5', 10);
 
+// -------- AI helpers (dev-only proxy) --------
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const OPENAI_CHAT_URL = process.env.OPENAI_CHAT_URL || 'https://api.openai.com/v1/chat/completions';
+
+async function openaiChatJson({ system, user, temperature = 0.4 }) {
+  if (!OPENAI_API_KEY) {
+    const err = new Error('OPENAI_API_KEY is not set');
+    err.statusCode = 501;
+    throw err;
+  }
+  const payload = {
+    model: OPENAI_MODEL,
+    temperature,
+    messages: [
+      { role: 'system', content: String(system || '') },
+      { role: 'user', content: String(user || '') },
+    ],
+  };
+  const headers = {
+    Authorization: `Bearer ${OPENAI_API_KEY}`,
+  };
+  return httpsJsonPost(OPENAI_CHAT_URL, headers, payload);
+}
+
+function safeJsonParse(s) {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+
+function extractAssistantText(resp) {
+  try {
+    const choice = resp && resp.choices && resp.choices[0];
+    const msg = choice && choice.message;
+    return (msg && msg.content) ? String(msg.content) : '';
+  } catch {
+    return '';
+  }
+}
+
+app.post('/ai/suggest-titles', async (req, res) => {
+  try {
+    const title = String(req.body?.title || '').trim();
+    const languageCode = String(req.body?.languageCode || '').trim();
+    if (!title) return res.status(400).json({ error: 'title required' });
+
+    const system = 'You are a helpful editor for a news app. Return ONLY valid JSON. No markdown.';
+    const user = [
+      `Input headline: "${title}"`,
+      languageCode ? `Language code: ${languageCode} (write in this language).` : 'Write in the same language as the input.',
+      'Task: Rewrite into 5 improved titles that are short, clear, and non-clickbait.',
+      'Constraints: each title <= 60 characters. Return JSON array of 5 items: [{"title":"...","subtitle":"..."?}].',
+      'If you add subtitle, keep it <= 80 characters. Subtitles are optional.',
+    ].join('\n');
+
+    const resp = await openaiChatJson({ system, user, temperature: 0.5 });
+    const text = extractAssistantText(resp);
+    const parsed = safeJsonParse(text);
+    const suggestions = Array.isArray(parsed) ? parsed : (parsed && parsed.suggestions);
+    if (!Array.isArray(suggestions)) return res.json({ suggestions: [] });
+    const cleaned = suggestions
+      .map((x) => ({
+        title: String(x?.title || '').trim(),
+        subtitle: x?.subtitle ? String(x.subtitle).trim() : undefined,
+      }))
+      .filter((x) => x.title)
+      .slice(0, 5);
+    return res.json({ suggestions: cleaned });
+  } catch (e) {
+    const status = e?.statusCode || 500;
+    return res.status(status).json({ error: e?.message || 'AI suggest failed' });
+  }
+});
+
+app.post('/ai/shorten-bullets', async (req, res) => {
+  try {
+    const bullets = Array.isArray(req.body?.bullets) ? req.body.bullets.map((b) => String(b || '').trim()).filter(Boolean) : [];
+    const languageCode = String(req.body?.languageCode || '').trim();
+    const maxChars = Number(req.body?.maxChars || 100);
+    if (!bullets.length) return res.status(400).json({ error: 'bullets required' });
+
+    const system = 'You are a concise news editor. Return ONLY valid JSON. No markdown.';
+    const user = [
+      languageCode ? `Language code: ${languageCode} (write in this language).` : 'Write in the same language as input bullets.',
+      `Task: Rewrite each bullet to be <= ${maxChars} characters, preserving meaning.`,
+      'Return JSON array of strings with SAME length and SAME order as input.',
+      `Input bullets JSON: ${JSON.stringify(bullets)}`,
+    ].join('\n');
+
+    const resp = await openaiChatJson({ system, user, temperature: 0.2 });
+    const text = extractAssistantText(resp);
+    const parsed = safeJsonParse(text);
+    const out = Array.isArray(parsed) ? parsed : (parsed && parsed.bullets);
+    if (!Array.isArray(out)) return res.json({ bullets });
+    const cleaned = out.map((x, idx) => String(x ?? bullets[idx] ?? '').trim()).filter(Boolean);
+    return res.json({ bullets: cleaned.length ? cleaned : bullets });
+  } catch (e) {
+    const status = e?.statusCode || 500;
+    return res.status(status).json({ error: e?.message || 'AI shorten failed' });
+  }
+});
+
+app.post('/ai/translate', async (req, res) => {
+  try {
+    const text = String(req.body?.text || '').trim();
+    const to = String(req.body?.to || 'en').trim();
+    if (!text) return res.status(400).json({ error: 'text required' });
+
+    const system = 'You are a translation engine. Return ONLY valid JSON. No markdown.';
+    const user = [
+      `Translate the following text to ${to}.`,
+      'Return JSON: {"text":"..."}.',
+      `Text: ${JSON.stringify(text)}`,
+    ].join('\n');
+
+    const resp = await openaiChatJson({ system, user, temperature: 0.1 });
+    const content = extractAssistantText(resp);
+    const parsed = safeJsonParse(content);
+    const out = String(parsed?.text || '').trim();
+    return res.json({ text: out || text });
+  } catch (e) {
+    const status = e?.statusCode || 500;
+    return res.status(status).json({ error: e?.message || 'AI translate failed' });
+  }
+});
+
 function normalizePhoneE164Digits(phone) {
   const digits = String(phone || '').replace(/\D/g, '');
   return digits;

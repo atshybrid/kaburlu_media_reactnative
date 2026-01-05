@@ -317,6 +317,8 @@ export const getNews = async (lang: string, category?: string, cursor?: string):
     } catch {}
 
     const langCode = String(lang || selectedLanguageCode || 'en').toLowerCase();
+    const looksLikeLangCode = (v: string) => /^[a-z]{2,3}$/i.test(String(v || '').trim());
+    const useCodeAsLanguageId = looksLikeLangCode(langCode);
 
     const looksLikeServerId = (id: unknown): id is string => {
       if (typeof id !== 'string') return false;
@@ -350,14 +352,20 @@ export const getNews = async (lang: string, category?: string, cursor?: string):
       languageId = undefined;
     }
 
-    // If storage has no id (or was corrupted), fall back to /languages by code
-    // Always prefer the canonical server languageId for the requested language code.
-    // This prevents stale token languageId (often default English) from forcing empty results.
-    const canonicalForCode = await resolveLanguageIdByCode(langCode);
-    if (canonicalForCode) {
-      languageId = canonicalForCode;
-    } else if (!languageId) {
-      languageId = await resolveLanguageIdByCode(langCode);
+    // Backend accepts languageId as a language code (e.g. "te"), so for fast startup use the code directly.
+    // If the backend ever requires canonical ids only, disable this behavior and fall back to resolveLanguageIdByCode().
+    if (useCodeAsLanguageId) {
+      languageId = langCode;
+    } else {
+      // If storage has no id (or was corrupted), fall back to /languages by code
+      // Always prefer the canonical server languageId for the requested language code.
+      // This prevents stale token languageId (often default English) from forcing empty results.
+      const canonicalForCode = await resolveLanguageIdByCode(langCode);
+      if (canonicalForCode) {
+        languageId = canonicalForCode;
+      } else if (!languageId) {
+        languageId = await resolveLanguageIdByCode(langCode);
+      }
     }
     const params = new URLSearchParams({ limit: '10' });
     if (languageId) params.set('languageId', languageId);
@@ -408,7 +416,8 @@ export const getNews = async (lang: string, category?: string, cursor?: string):
 
     // If we got a valid but empty list, the stored languageId may be stale.
     // Retry once by resolving the canonical languageId from /languages using the language code.
-    if (Array.isArray(list) && list.length === 0 && langCode) {
+    // Skip retry when we already used the language code directly.
+    if (Array.isArray(list) && list.length === 0 && langCode && !useCodeAsLanguageId) {
       const resolved = await resolveLanguageIdByCode(langCode);
       if (resolved && resolved !== languageId) {
         try {
@@ -1874,6 +1883,8 @@ export type CreatePostInput = {
   languageId: string;
   category: string;
   media?: UploadedMedia[];
+  locationId?: string;
+  dateLineText?: string;
 };
 export type CreatePostResponse = { id: string; url?: string; raw?: any };
 export async function createPost(input: CreatePostInput): Promise<CreatePostResponse> {
@@ -1889,6 +1900,8 @@ export async function createPost(input: CreatePostInput): Promise<CreatePostResp
       mediaIds: input.media?.map((m) => m.id),
       media: input.media?.map((m) => ({ url: m.url, type: m.type })), // include for flexible backends
     };
+    if (input.locationId) body.locationId = input.locationId;
+    if (input.dateLineText) body.dateLineText = input.dateLineText;
     const json = await request<any>('/posts', { method: 'POST', body });
     const payload = (json as any)?.data ?? json;
     const id: string = payload?.id || payload?._id || `${Date.now()}`;
