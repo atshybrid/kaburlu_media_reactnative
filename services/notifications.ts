@@ -6,6 +6,7 @@ import { Platform } from 'react-native';
 type PushStatus = 'granted' | 'denied' | 'undetermined';
 
 const PUSH_TOKEN_KEY = 'push_token';
+const PUSH_PERMISSION_PROMPTED_KEY = 'push_permission_prompted_v1';
 let initDone = false;
 let cachedToken: string | undefined;
 
@@ -21,8 +22,9 @@ Notifications.setNotificationHandler({
 	} as any),
 });
 
-export async function ensureNotificationsSetup(): Promise<{ status: PushStatus; expoToken?: string; deviceToken?: string }> {
+async function ensureNotificationsSetupInternal(options?: { requestPermission?: boolean }): Promise<{ status: PushStatus; expoToken?: string; deviceToken?: string }> {
 	try {
+		const requestPermission = options?.requestPermission !== false;
 		if (!initDone) {
 			if (Platform.OS === 'android') {
 				try {
@@ -50,7 +52,7 @@ export async function ensureNotificationsSetup(): Promise<{ status: PushStatus; 
 		// Check/request permission
 		const current = await Notifications.getPermissionsAsync();
 		let status = current.status as PushStatus;
-		if (status !== 'granted') {
+		if (status !== 'granted' && requestPermission) {
 			const req = await Notifications.requestPermissionsAsync();
 			status = req.status as PushStatus;
 		}
@@ -88,6 +90,36 @@ export async function ensureNotificationsSetup(): Promise<{ status: PushStatus; 
 		return { status, expoToken, deviceToken };
 	} catch (e) {
 		console.warn('[NOTIF] setup failed', e instanceof Error ? e.message : e);
+		return { status: 'undetermined' };
+	}
+}
+
+export async function ensureNotificationsSetup(): Promise<{ status: PushStatus; expoToken?: string; deviceToken?: string }> {
+	// Existing behavior: request permission if not yet granted
+	return ensureNotificationsSetupInternal({ requestPermission: true });
+}
+
+export async function ensureNotificationsSetupOnceAfterSplash(): Promise<{ status: PushStatus; expoToken?: string; deviceToken?: string }> {
+	// New behavior: prompt at most once across app opens.
+	// - If permission already granted: fetch tokens.
+	// - If not granted and already prompted: do not prompt again.
+	// - If not granted and not yet prompted: prompt once.
+	try {
+		const current = await Notifications.getPermissionsAsync();
+		const status = current.status as PushStatus;
+		if (status === 'granted') {
+			return ensureNotificationsSetupInternal({ requestPermission: false });
+		}
+
+		const prompted = await AsyncStorage.getItem(PUSH_PERMISSION_PROMPTED_KEY);
+		if (prompted) {
+			return ensureNotificationsSetupInternal({ requestPermission: false });
+		}
+
+		await AsyncStorage.setItem(PUSH_PERMISSION_PROMPTED_KEY, '1');
+		return ensureNotificationsSetupInternal({ requestPermission: true });
+	} catch (e) {
+		console.warn('[NOTIF] setup-once failed', e instanceof Error ? e.message : e);
 		return { status: 'undetermined' };
 	}
 }

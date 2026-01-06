@@ -6,12 +6,13 @@ import { useColorScheme } from '@/hooks/useColorScheme';
 // import { sampleArticles } from '@/data/sample-articles';
 import { useTabBarVisibility } from '@/context/TabBarVisibilityContext';
 import { getNews } from '@/services/api';
+import { ensureNotificationsSetupOnceAfterSplash } from '@/services/notifications';
 import type { Article } from '@/types';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import LottieView from 'lottie-react-native';
 import { useEffect, useRef, useState } from 'react';
-import { LayoutChangeEvent, StyleSheet, Text, View } from 'react-native';
+import { InteractionManager, LayoutChangeEvent, StyleSheet, Text, View } from 'react-native';
 import { useSharedValue, withSpring } from 'react-native-reanimated';
 
 const DEV_MODE = (() => {
@@ -29,6 +30,22 @@ const NewsScreen = () => {
     // Always allow users to access the bottom navigation from News,
     // especially when there are 0 items (no swipe gestures available).
     try { setTabBarVisible(true); } catch {}
+  }, []);
+
+  // Ask for push notification permission AFTER splash/intro (and only once).
+  useEffect(() => {
+    const task = InteractionManager.runAfterInteractions(() => {
+      ensureNotificationsSetupOnceAfterSplash()
+        .then((res) => {
+          console.log('[NOTIF_INIT] (after splash) status', res.status, 'expoToken?', !!res.expoToken, 'deviceToken?', !!res.deviceToken);
+        })
+        .catch((e: any) => {
+          console.log('[NOTIF_INIT] (after splash) failed', e?.message);
+        });
+    });
+    return () => {
+      try { (task as any)?.cancel?.(); } catch {}
+    };
   }, []);
   const [activeIndex, setActiveIndex] = useState(0);
   const activeIndexShared = useSharedValue(0);

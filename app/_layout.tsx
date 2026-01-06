@@ -17,7 +17,6 @@ import { AuthProvider } from '../context/AuthContext';
 import { ThemeProviderLocal, useThemePref } from '../context/ThemeContext';
 import { UiPrefsProvider } from '../context/UiPrefsContext';
 import { useColorScheme } from '../hooks/useColorScheme';
-import { ensureNotificationsSetup } from '../services/notifications';
 
 // Keep native splash visible until splash screen video first frame is ready
 SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -78,17 +77,7 @@ function ThemedApp() {
     })();
   }, []);
 
-  // Initialize notifications and obtain push token on app start
-  React.useEffect(() => {
-    (async () => {
-      try {
-        const res = await ensureNotificationsSetup();
-        console.log('[NOTIF_INIT] status', res.status, 'expoToken?', !!res.expoToken, 'deviceToken?', !!res.deviceToken);
-      } catch (e:any) {
-        console.log('[NOTIF_INIT] failed', e?.message);
-      }
-    })();
-  }, []);
+  // Notifications permission prompt is intentionally deferred until after splash.
 
   // Deep link & initial URL handling for kaburlu://article/<id>
   React.useEffect(() => {
