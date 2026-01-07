@@ -1,10 +1,9 @@
 import { ThemedText } from '@/components/ThemedText';
-import { Skeleton } from '@/components/ui/Skeleton';
+import { showToast } from '@/components/Toast';
 import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { loadTokens } from '@/services/auth';
 import { getBaseUrl } from '@/services/http';
-import { searchCombinedLocations, type CombinedLocationItem } from '@/services/locations';
 import { usePostNewsDraftStore } from '@/state/postNewsDraftStore';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -14,185 +13,107 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
+    Keyboard,
     KeyboardAvoidingView,
     Modal,
     Platform,
     Pressable,
     ScrollView,
     StyleSheet,
-    Switch,
     TextInput,
-    View
+    View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-type TitleSuggestion = { title: string; subtitle?: string };
-
-type AiHeadlinesResponse = {
-  titles?: string[];
-  main_title?: string;
+type AiRewriteResponse = {
+  category?: string;
+  title?: string;
   subtitle?: string;
-  bullets?: { original?: string; rewrites?: string[] }[];
+  lead?: string;
+  highlights?: string[];
+  article?: {
+    location_date?: string;
+    body?: string;
+  };
 };
 
-function wordCount(text: string): number {
-  const t = String(text || '').trim();
-  if (!t) return 0;
-  return t.split(/\s+/).filter(Boolean).length;
+const POST_NEWS_TENANT_NAME_KEY = 'post_news_tenant_name';
+const POST_NEWS_TENANT_NATIVE_NAME_KEY = 'post_news_tenant_native_name';
+const POST_NEWS_TENANT_PRIMARY_COLOR_KEY = 'post_news_tenant_primary_color';
+
+function isValidHexColor(s: string): boolean {
+  const v = String(s || '').trim();
+  return /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(v);
 }
 
-function normalizeSpaces(s: string): string {
-  return String(s || '').replace(/\s+/g, ' ').trim();
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function stripLeadingDuplicateDateLine(opts: {
-  body: string;
-  dateLineText?: string | null;
-  locationNameLocalized?: string | null;
-  tenantName?: string | null;
-  tenantNativeName?: string | null;
-  langCode?: string | null;
-}): { body: string; removed: boolean } {
-  const bodyRaw = String(opts.body || '');
-  if (!bodyRaw.trim()) return { body: bodyRaw, removed: false };
-
-  const lines = bodyRaw.split(/\r?\n/);
-  const md = normalizeSpaces(formatMonthDay(opts.langCode || undefined, new Date()));
-  const dateLineText = normalizeSpaces(String(opts.dateLineText || ''));
-  const loc = normalizeSpaces(String(opts.locationNameLocalized || ''));
-  const tenants = [opts.tenantNativeName, opts.tenantName]
-    .map((x) => normalizeSpaces(String(x || '')))
-    .filter(Boolean);
-
-  // Find first non-empty line
-  let firstIdx = -1;
-  for (let i = 0; i < Math.min(lines.length, 6); i++) {
-    if (String(lines[i] || '').trim()) {
-      firstIdx = i;
-      break;
-    }
-  }
-  if (firstIdx === -1) return { body: bodyRaw, removed: false };
-
-  const firstLine = normalizeSpaces(lines[firstIdx]);
-
-  const matchesExactDateLine = !!dateLineText && firstLine === dateLineText;
-  const hasTenant = tenants.some((t) => firstLine.includes(`(${t})`) || firstLine.includes(t));
-  const hasMonthDay = !!md && firstLine.includes(md);
-  const hasLocation = !!loc && firstLine.includes(loc);
-  const looksLikeDateLine = (hasTenant && hasMonthDay) || (hasLocation && hasMonthDay && firstLine.includes('('));
-
-  if (!matchesExactDateLine && !looksLikeDateLine) {
-    return { body: bodyRaw, removed: false };
-  }
-
-  // Remove that line and one immediate blank line after it.
-  const nextLines = [...lines];
-  nextLines.splice(firstIdx, 1);
-  if (firstIdx < nextLines.length && !String(nextLines[firstIdx] || '').trim()) {
-    nextLines.splice(firstIdx, 1);
-  }
-  return { body: nextLines.join('\n'), removed: true };
-}
-
-function titlePlaceholderForLang(code?: string): string {
-  const c = String(code || '').toLowerCase();
-  if (c.startsWith('te')) return 'ఇక్కడ శీర్షిక టైప్ చేయండి';
-  if (c.startsWith('hi')) return 'यहाँ शीर्षक टाइप करें';
-  if (c.startsWith('kn')) return 'ಇಲ್ಲಿ ಶೀರ್ಷಿಕೆಯನ್ನು ಟೈಪ್ ಮಾಡಿ';
-  if (c.startsWith('ta')) return 'இங்கே தலைப்பை தட்டச்சு செய்யவும்';
-  return 'Type title here';
-}
-
-function articlePlaceholderForLang(code?: string): string {
-  const c = String(code || '').toLowerCase();
-  if (c.startsWith('te')) return 'ఇక్కడ పూర్తి వార్తను టైప్ చేయండి';
-  if (c.startsWith('hi')) return 'यहाँ पूरी खबर टाइप करें';
-  if (c.startsWith('kn')) return 'ಇಲ್ಲಿ ಸಂಪೂರ್ಣ ಸುದ್ದಿ ಟೈಪ್ ಮಾಡಿ';
-  if (c.startsWith('ta')) return 'இங்கே முழு செய்தியை தட்டச்சு செய்யவும்';
-  return 'Write the full article here…';
-}
-
-function normalizeLangCodeMaybe(codeOrName?: string): string {
-  const raw = String(codeOrName || '').trim();
-  const s = raw.toLowerCase();
-  if (!s) return 'en';
-  if (s.startsWith('te') || s.includes('telugu') || raw.includes('తెలుగు')) return 'te';
-  if (s.startsWith('hi') || s.includes('hindi') || raw.includes('हिं') || raw.includes('हिन्दी') || raw.includes('हिंदी')) return 'hi';
-  if (s.startsWith('kn') || s.includes('kannada') || raw.includes('ಕನ್ನಡ')) return 'kn';
-  if (s.startsWith('ta') || s.includes('tamil') || raw.includes('தமிழ')) return 'ta';
-  if (s.startsWith('en') || s.includes('english')) return 'en';
+function stripOuterStars(input: string): string {
+  let s = String(input || '').trim();
+  if (!s) return '';
+  // Remove pasted emphasis wrappers like "* text *" or "*text*".
+  while (s.startsWith('*')) s = s.slice(1).trimStart();
+  while (s.endsWith('*')) s = s.slice(0, -1).trimEnd();
   return s;
 }
 
-function normalizeBullets(raw: string): string[] {
-  const lines = String(raw || '')
-    .split(/\r?\n/)
-    .map((l) => l.trim())
+function stripSensitiveFromAiText(input: string, opts: { tenantName?: string; tenantNativeName?: string }): string {
+  const raw = String(input || '').replace(/\r\n/g, '\n');
+  if (!raw.trim()) return '';
+
+  const tenantNames = [opts.tenantName, opts.tenantNativeName]
+    .map((x) => String(x || '').trim())
     .filter(Boolean)
-    .flatMap((l) => l.split(/\s*[•\-–—]\s+/).map((p) => p.trim()).filter(Boolean));
+    .sort((a, b) => b.length - a.length);
 
-  const cleaned: string[] = [];
-  for (const l of lines) {
-    const x = l.replace(/^\s*(?:\d+[\).]|[•\-–—])\s+/, '').trim();
-    if (!x) continue;
-    cleaned.push(x);
-  }
-  return cleaned;
-}
+  const months = [
+    // English
+    'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december',
+    'jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug', 'sep', 'sept', 'oct', 'nov', 'dec',
+    // Telugu
+    'జనవరి', 'ఫిబ్రవరి', 'మార్చి', 'ఏప్రిల్', 'మే', 'జూన్', 'జులై', 'ఆగస్టు', 'సెప్టెంబర్', 'అక్టోబర్', 'నవంబర్', 'డిసెంబర్',
+  ];
 
-const BULLET_PREFIX_RE = /^\s*(?:[•*\-–—+]|\d+[\).])\s+/;
-function isBulletLine(line: string): boolean {
-  return BULLET_PREFIX_RE.test(String(line || '').trim());
-}
+  const monthWordRe = new RegExp(`\\b(?:${months.map(escapeRegExp).join('|')})\\b`, 'giu');
+  const numericDateRe = /\b\d{1,2}[\/\-.]\d{1,2}(?:[\/\-.]\d{2,4})?\b/g;
+  const isoDateRe = /\b\d{4}[\/\-.]\d{1,2}[\/\-.]\d{1,2}\b/g;
+  const dayYearRe = /\b\d{1,2}\s*,?\s*\d{4}\b/g;
 
-function stripBulletPrefix(line: string): string {
-  return String(line || '').replace(BULLET_PREFIX_RE, '').trim();
-}
+  const looksSensitive = (line: string): boolean => {
+    if (monthWordRe.test(line)) return true;
+    if (numericDateRe.test(line)) return true;
+    if (isoDateRe.test(line)) return true;
+    if (dayYearRe.test(line)) return true;
+    return false;
+  };
 
-const TELUGU_MONTHS = [
-  'జనవరి',
-  'ఫిబ్రవరి',
-  'మార్చి',
-  'ఏప్రిల్',
-  'మే',
-  'జూన్',
-  'జూలై',
-  'ఆగస్టు',
-  'సెప్టెంబర్',
-  'అక్టోబర్',
-  'నవంబర్',
-  'డిసెంబర్',
-];
-const EN_MONTHS = [
-  'january',
-  'february',
-  'march',
-  'april',
-  'may',
-  'june',
-  'july',
-  'august',
-  'september',
-  'october',
-  'november',
-  'december',
-];
+  const cleanedLines = raw.split('\n').map((line, idx) => {
+    let s = String(line || '');
 
-function looksLikeDateLineLine(line: string): boolean {
-  const s = String(line || '').trim();
-  if (!s) return false;
-  const lower = s.toLowerCase();
-  const hasNewsTag = s.includes('ప్రశ్న') || s.includes('న్యూస్') || lower.includes('news');
-  const hasTeluguMonth = TELUGU_MONTHS.some((m) => s.includes(m));
-  const hasEnMonth = EN_MONTHS.some((m) => lower.includes(m));
-  const hasDay = /\b\d{1,2}\b/.test(lower);
-  // Allow either explicit month names OR common newsroom tag lines that contain a day number.
-  return hasDay && (hasTeluguMonth || hasEnMonth || hasNewsTag);
-}
+    // Remove tenant branding / native name (don’t send to AI)
+    for (const nm of tenantNames) {
+      const re = new RegExp(escapeRegExp(nm), 'giu');
+      s = s.replace(re, '');
+    }
 
-function stripLeadingDecorators(line: string): string {
-  return String(line || '').replace(/^\s*[:：\-–—•*]+\s*/, '').trim();
+    // If the user pasted a date-line/month line at the top, drop it completely.
+    if (idx < 3 && looksSensitive(s)) return '';
+
+    // Otherwise, strip month/date tokens inline.
+    s = s.replace(monthWordRe, '');
+    s = s.replace(isoDateRe, '');
+    s = s.replace(numericDateRe, '');
+    s = s.replace(dayYearRe, '');
+
+    // Clean punctuation/whitespace artifacts.
+    s = s.replace(/[\s\t]{2,}/g, ' ').replace(/\s+([,.;:!?])/g, '$1');
+    s = s.replace(/^[\s,.;:!?\-–—]+/, '').replace(/[\s,.;:!?\-–—]+$/, '');
+    return s;
+  });
+
+  return cleanedLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function sanitizePlaceCandidate(input: string): string {
@@ -203,295 +124,576 @@ function sanitizePlaceCandidate(input: string): string {
     .replace(/[\s\(\)\[\]{}:：]+$/g, '')
     .trim();
   if (!s) return '';
-  const lower = s.toLowerCase();
-  if (s.includes('ప్రశ్న') || s.includes('న్యూస్') || lower.includes('news')) return '';
   if (!/\p{L}/u.test(s)) return '';
   return s;
 }
 
-function extractPlaceQueryFromDateLine(line: string): string {
-  const sRaw = String(line || '').trim();
-  const s = sRaw
-    // Remove newsroom tag parentheses which must never become the place query.
-    .replace(/\([^)]*\)/g, ' ')
-    .replace(/[:：]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+function extractPlaceFromLocationDate(locationDate?: string): string {
+  const s = String(locationDate || '').trim();
   if (!s) return '';
-
-  // Pattern: "<place...> <month> <day>" (your case: "కామారెడ్డి జిల్లా జనవరి 05 ...")
-  for (const m of TELUGU_MONTHS) {
-    const idx = s.indexOf(m);
-    if (idx > 0) {
-      const before = s.slice(0, idx).trim();
-      if (before) {
-        const cleanedBefore = before
-          .replace(/\s*(జిల్లా|మండలం|గ్రామం|తాలూకా|నగరం)\s*$/u, '')
-          .trim();
-        const cand = sanitizePlaceCandidate(cleanedBefore.split(',')[0]?.split('/')[0] || cleanedBefore);
-        if (cand) return cand;
-      }
-    }
-  }
-
-  for (const m of EN_MONTHS) {
-    const idx = s.toLowerCase().indexOf(m);
-    if (idx > 0) {
-      const before = s.slice(0, idx).trim();
-      if (before) {
-        const cleanedBefore = before.replace(/\s*(district|mandal|village|city)\s*$/i, '').trim();
-        const cand = sanitizePlaceCandidate(cleanedBefore.split(',')[0]?.split('/')[0] || cleanedBefore);
-        if (cand) return cand;
-      }
-    }
-  }
-
-  // Pattern: "Place/Place, జనవరి 05 (ప్రశ్న ఆయుధం న్యూస్):"  => take before comma
-  const commaIdx = s.indexOf(',');
-  if (commaIdx > 0 && commaIdx < 40) {
-    const before = s.slice(0, commaIdx).trim();
-    if (before) {
-      const first = before.split('/').map((x) => x.trim()).filter(Boolean)[0];
-      const cand = sanitizePlaceCandidate(first);
-      if (cand) return cand;
-    }
-  }
-
-  // Telugu: "జనవరి 5 <place...>" (common WhatsApp patterns)
-  for (const m of TELUGU_MONTHS) {
-    const re = new RegExp(`${m}\\s*(\\d{1,2})\\s*(.+)$`);
-    const match = s.match(re);
-    if (match?.[2]) {
-      const rest = String(match[2] || '').trim();
-      const parts = rest.split(/\s+/).filter(Boolean);
-      const cand = sanitizePlaceCandidate(String(parts[0] || '').trim());
-      if (cand) return cand;
-    }
-  }
-
-  // English: "January 5 <place...>"
-  for (const m of EN_MONTHS) {
-    const re = new RegExp(`${m}\\s*(\\d{1,2})\\s*(.+)$`, 'i');
-    const match = s.match(re);
-    if (match?.[2]) {
-      const rest = String(match[2] || '').trim();
-      const parts = rest.split(/\s+/).filter(Boolean);
-      const cand = sanitizePlaceCandidate(String(parts[0] || '').trim());
-      if (cand) return cand;
-    }
-  }
-
-  // Pattern: "... న్యూస్ 3 కొత్తగూడెం ..." (no month) => take token after day number
-  const toks = s.split(/\s+/).filter(Boolean);
-  const dayIdx = toks.findIndex((t) => /^\d{1,2}$/.test(t));
-  if (dayIdx >= 0 && toks[dayIdx + 1]) {
-    const cand = String(toks[dayIdx + 1] || '').trim();
-    const cleaned = sanitizePlaceCandidate(cand);
-    if (cleaned && cleaned.length >= 2) return cleaned;
-  }
-
-  return '';
+  // Example: "కామారెడ్డి జిల్లా, జనవరి 7" => "కామారెడ్డి"
+  const first = s.split(',')[0] || '';
+  let place = sanitizePlaceCandidate(first);
+  if (!place) return '';
+  
+  // Strip hierarchy words (జిల్లా, మండలం, గ్రామం, రాష్ట్రం, district, mandal, village, state)
+  // so API search gets clean location name
+  const hierarchyRe = /\s*(జిల్లా|మండలం|గ్రామం|రాష్ట్రం|district|mandal|village|state)\s*$/i;
+  place = place.replace(hierarchyRe, '').trim();
+  
+  return place;
 }
 
-function stripWhatsAppPrefix(line: string): string {
-  const s = String(line || '').trim();
-  if (!s) return '';
-  // Example: "[5:23 pm, 4/1/2026] Name: message" => keep "message"
-  const m1 = /^\[[^\]]+\]\s*[^:]{1,60}:\s*(.*)$/.exec(s);
-  if (m1?.[1]) return String(m1[1]).trim();
-
-  // Example: "+91 9xxxx: message" => keep "message"
-  const m2 = /^\+?\d[\d\s-]{6,}:\s*(.*)$/.exec(s);
-  if (m2?.[1]) return String(m2[1]).trim();
-
-  return s;
-}
-
-function stripWhatsAppStyling(line: string): string {
-  let s = String(line || '').replace(/[\u200B\u200E\u200F\u202A-\u202E]/g, '').trim();
-  if (!s) return '';
-
-  // WhatsApp emphasis markers when a whole line is wrapped: *bold* _italic_ ~strike~
-  const wrappers: [RegExp, string][] = [
-    [/^\*(.+)\*$/s, '*'],
-    [/^_(.+)_$/s, '_'],
-    [/^~(.+)~$/s, '~'],
-  ];
-  for (const [re] of wrappers) {
-    const m = re.exec(s);
-    if (m?.[1]) {
-      s = String(m[1]).trim();
-      break;
-    }
-  }
-
-  // Remove trailing/leading stray markers that often appear around bullets/lines
-  s = s.replace(/^[\s*]+(?!\d+[\).]\s)/, '').replace(/[\s*]+$/g, '').trim();
-  return s;
-}
-
-function isSeparatorLine(line: string): boolean {
-  const s = String(line || '').trim().toLowerCase();
-  return s === 'next' || s === '---' || s === '--' || s === '…' || s === '...';
-}
-
-function parsePastedNews(text: string): {
-  title: string;
+type ParsedPastedNews = {
+  title?: string;
   subtitle?: string;
+  body?: string;
   bullets: string[];
-  body: string;
-  dateLineLine?: string;
   placeQuery?: string;
-} {
-  const MAX_BULLETS = 5;
-  const raw = String(text || '').replace(/\r/g, '');
-  const lines = raw
-    .split('\n')
-    .map(stripWhatsAppPrefix)
-    .map(stripWhatsAppStyling)
-    .map((l) => String(l || '').trimEnd())
-    .filter((l) => !isSeparatorLine(l));
-  const nonEmptyIdx: number[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    if (String(lines[i] || '').trim()) nonEmptyIdx.push(i);
-  }
-  if (!nonEmptyIdx.length) {
-    return { title: '', bullets: [], body: '' };
-  }
+};
 
-  const titleIdx = nonEmptyIdx[0];
-  const title = stripLeadingDecorators(stripWhatsAppStyling(String(lines[titleIdx] || '').trim()));
+/**
+ * Parse pasted Telugu/English news article.
+ *
+ * Expected structure:
+ *   Line 1: Title
+ *   Line 2: Subtitle
+ *   Line 3..N (before date line): Bullet points / headlines
+ *   Date line: location + month + date (e.g., "కామారెడ్డి జిల్లా జనవరి 07:")
+ *   Lines after date line: Body content
+ */
+function parsePastedNews(raw: string, opts?: { tenantName?: string; tenantNativeName?: string }): ParsedPastedNews {
+  const text = String(raw || '').replace(/\r\n/g, '\n');
+  const rawLines = text.split('\n').map((l) => stripOuterStars(String(l || '')));
 
-  // Find a date line candidate among early lines (after the title)
-  let dateLineIdx: number | undefined;
-  for (const idx of nonEmptyIdx.slice(1, 10)) {
-    const ln = String(lines[idx] || '').trim();
-    if (looksLikeDateLineLine(ln)) {
-      dateLineIdx = idx;
+  const out: ParsedPastedNews = { bullets: [] };
+  if (!rawLines.length) return out;
+
+  // Regexes for detecting date line
+  const hierarchyRe = /(జిల్లా|మండలం|గ్రామం|రాష్ట్రం|district|mandal|village|state)/i;
+  const monthRe = /(january|february|march|april|may|june|july|august|september|october|november|december|జనవరి|ఫిబ్రవరి|మార్చి|ఏప్రిల్|మే|జూన్|జులై|ఆగస్టు|సెప్టెంబర్|అక్టోబర్|నవంబర్|డిసెంబర్)/i;
+  const dayNumberRe = /\d{1,2}/;
+
+  const tn = String(opts?.tenantName || '').trim();
+  const tnn = String(opts?.tenantNativeName || '').trim();
+
+  // Date line = line that has (hierarchy word OR month+day)
+  const looksLikeDateLine = (line: string): boolean => {
+    const s = String(line || '').trim();
+    if (!s) return false;
+    // Must have month + day number, or hierarchy word + day number
+    const hasMonth = monthRe.test(s);
+    const hasDay = dayNumberRe.test(s);
+    const hasHierarchy = hierarchyRe.test(s);
+    // Strong signal: hierarchy word + month/day
+    if (hasHierarchy && (hasMonth || hasDay)) return true;
+    // Also accept: month + day (common date line format)
+    if (hasMonth && hasDay) return true;
+    return false;
+  };
+
+  // Find date line index (scan all lines, not just first 3)
+  let dateLineIdx = -1;
+  for (let i = 0; i < rawLines.length; i++) {
+    if (looksLikeDateLine(rawLines[i])) {
+      dateLineIdx = i;
       break;
     }
   }
-  const dateLineLine = dateLineIdx !== undefined ? String(lines[dateLineIdx] || '').trim() : undefined;
-  const placeQuery = dateLineLine ? extractPlaceQueryFromDateLine(dateLineLine) : undefined;
 
-  // Subtitle: 2nd non-empty line if it's not a bullet and not the date line
-  let subtitleIdx: number | undefined;
-  const maybeSubIdx = nonEmptyIdx[1];
-  if (maybeSubIdx !== undefined && maybeSubIdx !== dateLineIdx) {
-    const subLine = String(lines[maybeSubIdx] || '').trim();
-    if (subLine && !isBulletLine(subLine) && subLine.length <= 140) {
-      subtitleIdx = maybeSubIdx;
-    }
-  }
-  const subtitle = subtitleIdx !== undefined
-    ? stripLeadingDecorators(stripWhatsAppStyling(String(lines[subtitleIdx] || '').trim()))
-    : undefined;
+  // Split into: above date line, date line, below date line
+  const linesAbove = dateLineIdx >= 0 ? rawLines.slice(0, dateLineIdx) : rawLines.slice();
+  const dateLineTxt = dateLineIdx >= 0 ? rawLines[dateLineIdx] : '';
+  const linesBelow = dateLineIdx >= 0 ? rawLines.slice(dateLineIdx + 1) : [];
 
-  // Bullets: collect bullet-style lines (up to MAX_BULLETS), skipping title/subtitle/date line
-  const bullets: string[] = [];
-  for (const idx of nonEmptyIdx) {
-    if (idx === titleIdx) continue;
-    if (idx === subtitleIdx) continue;
-    if (idx === dateLineIdx) continue;
-    const ln = stripWhatsAppStyling(String(lines[idx] || '').trim());
-    if (!ln) continue;
-    if (!isBulletLine(ln)) {
-      // Only collect bullets if they are explicitly marked (WhatsApp style).
-      continue;
-    }
-    const cleaned = stripBulletPrefix(ln);
-    if (cleaned) bullets.push(stripWhatsAppStyling(cleaned));
-    if (bullets.length >= MAX_BULLETS) break;
-  }
+  // Extract location from date line (strip hierarchy suffix for clean search)
+  // Example: "కామారెడ్డి జిల్లా జనవరి 07" → extract "కామారెడ్డి"
+  if (dateLineTxt) {
+    const dlClean = dateLineTxt
+      .replace(/[:：]/g, ' ')
+      .replace(/\d+/g, ' ')
+      .replace(monthRe, ' ')
+      .trim();
+    // Split by spaces/punctuation
+    const parts = dlClean.split(/[\s,|•·\-–—]+/g).map((p) => p.trim()).filter(Boolean);
+    let locPart = '';
 
-  // If there are no explicit bullets, infer from a block of short plain lines near the top.
-  // (Your sample: multiple short lines before the long paragraph.)
-  if (!bullets.length) {
-    const topCandidates: { idx: number; text: string }[] = [];
-    for (const idx of nonEmptyIdx.slice(1, 18)) {
-      if (idx === subtitleIdx || idx === dateLineIdx) continue;
-      const t = stripWhatsAppStyling(String(lines[idx] || '').trim());
-      if (!t) continue;
-      if (looksLikeDateLineLine(t)) continue;
-      if (t.length > 65) break; // stop when long paragraph starts
-      // Avoid capturing obvious attribution blocks / phone lines
-      if (t.includes(']') && t.includes('[')) continue;
-      topCandidates.push({ idx, text: t });
-      if (topCandidates.length >= Math.min(MAX_BULLETS + 2, 12)) break;
+    // Find index of hierarchy word (జిల్లా, మండలం, etc.)
+    const hierIdx = parts.findIndex((p) => hierarchyRe.test(p));
+    if (hierIdx > 0) {
+      // Location name is the word(s) BEFORE the hierarchy word
+      // e.g., ["కామారెడ్డి", "జిల్లా"] → take "కామారెడ్డి"
+      locPart = parts.slice(0, hierIdx).join(' ').trim();
+    } else if (hierIdx === 0 && parts.length > 1) {
+      // Hierarchy word is first, location might be after (less common)
+      // e.g., ["జిల్లా", "కామారెడ్డి"] → take "కామారెడ్డి"
+      const afterHier = parts.slice(1).filter((p) => !hierarchyRe.test(p) && !monthRe.test(p));
+      locPart = afterHier[0] || '';
+    } else if (hierIdx === 0) {
+      // Only hierarchy word, try to extract from it (e.g., "కామారెడ్డిజిల్లా" joined)
+      locPart = parts[0].replace(hierarchyRe, '').trim();
     }
-    if (topCandidates.length >= 2) {
-      for (const it of topCandidates.slice(0, MAX_BULLETS)) {
-        const cleaned = it.text.replace(/[:。\.]+$/g, '').trim();
-        if (cleaned) bullets.push(cleaned);
-      }
+
+    // If no hierarchy word found, take first non-month chunk
+    if (!locPart && parts.length) {
+      locPart = parts.find((p) => !monthRe.test(p) && !hierarchyRe.test(p)) || '';
     }
+
+    // Strip tenant name if present
+    if (locPart && tn) locPart = locPart.replace(new RegExp(escapeRegExp(tn), 'gi'), '').trim();
+    if (locPart && tnn) locPart = locPart.replace(new RegExp(escapeRegExp(tnn), 'gi'), '').trim();
+    if (locPart) out.placeQuery = sanitizePlaceCandidate(locPart);
   }
 
-  // Body: everything except title/subtitle/date line and bullet lines
-  const bodyLines: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    if (i === titleIdx || i === subtitleIdx || i === dateLineIdx) continue;
-    const lnRaw = String(lines[i] || '');
-    const ln = stripWhatsAppStyling(lnRaw);
-    if (!ln) continue;
-    if (isBulletLine(ln)) continue;
-    if (bullets.length) {
-      // If we inferred bullets from plain lines, remove those exact lines from body too.
-      const trimmed = String(ln || '').trim();
-      if (trimmed && bullets.includes(trimmed.replace(/[:。\.]+$/g, '').trim())) continue;
-    }
-    bodyLines.push(ln);
-  }
-  const body = bodyLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  // Parse lines above date line into title, subtitle, bullets
+  const compactAbove = linesAbove.map((l) => l.trim()).filter(Boolean);
 
-  return {
-    title,
-    subtitle,
-    bullets,
-    body,
-    dateLineLine,
-    placeQuery,
-  };
+  if (compactAbove.length >= 1) {
+    out.title = compactAbove[0];
+  }
+  if (compactAbove.length >= 2) {
+    out.subtitle = compactAbove[1];
+  }
+  if (compactAbove.length >= 3) {
+    // Lines 3..N (before date line) are bullet points
+    const bulletCandidates = compactAbove.slice(2);
+    const bulletRe = /^([-*•]|\d+[\.)])\s*/;
+    for (const bc of bulletCandidates) {
+      if (out.bullets.length >= 5) break;
+      const cleaned = bc.replace(bulletRe, '').trim();
+      if (cleaned) out.bullets.push(cleaned);
+    }
+  }
+
+  // Body = everything after date line
+  const bodyLines = linesBelow.filter((l) => l.trim());
+  out.body = bodyLines.join('\n\n').trim();
+
+  return out;
 }
 
-async function readSelectedLanguage(): Promise<{ id?: string; code?: string; name?: string } | null> {
+async function aiHeadlines(opts: { mainTitle: string; bullets?: string[]; maxTitles?: number; maxRewrites?: number }) {
+  const payload: any = {
+    mainTitle: String(opts.mainTitle || '').trim(),
+    maxTitles: typeof opts.maxTitles === 'number' ? opts.maxTitles : 1,
+    maxRewrites: typeof opts.maxRewrites === 'number' ? opts.maxRewrites : 1,
+  };
+  if (Array.isArray(opts.bullets) && opts.bullets.length) payload.bullets = opts.bullets;
+
+  // Use fetch directly so missing endpoint doesn't break global flows.
   try {
-    const raw = await AsyncStorage.getItem('selectedLanguage');
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return null;
-    const id = parsed.id;
-    const code = parsed.code;
-    const name = parsed.name || parsed.label || parsed.languageName || parsed.title;
-    const normalized = normalizeLangCodeMaybe(code || id || name);
-    return { id, code: normalized, name };
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(`${getBaseUrl()}/ai/headlines`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!res.ok) return null;
+    const json: any = await res.json();
+    return (json?.data ?? json) as any;
   } catch {
     return null;
   }
 }
 
-async function aiShortenBullets(opts: { bullets: string[]; languageCode?: string }): Promise<string[]> {
-  const input = (opts.bullets || []).map((b) => String(b || '').trim()).filter(Boolean);
-  if (!input.length) return [];
-  try {
-    const res = await fetch(`${getBaseUrl()}/ai/shorten-bullets`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ bullets: input, languageCode: opts.languageCode, maxChars: 100 }),
-    });
-    if (!res.ok) throw new Error(`AI shorten failed (${res.status})`);
-    const json: any = await res.json();
-    const out = (json?.bullets || json?.data || json) as any;
-    if (!Array.isArray(out)) throw new Error('AI shorten bad response');
-    return out.map((x: any, idx: number) => String(x ?? input[idx] ?? '').trim()).filter(Boolean);
-  } catch {
-    return input.map((b) => (b.length > 100 ? `${b.slice(0, 97).trim()}…` : b));
+async function aiRewriteNews(opts: { rawText: string; jwt?: string; model: string }): Promise<AiRewriteResponse> {
+  const url = 'https://app.kaburlumedia.com/api/v1/ainewspaper_rewrite';
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+  };
+  if (opts.jwt) headers.Authorization = `Bearer ${opts.jwt}`;
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ model: opts.model, rawText: opts.rawText }),
+  });
+
+  const text = await res.text();
+  let json: any = undefined;
+  if (text) {
+    try {
+      json = JSON.parse(text);
+    } catch {
+      // ignore
+    }
   }
+  if (!res.ok) {
+    const msg = String(json?.message || json?.error || text || `HTTP ${res.status}`).trim();
+    throw new Error(msg || 'AI rewrite failed');
+  }
+  const payload = json?.data ?? json;
+  return payload as AiRewriteResponse;
+
 }
 
-async function aiHeadlines(opts: { mainTitle: string; bullets?: string[]; maxTitles?: number; maxRewrites?: number }): Promise<AiHeadlinesResponse> {
-  const payload: any = {
-    mainTitle: String(opts.mainTitle || '').trim(),
+export default function PostNewsScreen() {
+  const scheme = useColorScheme() ?? 'light';
+  const c = Colors[scheme];
+  const [tenantPrimary, setTenantPrimary] = useState<string>('');
+  const primary = tenantPrimary || c.tint;
+  const router = useRouter();
+
+  const { draft, setDraft, setBullets, setJustPosted } = usePostNewsDraftStore();
+
+  const rawTextInputRef = useRef<TextInput>(null);
+  const pasteTextInputRef = useRef<TextInput>(null);
+
+  const [rawText, setRawText] = useState<string>(() => String(draft.body || ''));
+  const [aiBusy, setAiBusy] = useState(false);
+
+  // Clear justPosted flag after a delay to let old screens unmount first
+  useEffect(() => {
+    const timer = setTimeout(() => setJustPosted(false), 500);
+    return () => clearTimeout(timer);
+  }, [setJustPosted]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const cached = String((await AsyncStorage.getItem(POST_NEWS_TENANT_PRIMARY_COLOR_KEY)) || '').trim();
+        if (alive && isValidHexColor(cached)) setTenantPrimary(cached);
+
+        const t = await loadTokens();
+        const ds = (t as any)?.session?.domainSettings;
+        const fromSession = String(ds?.data?.theme?.colors?.primary || ds?.theme?.colors?.primary || '').trim();
+        if (isValidHexColor(fromSession)) {
+          try { await AsyncStorage.setItem(POST_NEWS_TENANT_PRIMARY_COLOR_KEY, fromSession); } catch {}
+          if (alive) setTenantPrimary(fromSession);
+        }
+      } catch {
+        // ignore
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const aiAnim = useMemo(() => require('../assets/lotti/Artificial Intelligence.json'), []);
+
+  const MAX_AI_REWRITE_WORDS = 300;
+  const rawWordCount = useMemo(() => {
+    const t = String(rawText || '').trim();
+    if (!t) return 0;
+    return t.split(/\s+/g).map((x) => x.trim()).filter(Boolean).length;
+  }, [rawText]);
+  const aiTooLong = rawWordCount > MAX_AI_REWRITE_WORDS;
+
+  const wasTooLongRef = useRef(false);
+  useEffect(() => {
+    // Show toast when user crosses the limit (typed or pasted).
+    if (aiTooLong && !wasTooLongRef.current) {
+      showToast('AI not allowed long article to rewrite');
+    }
+    wasTooLongRef.current = aiTooLong;
+  }, [aiTooLong]);
+
+  const goDetails = useCallback(() => {
+    router.push('/post-news/details' as any);
+  }, [router]);
+
+  const onProceed = useCallback(async () => {
+    rawTextInputRef.current?.blur();
+    pasteTextInputRef.current?.blur();
+    Keyboard.dismiss();
+    const text = String(rawText || '').trim();
+    if (!text) {
+      Alert.alert('Post News', 'Please type or paste your news article first.');
+      return;
+    }
+
+    let cachedTn = '';
+    let cachedTnn = '';
+    try {
+      cachedTn = String((await AsyncStorage.getItem(POST_NEWS_TENANT_NAME_KEY)) || '').trim();
+      cachedTnn = String((await AsyncStorage.getItem(POST_NEWS_TENANT_NATIVE_NAME_KEY)) || '').trim();
+    } catch {
+      // ignore
+    }
+
+    const parsed = parsePastedNews(text, { tenantName: cachedTn, tenantNativeName: cachedTnn });
+    const nextBody = String(parsed.body || text).trim() || text;
+    const patch: any = { body: nextBody };
+
+    const t = String(parsed.title || '').trim();
+    const st = String(parsed.subtitle || '').trim();
+    const pq = String(parsed.placeQuery || '').trim();
+    if (t) patch.title = t;
+    if (st) patch.subtitle = st;
+    if (pq) patch.locationQuery = pq;
+
+    // If title is too long, or bullets are long sentences, try to auto-shorten via AI headlines.
+    const bulletsIn = (Array.isArray(parsed.bullets) ? parsed.bullets : []).slice(0, 5);
+    const longBullets = bulletsIn.filter((b) => String(b || '').trim().split(/\s+/g).filter(Boolean).length > 5);
+    const needsHeadlineAI = String(t).length > 100 || longBullets.length > 0;
+
+    let finalBullets = bulletsIn;
+
+    if (needsHeadlineAI && t) {
+      const res = await aiHeadlines({
+        mainTitle: t,
+        bullets: bulletsIn.length ? bulletsIn : undefined,
+        maxTitles: 1,
+        maxRewrites: 1,
+      });
+      const suggested = String((res?.titles && res.titles[0]) || '').trim();
+      if (suggested) patch.title = suggested;
+
+      const rewrittenBullets = Array.isArray(res?.bullets)
+        ? res.bullets
+          .map((b: any) => String((b?.rewrites && b.rewrites[0]) || b?.original || '').trim())
+          .filter(Boolean)
+          .slice(0, 5)
+        : [];
+      if (rewrittenBullets.length) finalBullets = rewrittenBullets;
+      const suggestedSubtitle = String(res?.subtitle || '').trim();
+      if (suggestedSubtitle) patch.subtitle = suggestedSubtitle;
+    }
+
+    setDraft(patch);
+    if (finalBullets.length) setBullets(finalBullets);
+    goDetails();
+  }, [goDetails, rawText, setBullets, setDraft]);
+
+  const onAiNews = useCallback(async () => {
+    rawTextInputRef.current?.blur();
+    pasteTextInputRef.current?.blur();
+    Keyboard.dismiss();
+    const text = String(rawText || '').trim();
+    if (!text) {
+      Alert.alert('AI News', 'Please type or paste your news article first.');
+      return;
+    }
+
+    const wc = text.split(/\s+/g).map((x) => x.trim()).filter(Boolean).length;
+    if (wc > MAX_AI_REWRITE_WORDS) {
+      showToast('AI not allowed long article to rewrite');
+      return;
+    }
+
+    if (aiBusy) return;
+
+    setAiBusy(true);
+    try {
+      const tokens = await loadTokens();
+      const jwt = tokens?.jwt;
+
+      // Cache tenant names for later fallback (and use them to sanitize AI input).
+      const tenantObj = (tokens as any)?.session?.tenant || (tokens as any)?.user?.tenant || (tokens as any)?.tenant || undefined;
+      const tn = String((tenantObj as any)?.name || '').trim();
+      const tnn = String((tenantObj as any)?.nativeName || '').trim();
+      const ds = (tokens as any)?.session?.domainSettings;
+      const tenantPrimaryColor = String(ds?.data?.theme?.colors?.primary || ds?.theme?.colors?.primary || '').trim();
+      if (tn) {
+        try { await AsyncStorage.setItem(POST_NEWS_TENANT_NAME_KEY, tn); } catch {}
+      }
+      if (tnn) {
+        try { await AsyncStorage.setItem(POST_NEWS_TENANT_NATIVE_NAME_KEY, tnn); } catch {}
+      }
+      if (isValidHexColor(tenantPrimaryColor)) {
+        try { await AsyncStorage.setItem(POST_NEWS_TENANT_PRIMARY_COLOR_KEY, tenantPrimaryColor); } catch {}
+        try { setTenantPrimary(tenantPrimaryColor); } catch {}
+      }
+      let cachedTn = '';
+      let cachedTnn = '';
+      try {
+        cachedTn = String((await AsyncStorage.getItem(POST_NEWS_TENANT_NAME_KEY)) || '').trim();
+        cachedTnn = String((await AsyncStorage.getItem(POST_NEWS_TENANT_NATIVE_NAME_KEY)) || '').trim();
+      } catch {
+        // ignore
+      }
+
+      const safeText = stripSensitiveFromAiText(text, {
+        tenantName: tn || cachedTn,
+        tenantNativeName: tnn || cachedTnn,
+      });
+      if (!safeText) {
+        Alert.alert('AI News', 'Please paste the full news content (not only date/month/location).');
+        return;
+      }
+
+      const model = String(process.env.EXPO_PUBLIC_AINEWS_MODEL || 'gpt-4o');
+      const payload = await aiRewriteNews({ rawText: safeText, jwt: jwt || undefined, model });
+
+      const category = String(payload?.category || '').trim();
+      const title = String(payload?.title || '').trim();
+      const subtitle = String(payload?.subtitle || '').trim();
+      const lead = String(payload?.lead || '').trim();
+      const highlights = Array.isArray(payload?.highlights)
+        ? payload.highlights.map((x) => String(x || '').trim()).filter(Boolean)
+        : [];
+      const body = String(payload?.article?.body || '').trim();
+      const locationDate = String(payload?.article?.location_date || '').trim();
+      const place = extractPlaceFromLocationDate(locationDate);
+
+      // Lead is not shown separately; keep it in body for posting.
+      const combinedBody = [lead, body].filter(Boolean).join('\n\n').trim() || text;
+
+      setDraft({
+        categoryId: undefined,
+        categorySlug: undefined,
+        categoryName: category || undefined,
+        title: title || '',
+        subtitle: subtitle || undefined,
+        body: combinedBody,
+        locationQuery: place || '',
+        dateLine: null,
+      });
+
+      if (highlights.length) setBullets(highlights.slice(0, 5));
+
+      goDetails();
+    } catch (e: any) {
+      Alert.alert('AI News failed', String(e?.message || 'Could not rewrite the article'));
+    } finally {
+      setAiBusy(false);
+    }
+  }, [MAX_AI_REWRITE_WORDS, aiBusy, goDetails, rawText, setBullets, setDraft]);
+
+  return (
+    <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['top', 'bottom']}>
+      <View style={[styles.appBar, { borderBottomColor: c.border, backgroundColor: c.background }]}>
+        <Pressable
+          onPress={() => router.back()}
+          style={({ pressed }) => [
+            styles.iconBtn,
+            { borderColor: c.border, backgroundColor: c.card },
+            pressed && styles.pressed,
+          ]}
+          hitSlop={10}
+          accessibilityLabel="Go back"
+        >
+          <MaterialIcons name="arrow-back" size={22} color={c.text} />
+        </Pressable>
+
+        <View style={styles.appBarCenter} pointerEvents="none">
+          <ThemedText type="defaultSemiBold" style={[styles.title, { color: c.text }]}>Post News</ThemedText>
+        </View>
+      </View>
+
+      <KeyboardAvoidingView style={styles.flex} behavior={Platform.select({ ios: 'padding', android: undefined })}>
+        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+          <View style={[styles.section, { borderColor: c.border, backgroundColor: c.card }]}>
+            <TextInput
+              ref={rawTextInputRef}
+              value={rawText}
+              onChangeText={setRawText}
+              placeholder="type or paste your news article here"
+              placeholderTextColor={c.muted}
+              style={[styles.textArea, { borderColor: c.border, color: c.text, backgroundColor: c.background }]}
+              multiline
+              textAlignVertical="top"
+            />
+          </View>
+          <View style={styles.bottomPad} />
+        </ScrollView>
+
+        <View style={[styles.bottomBar, { borderTopColor: c.border, backgroundColor: c.background }]}>
+          <Pressable
+            onPress={() => void onAiNews()}
+            disabled={aiBusy || aiTooLong}
+            style={({ pressed }) => [
+              styles.bottomBtn,
+              { borderColor: primary, backgroundColor: c.card },
+              pressed && styles.pressed,
+              (aiBusy || aiTooLong) && { opacity: 0.5 },
+            ]}
+          >
+            <MaterialIcons name="psychology" size={18} color={primary} />
+            <ThemedText style={{ color: primary }}>AI News</ThemedText>
+          </Pressable>
+
+          <Pressable
+            onPress={onProceed}
+            disabled={aiBusy}
+            style={({ pressed }) => [
+              styles.bottomBtn,
+              { borderColor: primary, backgroundColor: primary },
+              pressed && styles.pressed,
+              aiBusy && { opacity: 0.7 },
+            ]}
+          >
+            <MaterialIcons name="article" size={18} color={c.background} />
+            <ThemedText style={{ color: c.background }}>Proceed</ThemedText>
+          </Pressable>
+        </View>
+      </KeyboardAvoidingView>
+
+      <Modal visible={aiBusy} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: c.text, opacity: 0.25 }]} />
+          <View style={[styles.modalCard, { backgroundColor: c.card, borderColor: c.border, alignItems: 'center' }]}>
+            <LottieView source={aiAnim} autoPlay loop style={{ width: 140, height: 140 }} />
+            <ThemedText style={{ color: c.text, marginTop: 10 }}>Generating…</ThemedText>
+            <ActivityIndicator style={{ marginTop: 12 }} />
+          </View>
+        </View>
+      </Modal>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: { flex: 1 },
+  flex: { flex: 1 },
+  appBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+  },
+  iconBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  appBarCenter: { position: 'absolute', left: 0, right: 0, alignItems: 'center', justifyContent: 'center' },
+  title: { fontSize: 16 },
+  step: { fontSize: 12, marginTop: 2 },
+  scroll: { padding: 14, paddingBottom: 24 },
+  section: {
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 12,
+  },
+  textArea: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    minHeight: 420,
+  },
+  bottomPad: { height: 90 },
+  bottomBar: {
+    borderTopWidth: 1,
+    padding: 12,
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'space-between',
+  },
+  bottomBtn: {
+    flex: 1,
+    height: 46,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  modalOverlay: { flex: 1, justifyContent: 'center', padding: 16 },
+  modalCard: { borderWidth: 1, borderRadius: 16, padding: 14 },
+  pressed: { opacity: 0.85 },
+});
+/*
     maxTitles: typeof opts.maxTitles === 'number' ? opts.maxTitles : 5,
     maxRewrites: typeof opts.maxRewrites === 'number' ? opts.maxRewrites : 1,
   };
@@ -553,14 +755,6 @@ export default function PostNewsScreen() {
   const { draft, setDraft, setBullets, resetDraft } = usePostNewsDraftStore();
 
   const [selectedLangCode, setSelectedLangCode] = useState<string>(draft.languageCode || 'en');
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [suggestingTitles, setSuggestingTitles] = useState(false);
-  const [titleSuggestions, setTitleSuggestions] = useState<TitleSuggestion[]>([]);
-  const [titleSuggestionsVisible, setTitleSuggestionsVisible] = useState(false);
-  const lastSuggestedTitleRef = useRef<string>('');
-  const headlinesPayloadRef = useRef<{ subtitle?: string; bullets?: string[] } | null>(null);
-  const continueAfterHeadlinePickRef = useRef(false);
-
   const [dateLineBusy, setDateLineBusy] = useState(false);
   const [dateLineResults, setDateLineResults] = useState<CombinedLocationItem[]>([]);
   const [autoDateLinePickerVisible, setAutoDateLinePickerVisible] = useState(false);
@@ -569,22 +763,10 @@ export default function PostNewsScreen() {
   const [tenantNativeName, setTenantNativeName] = useState<string>('');
   const tenantNameRef = useRef<string>('');
   const tenantNativeNameRef = useRef<string>('');
-  const [bulletsBusy, setBulletsBusy] = useState(false);
-
-  const dateLineInputRef = useRef<TextInput | null>(null);
-  const [bulletsEditing, setBulletsEditing] = useState(false);
-
-  const STYLE2_STORAGE_KEY = 'post_news_compose_style2';
-  const [useStyle2, setUseStyle2] = useState(false);
-
-  // Style 2 (WhatsApp paste + Auto Fill)
   const [pasteText, setPasteText] = useState('');
-  const [autoFillBusy, setAutoFillBusy] = useState(false);
-  const [autoFillDone, setAutoFillDone] = useState(false);
-  const autoFillTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastAutoFillTextRef = useRef<string>('');
+  const [aiBusy, setAiBusy] = useState(false);
 
-  const newsIconAnim = useMemo(() => require('../assets/lotti/News icon.json'), []);
+  const aiAnim = useMemo(() => require('../assets/lotti/Artificial Intelligence.json'), []);
 
   const [pageLoading, setPageLoading] = useState(true);
   const initDoneRef = useRef<{ lang: boolean; tenant: boolean }>({ lang: false, tenant: false });
@@ -596,28 +778,6 @@ export default function PostNewsScreen() {
 
   const primary = useMemo(() => c.tint, [c.tint]);
 
-  useEffect(() => {
-    let alive = true;
-    AsyncStorage.getItem(STYLE2_STORAGE_KEY)
-      .then((v) => {
-        if (!alive) return;
-        setUseStyle2(v === '1');
-      })
-      .catch(() => {
-        // ignore
-      });
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  const toggleStyle2 = useCallback((next: boolean) => {
-    setUseStyle2(next);
-    AsyncStorage.setItem(STYLE2_STORAGE_KEY, next ? '1' : '0').catch(() => {
-      // ignore
-    });
-  }, []);
-
   const onResetDraft = useCallback(() => {
     Alert.alert('Reset', 'Clear all fields for this post?', [
       { text: 'Cancel', style: 'cancel' },
@@ -628,20 +788,8 @@ export default function PostNewsScreen() {
           try {
             resetDraft();
             setPasteText('');
-            setAutoFillDone(false);
-            setShowAdvanced(false);
-            setTitleSuggestionsVisible(false);
-            setTitleSuggestions([]);
             setDateLineResults([]);
             setAutoDateLinePickerVisible(false);
-            setBulletsEditing(false);
-            lastSuggestedTitleRef.current = '';
-            headlinesPayloadRef.current = null;
-            continueAfterHeadlinePickRef.current = false;
-            if (searchTimerRef.current) {
-              clearTimeout(searchTimerRef.current);
-              searchTimerRef.current = null;
-            }
           } catch {
             // ignore
           }
@@ -649,22 +797,6 @@ export default function PostNewsScreen() {
       },
     ]);
   }, [resetDraft]);
-
-  useEffect(() => {
-    if (!showAdvanced) setBulletsEditing(false);
-  }, [showAdvanced]);
-
-  const showEditor = useMemo(() => {
-    if (!useStyle2) return true;
-    if (autoFillDone) return true;
-    const hasDraft = !!(
-      String(draft.title || '').trim() ||
-      String(draft.body || '').trim() ||
-      String(draft.locationQuery || '').trim() ||
-      (draft.dateLine as any)?.locationId
-    );
-    return hasDraft;
-  }, [autoFillDone, draft.body, draft.dateLine, draft.locationQuery, draft.title, useStyle2]);
 
   const ensureBulletSlots = useCallback((arr: string[]) => {
     const next = Array.isArray(arr) ? arr.slice(0, MAX_BULLETS) : [];
@@ -991,67 +1123,118 @@ export default function PostNewsScreen() {
     return titleOk && bodyOk && dateLineOk;
   }, [draft.body, draft.dateLine?.locationId, draft.title]);
 
-  const finalizeAndGoMedia = useCallback(async () => {
-    const bullets = (Array.isArray(draft.bullets) ? draft.bullets : [])
-      .map((b) => String(b || '').trim())
-      .filter(Boolean)
-      .slice(0, MAX_BULLETS);
+  const goDetails = useCallback(() => {
+    router.push('/post-news/details' as any);
+  }, [router]);
 
-    // If any bullet is too long, shorten on Next click (each <= 100 chars).
-    const needsShorten = bullets.some((b) => String(b || '').length > 100);
-    if (needsShorten && !bulletsBusy) {
-      setBulletsBusy(true);
-      try {
-        const joined = bullets.join('\n');
-        const next = await parseAndClampBullets(joined);
-        setBullets(next);
-      } finally {
-        setBulletsBusy(false);
-      }
-    }
-
-    router.push('/post-news/media' as any);
-  }, [MAX_BULLETS, bulletsBusy, draft.bullets, parseAndClampBullets, router, setBullets]);
-
-  const goNext = useCallback(async () => {
-    if (!canContinue) {
-      Alert.alert('Missing details', 'Please add a title, select Date Line, and write the article text.');
+  const proceedFromText = useCallback(async () => {
+    pasteTextInputRef.current?.blur();
+    Keyboard.dismiss();
+    const input = String(pasteText || '').trim();
+    if (!input) {
+      Alert.alert('Post News', 'Please type or paste your news article first.');
       return;
     }
 
-    // Prevent duplicate date line inside the article body (date line is stored separately).
-    try {
-      const lang = await readSelectedLanguage();
-      const langCodeRaw = lang?.code || draft.languageCode || selectedLangCode || 'en';
-      const baseCode = normalizeLangCodeMaybe(langCodeRaw);
-      const cleaned = stripLeadingDuplicateDateLine({
-        body: String(draft.body || ''),
-        dateLineText: draft.dateLine?.text,
-        locationNameLocalized: (draft.dateLine as any)?.nameLocalized,
-        tenantName: tenantNameRef.current || tenantName,
-        tenantNativeName: tenantNativeNameRef.current || tenantNativeName,
-        langCode: baseCode,
-      });
-      if (cleaned.removed) {
-        setDraft({ body: cleaned.body });
+    const parsed = parsePastedNews(input);
+    // Fallbacks: if parsing fails, keep full text as body.
+    const title = String(parsed.title || '').trim();
+    const subtitle = String(parsed.subtitle || '').trim();
+    const body = String(parsed.body || input).trim();
+    const bullets = Array.isArray(parsed.bullets) ? parsed.bullets : [];
+
+    setDraft({
+      title: title || draft.title,
+      subtitle: subtitle || draft.subtitle,
+      body,
+      categoryId: draft.categoryId,
+    });
+    if (bullets.length) setBullets(ensureBulletSlots(bullets));
+
+    // Try auto date line from detected place/date line.
+    const place = sanitizePlaceCandidate(String(parsed.placeQuery || '').trim());
+    if (place) {
+      setDraft({ locationQuery: place, dateLine: null as any });
+      setDateLineBusy(true);
+      try {
+        const res = await searchCombinedLocations(place, 20, tenantId || undefined);
+        const items = Array.isArray(res?.items) ? res.items : [];
+        if (items.length === 1) {
+          await pickDateLine(items[0]);
+        }
+      } catch {
+        // ignore
+      } finally {
+        setDateLineBusy(false);
       }
-    } catch {
-      // ignore
     }
 
-    // Suggest titles/headlines on Next click (based on title length or word count).
-    const title = String(draft.title || '').trim();
-    const shouldCall = title.length >= 100 || wordCount(title) >= 5;
-    if (shouldCall) {
-      continueAfterHeadlinePickRef.current = true;
-      const opened = await maybeSuggestTitles();
-      // If picker opened, wait for the user to choose a title.
-      if (opened) return;
-      continueAfterHeadlinePickRef.current = false;
-    }
+    goDetails();
+  }, [draft.categoryId, draft.subtitle, draft.title, goDetails, pasteText, pickDateLine, setBullets, setDraft, tenantId]);
 
-    await finalizeAndGoMedia();
-  }, [canContinue, draft.body, draft.dateLine, draft.languageCode, draft.title, finalizeAndGoMedia, maybeSuggestTitles, selectedLangCode, setDraft, tenantName, tenantNativeName]);
+  const aiNewsFromText = useCallback(async () => {
+    pasteTextInputRef.current?.blur();
+    Keyboard.dismiss();
+    const rawText = String(pasteText || '').trim();
+    if (!rawText) {
+      Alert.alert('AI News', 'Please type or paste your news article first.');
+      return;
+    }
+    if (aiBusy) return;
+    setAiBusy(true);
+    try {
+      const model = String(process.env.EXPO_PUBLIC_AINEWS_MODEL || 'gpt-4o');
+      const res = await request<any>('/ainewspaper_rewrite', {
+        method: 'POST',
+        body: { model, rawText },
+      });
+      const payload = (res as any)?.data ?? res;
+
+      const category = String(payload?.category || '').trim();
+      const title = String(payload?.title || '').trim();
+      const subtitle = String(payload?.subtitle || '').trim();
+      const lead = String(payload?.lead || '').trim();
+      const highlights = Array.isArray(payload?.highlights) ? payload.highlights.map((x: any) => String(x || '').trim()).filter(Boolean) : [];
+      const locDate = String(payload?.article?.location_date || '').trim();
+      const body = String(payload?.article?.body || '').trim();
+
+      // Keep lead internal but ensure it gets posted by placing it as the first paragraph.
+      const combinedBody = [lead, body].filter(Boolean).join('\n\n').trim();
+
+      setDraft({
+        categoryId: '',
+        categoryName: category || undefined,
+        title: title || draft.title,
+        subtitle: subtitle || undefined,
+        body: combinedBody || rawText,
+      });
+      if (highlights.length) setBullets(ensureBulletSlots(highlights));
+
+      // Extract a place from "location_date" like "Venezuela, 2023" => "Venezuela"
+      const place = sanitizePlaceCandidate(locDate.split(',')[0] || '');
+      if (place) {
+        setDraft({ locationQuery: place, dateLine: null as any });
+        setDateLineBusy(true);
+        try {
+          const locRes = await searchCombinedLocations(place, 20, tenantId || undefined);
+          const items = Array.isArray(locRes?.items) ? locRes.items : [];
+          if (items.length === 1) {
+            await pickDateLine(items[0]);
+          }
+        } catch {
+          // ignore
+        } finally {
+          setDateLineBusy(false);
+        }
+      }
+
+      goDetails();
+    } catch (e: any) {
+      Alert.alert('AI News failed', e?.message || 'Could not rewrite the article');
+    } finally {
+      setAiBusy(false);
+    }
+  }, [aiBusy, draft.title, goDetails, pasteText, pickDateLine, setBullets, setDraft, tenantId]);
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['top', 'bottom']}>
@@ -1071,119 +1254,93 @@ export default function PostNewsScreen() {
 
         <View style={styles.appBarCenter} pointerEvents="none">
           <ThemedText type="defaultSemiBold" style={[styles.title, { color: c.text }]}>Post News</ThemedText>
-          <ThemedText style={[styles.step, { color: c.muted }]}>Step 1 of 2</ThemedText>
         </View>
 
-        <View style={styles.appBarRight}>
-          <View style={styles.appBarToggleRow}>
-            <ThemedText style={{ color: useStyle2 ? primary : c.muted, fontSize: 12 }}>Style 2</ThemedText>
-            <Switch
-              value={useStyle2}
-              onValueChange={toggleStyle2}
-              trackColor={{ false: c.border, true: primary }}
-              thumbColor={Platform.OS === 'android' ? (useStyle2 ? c.card : c.background) : undefined}
-            />
-          </View>
-          <Pressable
-            onPress={onResetDraft}
-            style={({ pressed }) => [
-              styles.iconBtn,
-              { borderColor: c.border, backgroundColor: c.card, width: 36, height: 36, borderRadius: 12 },
-              pressed && styles.pressed,
-            ]}
-            hitSlop={10}
-            accessibilityLabel="Reset draft"
-          >
-            <MaterialIcons name="restart-alt" size={20} color={c.text} />
-          </Pressable>
-        </View>
+        <Pressable
+          onPress={onResetDraft}
+          style={({ pressed }) => [
+            styles.iconBtn,
+            { borderColor: c.border, backgroundColor: c.card, width: 40, height: 40, borderRadius: 12 },
+            pressed && styles.pressed,
+          ]}
+          hitSlop={10}
+          accessibilityLabel="Reset draft"
+        >
+          <MaterialIcons name="restart-alt" size={20} color={c.text} />
+        </Pressable>
       </View>
 
-      {pageLoading ? (
-        <View style={styles.flex}>
-          <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-            <View style={[styles.section, { borderColor: c.border, backgroundColor: c.card }]}>
-              <Skeleton width={'85%'} height={20} borderRadius={10} />
-            </View>
+      <KeyboardAvoidingView style={styles.flex} behavior={Platform.select({ ios: 'padding', android: undefined })}>
+        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+          <View style={[styles.section, { borderColor: c.border, backgroundColor: c.card }]}
+          >
+            <TextInput
+              ref={pasteTextInputRef}
+              value={pasteText}
+              onChangeText={setPasteText}
+              placeholder='type or past your news article here'
+              placeholderTextColor={c.muted}
+              style={[styles.textAreaBig, { borderColor: c.border, color: c.text, backgroundColor: c.background, minHeight: 420 }]}
+              multiline
+              textAlignVertical="top"
+            />
+          </View>
 
-            <View style={[styles.section, { borderColor: c.border, backgroundColor: c.card }]}>
-              <Skeleton width={'45%'} height={14} borderRadius={7} style={{ marginBottom: 10 }} />
-              <Skeleton width={'90%'} height={18} borderRadius={9} />
-            </View>
+          <View style={styles.bottomPad} />
+        </ScrollView>
 
-            <View style={[styles.section, { borderColor: c.border, backgroundColor: c.card }]}>
-              <Skeleton width={'35%'} height={14} borderRadius={7} style={{ marginBottom: 10 }} />
-              <Skeleton width={'100%'} height={18} borderRadius={9} />
-            </View>
+        <View style={[styles.bottomBar, { borderTopColor: c.border, backgroundColor: c.background }]}>
+          <Pressable
+            onPress={() => router.back()}
+            style={({ pressed }) => [
+              styles.bottomBtn,
+              { borderColor: c.border, backgroundColor: c.card },
+              pressed && styles.pressed,
+            ]}
+          >
+            <MaterialIcons name="arrow-back" size={18} color={c.text} />
+            <ThemedText style={{ color: c.text }}>Back</ThemedText>
+          </Pressable>
 
-            <View style={[styles.section, { borderColor: c.border, backgroundColor: c.card }]}>
-              <Skeleton width={'40%'} height={14} borderRadius={7} style={{ marginBottom: 10 }} />
-              <Skeleton width={'100%'} height={18} borderRadius={9} />
-              <Skeleton width={'70%'} height={18} borderRadius={9} style={{ marginTop: 10 }} />
-            </View>
+          <Pressable
+            onPress={aiNewsFromText}
+            disabled={aiBusy}
+            style={({ pressed }) => [
+              styles.bottomBtn,
+              { borderColor: primary, backgroundColor: c.card },
+              pressed && styles.pressed,
+              aiBusy && { opacity: 0.7 },
+            ]}
+          >
+            <ThemedText style={{ color: primary }}>AI News</ThemedText>
+          </Pressable>
 
-            <View style={[styles.section, { borderColor: c.border, backgroundColor: c.card }]}>
-              <Skeleton width={'30%'} height={14} borderRadius={7} style={{ marginBottom: 10 }} />
-              <Skeleton width={'100%'} height={120} borderRadius={14} />
-            </View>
-
-            <View style={styles.bottomPad} />
-          </ScrollView>
+          <Pressable
+            onPress={() => void proceedFromText()}
+            disabled={aiBusy}
+            style={({ pressed }) => [
+              styles.bottomBtn,
+              { borderColor: primary, backgroundColor: c.card },
+              pressed && styles.pressed,
+              aiBusy && { opacity: 0.7 },
+            ]}
+          >
+            <ThemedText style={{ color: primary }}>Proceed</ThemedText>
+            <MaterialIcons name="arrow-forward" size={18} color={primary} />
+          </Pressable>
         </View>
-      ) : (
-        <KeyboardAvoidingView style={styles.flex} behavior={Platform.select({ ios: 'padding', android: undefined })}>
-          <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-            {useStyle2 && !showEditor ? (
-              <View style={[styles.section, { borderColor: c.border, backgroundColor: c.card }]}>
-                <View style={styles.rowBetween}>
-                  <View style={styles.sectionHeaderRow}>
-                    <MaterialIcons name="newspaper" size={18} color={primary} />
-                    <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Paste full news</ThemedText>
-                  </View>
-                  {autoFillBusy ? <ActivityIndicator size="small" /> : null}
-                </View>
-                <ThemedText style={{ color: c.muted, marginTop: 6 }}>
-                  Paste WhatsApp message. Auto Fill will prepare Title, Date Line, and Article.
-                </ThemedText>
-                <TextInput
-                  value={pasteText}
-                  onChangeText={setPasteText}
-                  placeholder="Paste from WhatsApp…"
-                  placeholderTextColor={c.muted}
-                  style={[styles.textAreaBig, { borderColor: c.border, color: c.text, backgroundColor: c.background, minHeight: showEditor ? 140 : 220 }]}
-                  multiline
-                  textAlignVertical="top"
-                />
-                <Pressable
-                  onPress={autoFillFromPaste}
-                  style={({ pressed }) => [
-                    styles.smallBtn,
-                    { borderColor: c.border, backgroundColor: c.background, alignSelf: 'flex-end' },
-                    pressed && styles.pressed,
-                  ]}
-                  disabled={autoFillBusy}
-                >
-                  <MaterialIcons name="auto-fix-high" size={18} color={primary} />
-                  <ThemedText style={{ color: primary }}>Auto Fill</ThemedText>
-                </Pressable>
-              </View>
-            ) : null}
+      </KeyboardAvoidingView>
 
-            {showEditor ? (
-              <>
-                <View style={[styles.section, { borderColor: c.border, backgroundColor: c.card }]}>
-              <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Title</ThemedText>
-              <TextInput
-                value={draft.title || ''}
-                onChangeText={(t) => setDraft({ title: t })}
-                placeholder={titlePlaceholderForLang(selectedLangCode)}
-                placeholderTextColor={c.muted}
-                style={[styles.input, styles.titleInput, { borderColor: c.border, color: c.text, backgroundColor: c.background }]}
-                maxLength={300}
-                multiline={false}
-                returnKeyType="next"
-              />
-            </View>
+      <Modal visible={aiBusy} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: c.text, opacity: 0.25 }]} />
+          <View style={[styles.modalCard, { backgroundColor: c.card, borderColor: c.border, alignItems: 'center' }]}>
+            <LottieView source={aiAnim} autoPlay loop style={{ width: 140, height: 140 }} />
+            <ThemedText style={{ color: c.text, marginTop: 10 }}>Generating…</ThemedText>
+            <ActivityIndicator style={{ marginTop: 12 }} />
+          </View>
+        </View>
+      </Modal>
 
           <View style={[styles.section, { borderColor: c.border, backgroundColor: c.card }]}>
             <View style={styles.rowBetween}>
@@ -1478,7 +1635,7 @@ export default function PostNewsScreen() {
           <View style={[StyleSheet.absoluteFill, { backgroundColor: c.text, opacity: 0.25 }]} />
           <View style={[styles.modalCard, { backgroundColor: c.card, borderColor: c.border, alignItems: 'center' }]}>
             <LottieView
-              source={newsIconAnim}
+              source={aiAnim}
               autoPlay
               loop
               style={{ width: 160, height: 160 }}
@@ -1676,3 +1833,4 @@ const styles = StyleSheet.create({
   },
   pressed: { opacity: 0.85 },
 });
+*/

@@ -1,3 +1,4 @@
+import { refreshLanguageDependentCaches } from '@/services/api';
 import { isExpired, loadTokens, Tokens } from '@/services/auth';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
@@ -14,6 +15,7 @@ export default function SplashScreen() {
   useEffect(() => {
     (async () => {
       try {
+        const looksLikeLangCode = (v: string) => /^[a-z]{2,3}(-[a-z0-9]{2,8})?$/i.test(String(v || '').trim());
         // Determine route purely from local state: tokens and stored language
         const tokens: Tokens | null = await loadTokens();
         const valid = !!(tokens && tokens.expiresAt && !isExpired(tokens.expiresAt));
@@ -30,12 +32,29 @@ export default function SplashScreen() {
           if (langRaw) storedLanguage = JSON.parse(langRaw);
         } catch {}
 
+        // Prefetch shortnews (public API) while splash is visible.
+        // This warms the AsyncStorage cache used by getNews() so /news doesn't “wait after splash”.
+        try {
+          const storedCode = String(storedLanguage?.code || '').trim();
+          const storedId = String(storedLanguage?.id || '').trim();
+          const tokenLang = String(tokens?.languageId || '').trim();
+          const preferred = (looksLikeLangCode(storedCode) && storedCode)
+            || (looksLikeLangCode(storedId) && storedId)
+            || (looksLikeLangCode(tokenLang) && tokenLang)
+            || 'en';
+          void refreshLanguageDependentCaches(preferred);
+        } catch {
+          void refreshLanguageDependentCaches('en');
+        }
+
         if (valid || storedLanguage?.id || storedLanguage?.code) {
           targetRouteRef.current = '/news';
         } else {
           targetRouteRef.current = '/language';
         }
       } catch {
+        // Best-effort prefetch even if auth/lang read fails
+        try { void refreshLanguageDependentCaches('en'); } catch {}
         targetRouteRef.current = '/language';
       }
     })();

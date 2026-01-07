@@ -57,6 +57,7 @@ const NewsScreen = () => {
   const [langRawDebug, setLangRawDebug] = useState<string>('');
   const { selectedCategory } = useCategory();
   const [pageHeight, setPageHeight] = useState<number | undefined>(undefined);
+  const loadSeqRef = useRef(0);
   const lastHeightRef = useRef(0);
   const onLayout = (e: LayoutChangeEvent) => {
     const h = Math.round(e.nativeEvent.layout.height);
@@ -67,6 +68,7 @@ const NewsScreen = () => {
   };
 
   const loadNews = async () => {
+    const seq = ++loadSeqRef.current;
     const map: Record<string, string> = {
       top: 'Top',
       india: 'India',
@@ -79,15 +81,17 @@ const NewsScreen = () => {
     // Treat "Top" as the default, i.e. no filter
     const mapped = selectedCategory ? (map[selectedCategory] || selectedCategory) : undefined;
     const filterKey = mapped && mapped.toLowerCase() === 'top' ? undefined : mapped;
-    setLoading(true);
-    setError(null);
+
+    // Best practice: show cached short news immediately (stale-while-revalidate).
+    // Only show skeleton when cache is empty.
+    let langCode = 'en';
+    let label = 'English';
+    let hadCache = false;
     try {
       const stored = await AsyncStorage.getItem('selectedLanguage');
       if (__DEV__) {
         try { setLangRawDebug(String(stored || '')); } catch {}
       }
-      let langCode = 'en';
-      let label = 'English';
       if (stored) {
         try {
           const parsed: any = JSON.parse(stored);
@@ -108,6 +112,32 @@ const NewsScreen = () => {
         try { setLangCodeDebug(langCode); } catch {}
       }
       setLangLabel(label);
+
+      // Try cached list first
+      const cacheKey = `news_cache:${langCode}:${filterKey || 'all'}`;
+      try {
+        const cached = await AsyncStorage.getItem(cacheKey);
+        if (cached) {
+          const parsed = JSON.parse(cached) as Article[];
+          if (Array.isArray(parsed) && parsed.length) {
+            hadCache = true;
+            // Apply same filter fallback logic as live response
+            let filtered = filterKey
+              ? parsed.filter((a) => (a.category || '').toLowerCase().includes(filterKey.toLowerCase()))
+              : parsed;
+            if (filterKey && filtered.length === 0) filtered = parsed;
+            setArticles(filtered);
+          }
+        }
+      } catch {
+        // ignore cache read errors
+      }
+
+      if (seq !== loadSeqRef.current) return;
+      setError(null);
+      setLoading(!hadCache);
+
+      // Fetch live (updates cache in services/api.ts)
       const list = await getNews(langCode, filterKey || undefined);
       const safe = Array.isArray(list) ? list : [];
       // If API doesn't filter by category, filter client-side as a fallback
@@ -119,15 +149,19 @@ const NewsScreen = () => {
         console.warn('[News] No items matched category filter, showing all');
         filtered = safe;
       }
+      if (seq !== loadSeqRef.current) return;
       setArticles(filtered);
       console.log('[News] articles loaded:', filtered.length, '| lang=', langCode);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.warn('Failed to load news', msg);
-      setError(msg || 'Failed to load news');
-      setArticles([]);
+      // If we already showed cached content, don't replace it with an error screen.
+      if (!hadCache) {
+        setError(msg || 'Failed to load news');
+        setArticles([]);
+      }
     } finally {
-      setLoading(false);
+      if (seq === loadSeqRef.current) setLoading(false);
       try { setTabBarVisible(true); } catch {}
     }
   };

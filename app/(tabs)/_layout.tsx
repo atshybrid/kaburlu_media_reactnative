@@ -17,6 +17,7 @@ import { useColorScheme } from '@/hooks/useColorScheme';
 import { LolzIcon, NewsIcon, PostArticleIcon, ProfileIcon } from '@/icons';
 import { CategoryItem, getCategories } from '@/services/api';
 import { log } from '@/services/logger';
+import { canAccessPostNewsByRole, getCachedProfileRole } from '@/services/roles';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -152,7 +153,16 @@ function InnerLayout() {
             try { close(); } catch {}
             // Allow close animation to start before navigating
             setTimeout(() => {
-              try { router.push('/explore'); } catch {}
+              try {
+                void (async () => {
+                  const role = await getCachedProfileRole();
+                  if (canAccessPostNewsByRole(role)) {
+                    router.push('/post-news' as any);
+                  } else {
+                    router.push('/explore' as any);
+                  }
+                })();
+              } catch {}
               setPressLocked(false);
             }, 160);
           }}

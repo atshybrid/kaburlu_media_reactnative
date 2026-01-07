@@ -8,7 +8,7 @@ import { Stack, useRouter } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import React from 'react';
-import { Platform, StyleSheet, Text, View } from 'react-native';
+import { LogBox, Platform, StyleSheet, Text, View } from 'react-native';
 // removed duplicate react-native import (merged above)
 import { useAppFonts } from '@/components/fonts';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -17,6 +17,9 @@ import { AuthProvider } from '../context/AuthContext';
 import { ThemeProviderLocal, useThemePref } from '../context/ThemeContext';
 import { UiPrefsProvider } from '../context/UiPrefsContext';
 import { useColorScheme } from '../hooks/useColorScheme';
+
+// Suppress expo-keep-awake activation errors (expo-video compatibility issue)
+LogBox.ignoreLogs(['Unable to activate keep awake']);
 
 // Keep native splash visible until splash screen video first frame is ready
 SplashScreen.preventAutoHideAsync().catch(() => {});

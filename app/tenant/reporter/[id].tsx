@@ -1,4 +1,5 @@
 import { ThemedText } from '@/components/ThemedText';
+import { Skeleton } from '@/components/ui/Skeleton';
 import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { loadTokens } from '@/services/auth';
@@ -17,21 +18,57 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Image, Platform, Pressable, ScrollView, StyleSheet, Switch, TextInput, View } from 'react-native';
+import {
+    ActivityIndicator,
+    Image,
+    Platform,
+    Pressable,
+    RefreshControl,
+    ScrollView,
+    StyleSheet,
+    Switch,
+    TextInput,
+    View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+
+/* ─────────────────────────────  Helpers  ───────────────────────────── */
+
+function isValidHexColor(v?: string | null) {
+  if (!v) return false;
+  return /^#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})$/.test(String(v).trim());
+}
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+  const h = hex.trim();
+  if (!isValidHexColor(h)) return null;
+  const raw = h.slice(1);
+  const full = raw.length === 3 ? raw.split('').map((c) => c + c).join('') : raw;
+  const n = parseInt(full, 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+function alphaBg(hex: string, alpha: number, fallback: string) {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return fallback;
+  return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${Math.max(0, Math.min(1, alpha))})`;
+}
+
+function pickReadableTextColor(bgHex?: string | null) {
+  const rgb = bgHex ? hexToRgb(bgHex) : null;
+  if (!rgb) return null;
+  const lum = (0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b) / 255;
+  return lum < 0.55 ? Colors.light.background : Colors.light.text;
+}
 
 function formatMoney(v: number | null | undefined) {
   if (v === null || v === undefined) return '—';
   if (!Number.isFinite(v)) return '—';
-  return String(v);
-}
-
-function formatMonthYear(m?: number, y?: number) {
-  if (!m || !y) return '—';
-  return `${m}/${y}`;
+  return `₹${v.toLocaleString()}`;
 }
 
 function formatDateISO(d?: string | null) {
@@ -39,10 +76,8 @@ function formatDateISO(d?: string | null) {
   const t = Date.parse(d);
   if (!Number.isFinite(t)) return '—';
   const dt = new Date(t);
-  const yyyy = dt.getFullYear();
-  const mm = String(dt.getMonth() + 1).padStart(2, '0');
-  const dd = String(dt.getDate()).padStart(2, '0');
-  return `${dd}/${mm}/${yyyy}`;
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${dt.getDate()} ${months[dt.getMonth()]} ${dt.getFullYear()}`;
 }
 
 function isPast(d?: string | null) {
@@ -58,6 +93,31 @@ function initials(name?: string | null) {
   return letters || 'R';
 }
 
+function locationNameForReporter(r: TenantReporter): string {
+  const lvl = String(r.level || '').toUpperCase();
+  if (lvl === 'STATE') return r.state?.name || '—';
+  if (lvl === 'DISTRICT') return r.district?.name || r.state?.name || '—';
+  if (lvl === 'MANDAL') return r.mandal?.name || r.district?.name || r.state?.name || '—';
+  if (lvl === 'ASSEMBLY') return r.assemblyConstituency?.name || r.district?.name || r.state?.name || '—';
+  return r.district?.name || r.state?.name || '—';
+}
+
+function normalizeLevel(level: TenantReporter['level']) {
+  const l = String(level || '').toUpperCase();
+  if (l === 'STATE' || l === 'DISTRICT' || l === 'MANDAL' || l === 'ASSEMBLY') return l;
+  return 'OTHER';
+}
+
+const LEVEL_META: Record<string, { label: string; icon: keyof typeof MaterialIcons.glyphMap; color: string }> = {
+  STATE: { label: 'State', icon: 'public', color: '#6366f1' },
+  DISTRICT: { label: 'District', icon: 'location-city', color: '#f59e0b' },
+  MANDAL: { label: 'Mandal', icon: 'apartment', color: '#10b981' },
+  ASSEMBLY: { label: 'Assembly', icon: 'how-to-vote', color: '#ec4899' },
+  OTHER: { label: 'Other', icon: 'person-pin', color: '#8b5cf6' },
+};
+
+/* ─────────────────────────────  Main Screen  ───────────────────────────── */
+
 export default function TenantReporterDetailsScreen() {
   const scheme = useColorScheme() ?? 'light';
   const c = Colors[scheme];
@@ -66,9 +126,11 @@ export default function TenantReporterDetailsScreen() {
   const reporterId = String(params?.id || '');
 
   const [tenantId, setTenantId] = useState<string | null>(null);
+  const [brandPrimary, setBrandPrimary] = useState<string | null>(null);
   const [role, setRole] = useState<string>('');
 
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reporter, setReporter] = useState<TenantReporter | null>(null);
 
@@ -76,10 +138,7 @@ export default function TenantReporterDetailsScreen() {
   const [idCardUpdating, setIdCardUpdating] = useState(false);
   const [idCardMessage, setIdCardMessage] = useState<string | null>(null);
   const [idCardLoading, setIdCardLoading] = useState(false);
-  const [idCardError, setIdCardError] = useState<string | null>(null);
   const [idCard, setIdCard] = useState<ReporterIdCard | null>(null);
-  const [subscriptionMessage, setSubscriptionMessage] = useState<string | null>(null);
-  const [manualLoginMessage, setManualLoginMessage] = useState<string | null>(null);
 
   const [kycEditing, setKycEditing] = useState(false);
   const [kycUpdating, setKycUpdating] = useState(false);
@@ -90,6 +149,9 @@ export default function TenantReporterDetailsScreen() {
   const [verifiedPanDraft, setVerifiedPanDraft] = useState(true);
   const [verifiedWorkProofDraft, setVerifiedWorkProofDraft] = useState(true);
 
+  const primary = brandPrimary || c.tint;
+  const primaryText = pickReadableTextColor(primary) || Colors.light.background;
+
   const canManageAutoPublish = useMemo(() => {
     const r = String(role || '').toUpperCase();
     return !!tenantId && (r === 'SUPER_ADMIN' || r === 'TENANT_ADMIN');
@@ -97,8 +159,7 @@ export default function TenantReporterDetailsScreen() {
 
   const canManageKyc = canManageAutoPublish;
 
-  const canManageBilling = canManageAutoPublish;
-
+  /* ── Load session ── */
   useEffect(() => {
     (async () => {
       const t = await loadTokens();
@@ -106,23 +167,26 @@ export default function TenantReporterDetailsScreen() {
       const tid = session?.tenantId || session?.tenant?.id;
       setTenantId(typeof tid === 'string' ? tid : null);
       setRole(String(t?.user?.role || ''));
+
+      const ds = session?.domainSettings;
+      const colors = ds?.data?.theme?.colors;
+      const pColor = colors?.primary || colors?.accent;
+      setBrandPrimary(isValidHexColor(pColor) ? String(pColor) : null);
     })();
   }, []);
 
-  const load = useCallback(async () => {
+  /* ── Load reporter ── */
+  const load = useCallback(async (isRefresh = false) => {
     if (!tenantId || !reporterId) return;
-    setLoading(true);
+    if (isRefresh) setRefreshing(true);
+    else setLoading(true);
     setError(null);
     setIdCardMessage(null);
-    setIdCardError(null);
-    setSubscriptionMessage(null);
-    setManualLoginMessage(null);
     setKycMessage(null);
     try {
       const r = await getTenantReporter(tenantId, reporterId);
       setReporter(r);
     } catch (e: any) {
-      // Fallback: some builds may not have a reporter-details endpoint.
       try {
         const list = await getTenantReporters(tenantId, { active: true });
         const found = (Array.isArray(list) ? list : []).find((x) => x.id === reporterId) || null;
@@ -134,19 +198,18 @@ export default function TenantReporterDetailsScreen() {
       }
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, [tenantId, reporterId]);
 
   const loadIdCard = useCallback(async () => {
     if (!tenantId || !reporterId) return;
     setIdCardLoading(true);
-    setIdCardError(null);
     try {
       const card = await getReporterIdCard(tenantId, reporterId);
       setIdCard(card);
-    } catch (e: any) {
+    } catch {
       setIdCard(null);
-      setIdCardError(e?.message || 'Failed to load ID card');
     } finally {
       setIdCardLoading(false);
     }
@@ -162,10 +225,6 @@ export default function TenantReporterDetailsScreen() {
     loadIdCard();
   }, [tenantId, reporterId, loadIdCard]);
 
-  const autoPublish = reporter?.autoPublish === true;
-  const subscriptionActive = reporter?.subscriptionActive === true;
-  const manualLoginEnabled = reporter?.manualLoginEnabled === true;
-
   useEffect(() => {
     if (!reporter) return;
     const current = String(reporter.kycStatus || '').toUpperCase();
@@ -173,21 +232,19 @@ export default function TenantReporterDetailsScreen() {
     setKycStatusDraft(next);
   }, [reporter]);
 
-  const onToggleAutoPublish = useCallback(
-    async (next: boolean) => {
-      if (!tenantId || !reporter) return;
-      setAutoPublishUpdating(true);
-      try {
-        const res = await updateReporterAutoPublish(tenantId, reporter.id, next);
-        setReporter((prev) => (prev ? { ...prev, autoPublish: res.autoPublish } : prev));
-      } catch (e: any) {
-        setError(e?.message || 'Failed to update auto publish');
-      } finally {
-        setAutoPublishUpdating(false);
-      }
-    },
-    [tenantId, reporter],
-  );
+  /* ── Actions ── */
+  const onToggleAutoPublish = useCallback(async (next: boolean) => {
+    if (!tenantId || !reporter) return;
+    setAutoPublishUpdating(true);
+    try {
+      const res = await updateReporterAutoPublish(tenantId, reporter.id, next);
+      setReporter((prev) => (prev ? { ...prev, autoPublish: res.autoPublish } : prev));
+    } catch (e: any) {
+      setError(e?.message || 'Failed to update');
+    } finally {
+      setAutoPublishUpdating(false);
+    }
+  }, [tenantId, reporter]);
 
   const onDownloadIdCardPdf = useCallback(async () => {
     if (!reporter) return;
@@ -204,10 +261,7 @@ export default function TenantReporterDetailsScreen() {
       const target = `${cacheDir}id-card-${reporter.id}.pdf`;
 
       const result = await LegacyFileSystem.downloadAsync(url, target, {
-        headers: {
-          Accept: 'application/pdf',
-          Authorization: `Bearer ${jwt}`,
-        },
+        headers: { Accept: 'application/pdf', Authorization: `Bearer ${jwt}` },
       });
 
       if ((result as any)?.status && Number((result as any).status) !== 200) {
@@ -215,10 +269,8 @@ export default function TenantReporterDetailsScreen() {
       }
 
       const info = await LegacyFileSystem.getInfoAsync(result.uri).catch(() => null as any);
-      if (!info?.exists) throw new Error('PDF file not found after download');
-      if (typeof info.size === 'number' && info.size <= 0) throw new Error('Downloaded PDF is empty');
+      if (!info?.exists) throw new Error('PDF file not found');
 
-      // Persist in app document storage so share targets (e.g., WhatsApp) can reliably access it.
       const docRoot = (LegacyFileSystem as any).documentDirectory as string | null | undefined;
       if (!docRoot) throw new Error('Missing document directory');
       const downloadsDir = docRoot + 'downloads/';
@@ -229,49 +281,33 @@ export default function TenantReporterDetailsScreen() {
       const persisted = `${downloadsDir}id-card-${reporter.id}.pdf`;
       await LegacyFileSystem.copyAsync({ from: result.uri, to: persisted });
 
-      // Android: Save to user-accessible Downloads (best for printing).
-      // We ask the user to pick a folder once, then reuse permission.
       if (Platform.OS === 'android' && (FileSystem as any)?.StorageAccessFramework) {
         const SAF = (FileSystem as any).StorageAccessFramework;
         const DIR_KEY = 'saf_downloads_dir_uri';
         let directoryUri = await AsyncStorage.getItem(DIR_KEY);
         if (!directoryUri) {
           const perm = await SAF.requestDirectoryPermissionsAsync();
-          if (!perm?.granted) throw new Error('Permission denied to save in Downloads');
-          const grantedDir = String(perm.directoryUri || '');
-          if (!grantedDir) throw new Error('Missing Downloads directory');
-          await AsyncStorage.setItem(DIR_KEY, grantedDir);
-          directoryUri = grantedDir;
+          if (!perm?.granted) throw new Error('Permission denied');
+          await AsyncStorage.setItem(DIR_KEY, String(perm.directoryUri || ''));
+          directoryUri = perm.directoryUri;
         }
-        if (!directoryUri) throw new Error('Missing Downloads directory');
-        const filename = `id-card-${reporter.id}.pdf`;
-        const base64 = await LegacyFileSystem.readAsStringAsync(persisted, { encoding: (LegacyFileSystem as any).EncodingType.Base64 });
-        const destUri = await SAF.createFileAsync(directoryUri, filename, 'application/pdf');
-        await FileSystem.writeAsStringAsync(destUri, base64, { encoding: (FileSystem as any).EncodingType.Base64 });
-        setIdCardMessage('Saved to Downloads');
-
-        // Also open share sheet from the persisted file path (best compatibility with WhatsApp).
+        if (directoryUri) {
+          const filename = `id-card-${reporter.id}.pdf`;
+          const base64 = await LegacyFileSystem.readAsStringAsync(persisted, { encoding: (LegacyFileSystem as any).EncodingType.Base64 });
+          const destUri = await SAF.createFileAsync(directoryUri, filename, 'application/pdf');
+          await FileSystem.writeAsStringAsync(destUri, base64, { encoding: (FileSystem as any).EncodingType.Base64 });
+          setIdCardMessage('Saved to Downloads');
+        }
         const canShare = await Sharing.isAvailableAsync();
-        if (canShare) {
-          await Sharing.shareAsync(persisted, {
-            mimeType: 'application/pdf',
-            dialogTitle: 'ID Card PDF',
-          } as any);
-        }
+        if (canShare) await Sharing.shareAsync(persisted, { mimeType: 'application/pdf', dialogTitle: 'ID Card PDF' } as any);
         return;
       }
 
-      // iOS/others: fall back to share sheet.
       const canShare = await Sharing.isAvailableAsync();
-      if (canShare) {
-        await Sharing.shareAsync(persisted, {
-          mimeType: 'application/pdf',
-          dialogTitle: 'ID Card PDF',
-        } as any);
-      }
-      setIdCardMessage('PDF downloaded');
+      if (canShare) await Sharing.shareAsync(persisted, { mimeType: 'application/pdf', dialogTitle: 'ID Card PDF' } as any);
+      setIdCardMessage('PDF ready');
     } catch (e: any) {
-      setIdCardMessage(e?.message || 'Failed to download PDF');
+      setIdCardMessage(e?.message || 'Failed to download');
     }
   }, [reporter]);
 
@@ -280,43 +316,26 @@ export default function TenantReporterDetailsScreen() {
     setIdCardUpdating(true);
     setIdCardMessage(null);
     try {
-      // First check GET api (as requested)
       let card: ReporterIdCard | null = null;
       try {
         card = await getReporterIdCard(tenantId, reporter.id);
         setIdCard(card);
       } catch (e: any) {
-        // If card doesn't exist, generate it.
         if (e instanceof HttpError && e.status === 404) {
           await generateReporterIdCard(tenantId, reporter.id);
           await loadIdCard();
           card = await getReporterIdCard(tenantId, reporter.id);
           setIdCard(card);
-        } else {
-          throw e;
-        }
+        } else throw e;
       }
-
-      // If we have a card now, download/share the PDF
-      if (card) {
-        await onDownloadIdCardPdf();
-      } else {
-        setIdCardMessage('ID card not available');
-      }
+      if (card) await onDownloadIdCardPdf();
+      else setIdCardMessage('ID card not available');
     } catch (e: any) {
-      setIdCardMessage(e?.message || 'Failed to process ID card');
+      setIdCardMessage(e?.message || 'Failed');
     } finally {
       setIdCardUpdating(false);
     }
   }, [tenantId, reporter, onDownloadIdCardPdf, loadIdCard]);
-
-  const onAddSubscription = useCallback(() => {
-    setSubscriptionMessage('Subscription update API not configured in app yet.');
-  }, []);
-
-  const onEnableManualLogin = useCallback(() => {
-    setManualLoginMessage('Manual login update API not configured in app yet.');
-  }, []);
 
   const onSubmitKyc = useCallback(async () => {
     if (!tenantId || !reporter) return;
@@ -325,7 +344,7 @@ export default function TenantReporterDetailsScreen() {
     try {
       const res = await verifyReporterKyc(tenantId, reporter.id, {
         status: kycStatusDraft,
-        notes: kycNotesDraft?.trim() ? kycNotesDraft.trim() : undefined,
+        notes: kycNotesDraft?.trim() || undefined,
         verifiedAadhar: verifiedAadharDraft,
         verifiedPan: verifiedPanDraft,
         verifiedWorkProof: verifiedWorkProofDraft,
@@ -334,520 +353,533 @@ export default function TenantReporterDetailsScreen() {
       setKycEditing(false);
       setKycMessage('KYC updated');
     } catch (e: any) {
-      setKycMessage(e?.message || 'Failed to update KYC');
+      setKycMessage(e?.message || 'Failed');
     } finally {
       setKycUpdating(false);
     }
   }, [tenantId, reporter, kycNotesDraft, kycStatusDraft, verifiedAadharDraft, verifiedPanDraft, verifiedWorkProofDraft]);
 
-  return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['top', 'bottom']}>
-      <View style={[styles.appBar, { borderBottomColor: c.border, backgroundColor: c.background }]}>
-        <Pressable onPress={() => router.back()} style={[styles.iconBtn, { borderColor: c.border, backgroundColor: c.card }]} hitSlop={10}>
-          <MaterialIcons name="arrow-back" size={22} color={c.text} />
-        </Pressable>
-        <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 16, flex: 1 }} numberOfLines={1}>
-          Reporter Details
-        </ThemedText>
-      </View>
+  /* ── Computed ── */
+  const autoPublish = reporter?.autoPublish === true;
+  const subscriptionActive = reporter?.subscriptionActive === true;
+  const level = reporter ? normalizeLevel(reporter.level) : 'OTHER';
+  const levelMeta = LEVEL_META[level];
+  const location = reporter ? locationNameForReporter(reporter) : '—';
 
-      {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={c.muted} />
-          <ThemedText style={{ color: c.muted }}>Loading…</ThemedText>
-        </View>
-      ) : error ? (
-        <View style={styles.center}>
-          <ThemedText type="defaultSemiBold" style={{ color: c.text }}>
-            Couldn’t load reporter
+  const kyc = String(reporter?.kycStatus || '').toUpperCase();
+  const kycOk = ['APPROVED', 'VERIFIED', 'COMPLETED', 'SUCCESS'].some((t) => kyc.includes(t));
+  const kycPending = ['PENDING', 'IN_PROGRESS', 'SUBMITTED', 'REVIEW'].some((t) => kyc.includes(t));
+
+  /* ─────────────────────────────  Render  ───────────────────────────── */
+
+  if (loading) {
+    return (
+      <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['bottom']}>
+        <ReporterDetailSkeleton scheme={scheme} onBack={() => router.back()} />
+      </SafeAreaView>
+    );
+  }
+
+  if (error || !reporter) {
+    return (
+      <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['top', 'bottom']}>
+        <View style={styles.errorCenter}>
+          <View style={[styles.errorIcon, { backgroundColor: alphaBg('#ef4444', 0.1, c.background) }]}>
+            <MaterialIcons name="error-outline" size={48} color="#ef4444" />
+          </View>
+          <ThemedText type="defaultSemiBold" style={{ color: c.text, marginTop: 12 }}>
+            {error || 'Reporter not found'}
           </ThemedText>
-          <ThemedText style={{ color: c.muted, textAlign: 'center' }}>{error}</ThemedText>
-          <Pressable onPress={load} style={[styles.primaryBtn, { backgroundColor: c.tint }]}>
-            <ThemedText type="defaultSemiBold" style={{ color: Colors.light.background }}>
-              Retry
-            </ThemedText>
+          <Pressable
+            onPress={() => load()}
+            style={({ pressed }) => [styles.retryBtn, { backgroundColor: primary }, pressed && { opacity: 0.9 }]}
+          >
+            <MaterialIcons name="refresh" size={18} color={primaryText} />
+            <ThemedText style={{ color: primaryText, fontWeight: '600' }}>Try Again</ThemedText>
+          </Pressable>
+          <Pressable onPress={() => router.back()} style={{ marginTop: 8 }}>
+            <ThemedText style={{ color: primary }}>Go Back</ThemedText>
           </Pressable>
         </View>
-      ) : reporter ? (
-        <ScrollView contentContainerStyle={styles.content}>
-          {/* Header */}
-          <View style={[styles.headerCard, { backgroundColor: c.card, borderColor: c.border }]}
-          >
-            <View style={styles.headerRow}>
-              <View style={[styles.avatar, { borderColor: c.border, backgroundColor: c.background }]}>
-                {reporter.profilePhotoUrl ? (
-                  <Image source={{ uri: reporter.profilePhotoUrl }} style={styles.avatarImg} resizeMode="cover" />
-                ) : (
-                  <ThemedText type="defaultSemiBold" style={{ color: c.text }}>
-                    {initials(reporter.fullName)}
-                  </ThemedText>
-                )}
-              </View>
+      </SafeAreaView>
+    );
+  }
 
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 16 }} numberOfLines={1}>
-                  {reporter.fullName || '—'}
+  return (
+    <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['bottom']}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} colors={[primary]} tintColor={primary} />}
+      >
+        {/* ── Hero Header ── */}
+        <LinearGradient
+          colors={[levelMeta.color, alphaBg(levelMeta.color, 0.85, levelMeta.color)]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.hero}
+        >
+          <Pressable
+            onPress={() => router.back()}
+            style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.8 }]}
+            hitSlop={12}
+          >
+            <MaterialIcons name="arrow-back" size={22} color="#fff" />
+          </Pressable>
+
+          <View style={styles.heroContent}>
+            <View style={styles.avatarLarge}>
+              {reporter.profilePhotoUrl ? (
+                <Image source={{ uri: reporter.profilePhotoUrl }} style={styles.avatarImg} resizeMode="cover" />
+              ) : (
+                <ThemedText type="title" style={{ color: levelMeta.color, fontSize: 28 }}>
+                  {initials(reporter.fullName)}
                 </ThemedText>
-                <ThemedText style={{ color: c.muted }} numberOfLines={1}>
-                  {reporter.mobileNumber || '—'}
-                </ThemedText>
-                <ThemedText style={{ color: c.muted }} numberOfLines={1}>
-                  {reporter.designation?.name || '—'}
-                </ThemedText>
+              )}
+            </View>
+
+            <ThemedText type="title" style={styles.heroName} numberOfLines={2}>
+              {reporter.fullName || 'Unknown'}
+            </ThemedText>
+
+            <View style={styles.heroMeta}>
+              <View style={styles.heroPill}>
+                <MaterialIcons name={levelMeta.icon} size={14} color="rgba(255,255,255,0.9)" />
+                <ThemedText style={styles.heroPillText}>{levelMeta.label}</ThemedText>
               </View>
+              <View style={styles.heroPill}>
+                <MaterialIcons name="place" size={14} color="rgba(255,255,255,0.9)" />
+                <ThemedText style={styles.heroPillText}>{location}</ThemedText>
+              </View>
+            </View>
+
+            <View style={styles.heroContactRow}>
+              <MaterialIcons name="phone" size={16} color="rgba(255,255,255,0.85)" />
+              <ThemedText style={styles.heroContactText}>{reporter.mobileNumber || '—'}</ThemedText>
+            </View>
+          </View>
+        </LinearGradient>
+
+        {/* ── Quick Stats ── */}
+        <View style={styles.quickStatsRow}>
+          <View style={[styles.quickStat, { backgroundColor: c.card, borderColor: c.border }]}>
+            <View style={[styles.quickStatIcon, { backgroundColor: alphaBg('#10b981', 0.12, c.background) }]}>
+              <MaterialIcons name="article" size={20} color="#10b981" />
+            </View>
+            <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 18 }}>
+              {reporter.stats?.newspaperArticles?.total?.published ?? 0}
+            </ThemedText>
+            <ThemedText style={{ color: c.muted, fontSize: 11 }}>Published</ThemedText>
+          </View>
+
+          <View style={[styles.quickStat, { backgroundColor: c.card, borderColor: c.border }]}>
+            <View style={[styles.quickStatIcon, { backgroundColor: alphaBg('#6366f1', 0.12, c.background) }]}>
+              <MaterialIcons name="visibility" size={20} color="#6366f1" />
+            </View>
+            <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 18 }}>
+              {reporter.stats?.webArticleViews?.total ?? 0}
+            </ThemedText>
+            <ThemedText style={{ color: c.muted, fontSize: 11 }}>Views</ThemedText>
+          </View>
+
+          <View style={[styles.quickStat, { backgroundColor: c.card, borderColor: c.border }]}>
+            <View style={[styles.quickStatIcon, { backgroundColor: alphaBg(kycOk ? '#10b981' : kycPending ? '#f59e0b' : c.muted, 0.12, c.background) }]}>
+              <MaterialIcons name={kycOk ? 'verified' : kycPending ? 'pending' : 'help-outline'} size={20} color={kycOk ? '#10b981' : kycPending ? '#f59e0b' : c.muted} />
+            </View>
+            <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 14 }}>
+              {kycOk ? 'Verified' : kycPending ? 'Pending' : 'Unknown'}
+            </ThemedText>
+            <ThemedText style={{ color: c.muted, fontSize: 11 }}>KYC</ThemedText>
+          </View>
+        </View>
+
+        {/* ── Content Cards ── */}
+        <View style={styles.content}>
+          {/* ── Basic Info ── */}
+          <View style={[styles.card, { backgroundColor: c.card, borderColor: c.border }]}>
+            <View style={styles.cardHeader}>
+              <MaterialIcons name="person" size={20} color={primary} />
+              <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Basic Information</ThemedText>
+            </View>
+            <View style={styles.infoGrid}>
+              <InfoRow icon="badge" label="Designation" value={reporter.designation?.name || '—'} c={c} />
+              <InfoRow icon="layers" label="Level" value={levelMeta.label} c={c} />
+              <InfoRow icon="place" label="Location" value={location} c={c} />
+              {(reporter as any).email && <InfoRow icon="email" label="Email" value={(reporter as any).email} c={c} />}
             </View>
           </View>
 
-          {/* KYC */}
-          <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
-            <ThemedText type="defaultSemiBold" style={{ color: c.text }}>
-              KYC
-            </ThemedText>
-            <ThemedText style={{ color: c.muted }}>Status: {reporter.kycStatus || '—'}</ThemedText>
+          {/* ── Publishing Settings ── */}
+          <View style={[styles.card, { backgroundColor: c.card, borderColor: c.border }]}>
+            <View style={styles.cardHeader}>
+              <MaterialIcons name="publish" size={20} color={primary} />
+              <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Publishing</ThemedText>
+            </View>
 
-            {canManageKyc ? (
+            <View style={styles.settingRow}>
+              <View style={{ flex: 1 }}>
+                <ThemedText style={{ color: c.text }}>Auto Publish</ThemedText>
+                <ThemedText style={{ color: c.muted, fontSize: 12 }}>Articles published without review</ThemedText>
+              </View>
+              {canManageAutoPublish ? (
+                autoPublishUpdating ? (
+                  <ActivityIndicator size="small" color={primary} />
+                ) : (
+                  <Switch
+                    value={autoPublish}
+                    onValueChange={onToggleAutoPublish}
+                    trackColor={{ false: c.border, true: alphaBg(primary, 0.4, primary) }}
+                    thumbColor={autoPublish ? primary : c.muted}
+                  />
+                )
+              ) : (
+                <View style={[styles.statusBadge, { backgroundColor: autoPublish ? alphaBg('#10b981', 0.12, c.background) : alphaBg(c.muted, 0.1, c.background) }]}>
+                  <ThemedText style={{ color: autoPublish ? '#10b981' : c.muted, fontSize: 12 }}>
+                    {autoPublish ? 'Enabled' : 'Disabled'}
+                  </ThemedText>
+                </View>
+              )}
+            </View>
+          </View>
+
+          {/* ── KYC ── */}
+          <View style={[styles.card, { backgroundColor: c.card, borderColor: c.border }]}>
+            <View style={styles.cardHeader}>
+              <MaterialIcons name="verified-user" size={20} color={primary} />
+              <ThemedText type="defaultSemiBold" style={{ color: c.text }}>KYC Verification</ThemedText>
+              <View style={{ flex: 1 }} />
+              <View style={[styles.statusBadge, { backgroundColor: kycOk ? alphaBg('#10b981', 0.12, c.background) : kycPending ? alphaBg('#f59e0b', 0.12, c.background) : alphaBg(c.muted, 0.1, c.background) }]}>
+                <MaterialIcons name={kycOk ? 'verified' : kycPending ? 'pending' : 'help-outline'} size={14} color={kycOk ? '#10b981' : kycPending ? '#f59e0b' : c.muted} />
+                <ThemedText style={{ color: kycOk ? '#10b981' : kycPending ? '#f59e0b' : c.muted, fontSize: 12 }}>
+                  {reporter.kycStatus || 'Unknown'}
+                </ThemedText>
+              </View>
+            </View>
+
+            {canManageKyc && (
               <>
                 <Pressable
-                  onPress={() => {
-                    setKycEditing((v) => !v);
-                    setKycMessage(null);
-                  }}
+                  onPress={() => { setKycEditing((v) => !v); setKycMessage(null); }}
                   style={[styles.actionBtn, { borderColor: c.border, backgroundColor: c.background }]}
                 >
-                  <MaterialIcons name="fact-check" size={18} color={c.text} />
-                  <ThemedText type="defaultSemiBold" style={{ color: c.text }}>
-                    {kycEditing ? 'Close KYC Update' : 'Update KYC'}
-                  </ThemedText>
+                  <MaterialIcons name={kycEditing ? 'close' : 'edit'} size={16} color={primary} />
+                  <ThemedText style={{ color: primary, fontWeight: '600' }}>{kycEditing ? 'Cancel' : 'Update KYC'}</ThemedText>
                 </Pressable>
 
-                {kycEditing ? (
-                  <View style={{ gap: 10, marginTop: 10 }}>
-                    <View style={{ gap: 8 }}>
-                      <ThemedText style={{ color: c.muted }}>Status</ThemedText>
-                      <View style={styles.chipSelectRow}>
-                        {(['APPROVED', 'PENDING', 'REJECTED'] as const).map((s) => {
-                          const selected = kycStatusDraft === s;
-                          return (
-                            <Pressable
-                              key={s}
-                              onPress={() => setKycStatusDraft(s)}
-                              style={[
-                                styles.selectChip,
-                                {
-                                  borderColor: selected ? c.tint : c.border,
-                                  backgroundColor: selected ? c.background : c.card,
-                                },
-                              ]}
-                            >
-                              <ThemedText style={{ color: selected ? c.text : c.muted, fontSize: 12 }} type={selected ? 'defaultSemiBold' : undefined}>
-                                {s}
-                              </ThemedText>
-                            </Pressable>
-                          );
-                        })}
-                      </View>
+                {kycEditing && (
+                  <View style={styles.kycForm}>
+                    <ThemedText style={{ color: c.muted, marginBottom: 6 }}>Status</ThemedText>
+                    <View style={styles.chipRow}>
+                      {(['APPROVED', 'PENDING', 'REJECTED'] as const).map((s) => {
+                        const selected = kycStatusDraft === s;
+                        const chipColor = s === 'APPROVED' ? '#10b981' : s === 'PENDING' ? '#f59e0b' : '#ef4444';
+                        return (
+                          <Pressable
+                            key={s}
+                            onPress={() => setKycStatusDraft(s)}
+                            style={[styles.statusChip, { backgroundColor: selected ? chipColor : c.background, borderColor: selected ? chipColor : c.border }]}
+                          >
+                            <ThemedText style={{ color: selected ? '#fff' : c.text, fontSize: 12, fontWeight: '600' }}>{s}</ThemedText>
+                          </Pressable>
+                        );
+                      })}
                     </View>
 
-                    <View style={{ gap: 8 }}>
-                      <ThemedText style={{ color: c.muted }}>Notes</ThemedText>
-                      <TextInput
-                        value={kycNotesDraft}
-                        onChangeText={setKycNotesDraft}
-                        placeholder="e.g. good"
-                        placeholderTextColor={c.muted}
-                        style={[styles.input, { borderColor: c.border, color: c.text, backgroundColor: c.background }]}
-                      />
-                    </View>
+                    <ThemedText style={{ color: c.muted, marginTop: 12, marginBottom: 6 }}>Notes</ThemedText>
+                    <TextInput
+                      value={kycNotesDraft}
+                      onChangeText={setKycNotesDraft}
+                      placeholder="Optional notes..."
+                      placeholderTextColor={c.muted}
+                      style={[styles.input, { borderColor: c.border, color: c.text, backgroundColor: c.background }]}
+                    />
 
-                    <View style={{ gap: 8 }}>
-                      <View style={styles.rowBetweenCompact}>
-                        <ThemedText style={{ color: c.muted }}>Verified Aadhar</ThemedText>
-                        <Switch value={verifiedAadharDraft} onValueChange={setVerifiedAadharDraft} />
-                      </View>
-                      <View style={styles.rowBetweenCompact}>
-                        <ThemedText style={{ color: c.muted }}>Verified PAN</ThemedText>
-                        <Switch value={verifiedPanDraft} onValueChange={setVerifiedPanDraft} />
-                      </View>
-                      <View style={styles.rowBetweenCompact}>
-                        <ThemedText style={{ color: c.muted }}>Verified Work Proof</ThemedText>
-                        <Switch value={verifiedWorkProofDraft} onValueChange={setVerifiedWorkProofDraft} />
-                      </View>
+                    <View style={styles.switchRow}>
+                      <ThemedText style={{ color: c.text, flex: 1 }}>Verified Aadhar</ThemedText>
+                      <Switch value={verifiedAadharDraft} onValueChange={setVerifiedAadharDraft} />
+                    </View>
+                    <View style={styles.switchRow}>
+                      <ThemedText style={{ color: c.text, flex: 1 }}>Verified PAN</ThemedText>
+                      <Switch value={verifiedPanDraft} onValueChange={setVerifiedPanDraft} />
+                    </View>
+                    <View style={styles.switchRow}>
+                      <ThemedText style={{ color: c.text, flex: 1 }}>Verified Work Proof</ThemedText>
+                      <Switch value={verifiedWorkProofDraft} onValueChange={setVerifiedWorkProofDraft} />
                     </View>
 
                     <Pressable
                       onPress={onSubmitKyc}
                       disabled={kycUpdating}
-                      style={[styles.primaryActionBtn, { backgroundColor: c.tint, opacity: kycUpdating ? 0.7 : 1 }]}
+                      style={[styles.primaryBtn, { backgroundColor: primary, opacity: kycUpdating ? 0.7 : 1 }]}
                     >
-                      {kycUpdating ? (
-                        <ActivityIndicator size="small" color={Colors.light.background} />
-                      ) : (
-                        <ThemedText type="defaultSemiBold" style={{ color: Colors.light.background }}>
-                          Save KYC
-                        </ThemedText>
+                      {kycUpdating ? <ActivityIndicator size="small" color={primaryText} /> : (
+                        <>
+                          <MaterialIcons name="save" size={18} color={primaryText} />
+                          <ThemedText style={{ color: primaryText, fontWeight: '600' }}>Save KYC</ThemedText>
+                        </>
                       )}
                     </Pressable>
                   </View>
-                ) : null}
-
-                {kycMessage ? <ThemedText style={{ color: c.muted }}>{kycMessage}</ThemedText> : null}
-              </>
-            ) : null}
-          </View>
-
-          {/* Publishing */}
-          <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
-            <ThemedText type="defaultSemiBold" style={{ color: c.text }}>
-              Publishing
-            </ThemedText>
-
-            <View style={styles.rowBetween}>
-              <ThemedText style={{ color: c.muted }}>Auto publish</ThemedText>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                <ThemedText style={{ color: autoPublish ? c.tint : c.muted }} type={autoPublish ? 'defaultSemiBold' : undefined}>
-                  {autoPublish ? 'Yes' : 'No'}
-                </ThemedText>
-                {canManageAutoPublish ? (
-                  autoPublishUpdating ? (
-                    <ActivityIndicator size="small" color={c.muted} />
-                  ) : (
-                    <Switch value={autoPublish} onValueChange={(v) => onToggleAutoPublish(!!v)} />
-                  )
-                ) : null}
-              </View>
-            </View>
-          </View>
-
-          {/* Subscription + payments */}
-          <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
-            <ThemedText type="defaultSemiBold" style={{ color: c.text }}>
-              Subscription & Payment
-            </ThemedText>
-
-            {subscriptionActive ? (
-              <>
-                <ThemedText style={{ color: c.muted }}>Subscription: Active</ThemedText>
-                <ThemedText style={{ color: c.muted }}>
-                  Monthly: {formatMoney(reporter.monthlySubscriptionAmount)} • ID Card charge: {formatMoney(reporter.idCardCharge)}
-                </ThemedText>
-                <ThemedText style={{ color: c.muted }}>
-                  Payment ({formatMonthYear(reporter.stats?.subscriptionPayment?.currentMonth?.month, reporter.stats?.subscriptionPayment?.currentMonth?.year)}):{' '}
-                  {reporter.stats?.subscriptionPayment?.currentMonth?.status ?? '—'}
-                </ThemedText>
-              </>
-            ) : (
-              <>
-                <ThemedText style={{ color: c.muted }}>Subscription: Inactive</ThemedText>
-                {canManageBilling ? (
-                  <Pressable onPress={onAddSubscription} style={[styles.actionBtn, { borderColor: c.border, backgroundColor: c.background }]}>
-                    <MaterialIcons name="add-circle-outline" size={18} color={c.text} />
-                    <ThemedText type="defaultSemiBold" style={{ color: c.text }}>
-                      Add Subscription
-                    </ThemedText>
-                  </Pressable>
-                ) : null}
-                {subscriptionMessage ? <ThemedText style={{ color: c.muted }}>{subscriptionMessage}</ThemedText> : null}
+                )}
+                {kycMessage && <ThemedText style={{ color: c.muted, marginTop: 8 }}>{kycMessage}</ThemedText>}
               </>
             )}
           </View>
 
-          {/* Manual login */}
-          <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
-            <ThemedText type="defaultSemiBold" style={{ color: c.text }}>
-              Manual Login
-            </ThemedText>
-            {manualLoginEnabled ? (
-              <>
-                <ThemedText style={{ color: c.muted }}>Enabled: Yes</ThemedText>
-                <ThemedText style={{ color: c.muted }}>Days: {reporter.manualLoginDays ?? '—'}</ThemedText>
-              </>
-            ) : (
-              <>
-                <ThemedText style={{ color: c.muted }}>Enabled: No</ThemedText>
-                {canManageBilling ? (
-                  <Pressable onPress={onEnableManualLogin} style={[styles.actionBtn, { borderColor: c.border, backgroundColor: c.background }]}>
-                    <MaterialIcons name="schedule" size={18} color={c.text} />
-                    <ThemedText type="defaultSemiBold" style={{ color: c.text }}>
-                      Enable Manual Login
-                    </ThemedText>
-                  </Pressable>
-                ) : null}
-                {manualLoginMessage ? <ThemedText style={{ color: c.muted }}>{manualLoginMessage}</ThemedText> : null}
-              </>
+          {/* ── Subscription ── */}
+          <View style={[styles.card, { backgroundColor: c.card, borderColor: c.border }]}>
+            <View style={styles.cardHeader}>
+              <MaterialIcons name="card-membership" size={20} color={primary} />
+              <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Subscription</ThemedText>
+              <View style={{ flex: 1 }} />
+              <View style={[styles.statusBadge, { backgroundColor: subscriptionActive ? alphaBg('#10b981', 0.12, c.background) : alphaBg(c.muted, 0.1, c.background) }]}>
+                <MaterialIcons name={subscriptionActive ? 'check-circle' : 'cancel'} size={14} color={subscriptionActive ? '#10b981' : c.muted} />
+                <ThemedText style={{ color: subscriptionActive ? '#10b981' : c.muted, fontSize: 12 }}>
+                  {subscriptionActive ? 'Active' : 'Inactive'}
+                </ThemedText>
+              </View>
+            </View>
+
+            {subscriptionActive && (
+              <View style={styles.infoGrid}>
+                <InfoRow icon="payments" label="Monthly Fee" value={formatMoney(reporter.monthlySubscriptionAmount)} c={c} />
+                <InfoRow icon="credit-card" label="ID Card Charge" value={formatMoney(reporter.idCardCharge)} c={c} />
+                <InfoRow icon="event" label="Payment Status" value={reporter.stats?.subscriptionPayment?.currentMonth?.status || '—'} c={c} />
+              </View>
             )}
           </View>
 
-          {/* Articles */}
-          <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
-            <ThemedText type="defaultSemiBold" style={{ color: c.text }}>
-              Articles
-            </ThemedText>
-
-            <ThemedText style={{ color: c.muted }}>Total</ThemedText>
-            <View style={styles.tileRow}>
-              <View style={[styles.tile, { borderColor: c.border, backgroundColor: c.background }]}>
-                <MaterialIcons name="upload-file" size={18} color={c.muted} />
-                <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 16 }}>
-                  {reporter.stats?.newspaperArticles?.total?.submitted ?? 0}
-                </ThemedText>
-                <ThemedText style={{ color: c.muted, fontSize: 12 }}>Submitted</ThemedText>
-              </View>
-              <View style={[styles.tile, { borderColor: c.border, backgroundColor: c.background }]}>
-                <MaterialIcons name="check-circle-outline" size={18} color={c.muted} />
-                <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 16 }}>
-                  {reporter.stats?.newspaperArticles?.total?.published ?? 0}
-                </ThemedText>
-                <ThemedText style={{ color: c.muted, fontSize: 12 }}>Published</ThemedText>
-              </View>
-              <View style={[styles.tile, { borderColor: c.border, backgroundColor: c.background }]}>
-                <MaterialIcons name="cancel" size={18} color={c.muted} />
-                <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 16 }}>
-                  {reporter.stats?.newspaperArticles?.total?.rejected ?? 0}
-                </ThemedText>
-                <ThemedText style={{ color: c.muted, fontSize: 12 }}>Rejected</ThemedText>
-              </View>
+          {/* ── Articles Stats ── */}
+          <View style={[styles.card, { backgroundColor: c.card, borderColor: c.border }]}>
+            <View style={styles.cardHeader}>
+              <MaterialIcons name="analytics" size={20} color={primary} />
+              <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Article Statistics</ThemedText>
             </View>
 
-            <ThemedText style={{ color: c.muted, marginTop: 6 }}>This Month</ThemedText>
-            <View style={styles.tileRow}>
-              <View style={[styles.tile, { borderColor: c.border, backgroundColor: c.background }]}>
-                <MaterialIcons name="upload-file" size={18} color={c.muted} />
-                <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 16 }}>
-                  {reporter.stats?.newspaperArticles?.currentMonth?.submitted ?? 0}
-                </ThemedText>
-                <ThemedText style={{ color: c.muted, fontSize: 12 }}>Submitted</ThemedText>
-              </View>
-              <View style={[styles.tile, { borderColor: c.border, backgroundColor: c.background }]}>
-                <MaterialIcons name="check-circle-outline" size={18} color={c.muted} />
-                <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 16 }}>
-                  {reporter.stats?.newspaperArticles?.currentMonth?.published ?? 0}
-                </ThemedText>
-                <ThemedText style={{ color: c.muted, fontSize: 12 }}>Published</ThemedText>
-              </View>
-              <View style={[styles.tile, { borderColor: c.border, backgroundColor: c.background }]}>
-                <MaterialIcons name="cancel" size={18} color={c.muted} />
-                <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 16 }}>
-                  {reporter.stats?.newspaperArticles?.currentMonth?.rejected ?? 0}
-                </ThemedText>
-                <ThemedText style={{ color: c.muted, fontSize: 12 }}>Rejected</ThemedText>
-              </View>
+            <ThemedText style={{ color: c.muted, fontSize: 12, marginBottom: 8 }}>All Time</ThemedText>
+            <View style={styles.statsGrid}>
+              <StatTile icon="upload-file" label="Submitted" value={reporter.stats?.newspaperArticles?.total?.submitted ?? 0} color="#6366f1" c={c} />
+              <StatTile icon="check-circle" label="Published" value={reporter.stats?.newspaperArticles?.total?.published ?? 0} color="#10b981" c={c} />
+              <StatTile icon="cancel" label="Rejected" value={reporter.stats?.newspaperArticles?.total?.rejected ?? 0} color="#ef4444" c={c} />
             </View>
 
-            <ThemedText style={{ color: c.muted, marginTop: 6 }}>Web Views</ThemedText>
-            <View style={styles.tileRow2}>
-              <View style={[styles.tile, { borderColor: c.border, backgroundColor: c.background }]}>
-                <MaterialIcons name="public" size={18} color={c.muted} />
-                <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 16 }}>
-                  {reporter.stats?.webArticleViews?.total ?? 0}
-                </ThemedText>
-                <ThemedText style={{ color: c.muted, fontSize: 12 }}>Total</ThemedText>
-              </View>
-              <View style={[styles.tile, { borderColor: c.border, backgroundColor: c.background }]}>
-                <MaterialIcons name="calendar-today" size={18} color={c.muted} />
-                <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 16 }}>
-                  {reporter.stats?.webArticleViews?.currentMonth ?? 0}
-                </ThemedText>
-                <ThemedText style={{ color: c.muted, fontSize: 12 }}>This Month</ThemedText>
-              </View>
-              <View style={[styles.tileSpacer]} />
+            <ThemedText style={{ color: c.muted, fontSize: 12, marginTop: 12, marginBottom: 8 }}>This Month</ThemedText>
+            <View style={styles.statsGrid}>
+              <StatTile icon="upload-file" label="Submitted" value={reporter.stats?.newspaperArticles?.currentMonth?.submitted ?? 0} color="#6366f1" c={c} />
+              <StatTile icon="check-circle" label="Published" value={reporter.stats?.newspaperArticles?.currentMonth?.published ?? 0} color="#10b981" c={c} />
+              <StatTile icon="cancel" label="Rejected" value={reporter.stats?.newspaperArticles?.currentMonth?.rejected ?? 0} color="#ef4444" c={c} />
             </View>
           </View>
 
-          {/* ID card */}
-          <View style={[styles.section, { backgroundColor: c.card, borderColor: c.border }]}>
-            <ThemedText type="defaultSemiBold" style={{ color: c.text }}>
-              ID Card
-            </ThemedText>
+          {/* ── ID Card ── */}
+          <View style={[styles.card, { backgroundColor: c.card, borderColor: c.border }]}>
+            <View style={styles.cardHeader}>
+              <MaterialIcons name="badge" size={20} color={primary} />
+              <ThemedText type="defaultSemiBold" style={{ color: c.text }}>ID Card</ThemedText>
+            </View>
+
             {idCardLoading ? (
-              <View style={{ marginTop: 6 }}>
-                <ActivityIndicator size="small" color={c.muted} />
+              <View style={{ paddingVertical: 16, alignItems: 'center' }}>
+                <ActivityIndicator color={primary} />
               </View>
             ) : idCard ? (
-              <View
-                style={[
-                  styles.idCardBox,
-                  {
-                    borderColor: isPast(idCard.expiresAt) ? Colors[scheme].danger : c.border,
-                    backgroundColor: c.background,
-                  },
-                ]}
-              >
-                <View style={styles.idCardTopRow}>
-                  <View style={{ flex: 1 }}>
-                    <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 16 }}>
-                      {idCard.cardNumber || '—'}
-                    </ThemedText>
-                    <ThemedText style={{ color: c.muted }}>
-                      Issued: {formatDateISO(idCard.issuedAt)}
-                    </ThemedText>
-                    <ThemedText style={{ color: isPast(idCard.expiresAt) ? Colors[scheme].danger : c.muted }}>
-                      Expires: {formatDateISO(idCard.expiresAt)}{isPast(idCard.expiresAt) ? ' (Expired)' : ''}
-                    </ThemedText>
-                  </View>
-
-                  <View style={[styles.idCardStatusPill, { borderColor: c.border, backgroundColor: c.card }]}>
-                    <MaterialIcons name={isPast(idCard.expiresAt) ? 'error-outline' : 'verified'} size={18} color={isPast(idCard.expiresAt) ? Colors[scheme].danger : c.tint} />
-                    <ThemedText style={{ color: isPast(idCard.expiresAt) ? Colors[scheme].danger : c.tint, fontSize: 12 }} type="defaultSemiBold">
-                      {isPast(idCard.expiresAt) ? 'Expired' : 'Active'}
-                    </ThemedText>
-                  </View>
+              <View style={[styles.idCardBox, { borderColor: isPast(idCard.expiresAt) ? '#ef4444' : c.border, backgroundColor: c.background }]}>
+                <View style={{ flex: 1 }}>
+                  <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 16 }}>{idCard.cardNumber || '—'}</ThemedText>
+                  <ThemedText style={{ color: c.muted, fontSize: 12, marginTop: 4 }}>Issued: {formatDateISO(idCard.issuedAt)}</ThemedText>
+                  <ThemedText style={{ color: isPast(idCard.expiresAt) ? '#ef4444' : c.muted, fontSize: 12 }}>
+                    Expires: {formatDateISO(idCard.expiresAt)}{isPast(idCard.expiresAt) ? ' (Expired)' : ''}
+                  </ThemedText>
+                </View>
+                <View style={[styles.idCardStatus, { backgroundColor: isPast(idCard.expiresAt) ? alphaBg('#ef4444', 0.12, c.background) : alphaBg('#10b981', 0.12, c.background) }]}>
+                  <MaterialIcons name={isPast(idCard.expiresAt) ? 'error' : 'verified'} size={16} color={isPast(idCard.expiresAt) ? '#ef4444' : '#10b981'} />
                 </View>
               </View>
             ) : (
-              <ThemedText style={{ color: c.muted }}>
-                {idCardError || 'No ID card found'}
-              </ThemedText>
+              <ThemedText style={{ color: c.muted }}>No ID card generated yet</ThemedText>
             )}
 
-            <ThemedText style={{ color: c.muted, marginTop: 6 }}>
-              {idCard ? 'Download the ID card PDF.' : 'Generate the ID card to enable download.'}
-            </ThemedText>
-
-            <Pressable onPress={onIdCardPrimaryAction} style={[styles.secondaryBtn, { borderColor: c.border, backgroundColor: c.background }]}>
-              {idCardUpdating ? (
-                <ActivityIndicator size="small" color={c.muted} />
-              ) : (
-                <ThemedText type="defaultSemiBold" style={{ color: c.text }}>
-                  {idCard ? 'Download ID Card' : 'Generate ID Card'}
-                </ThemedText>
+            <Pressable
+              onPress={onIdCardPrimaryAction}
+              disabled={idCardUpdating}
+              style={[styles.actionBtn, { borderColor: primary, backgroundColor: alphaBg(primary, 0.08, c.background), marginTop: 12 }]}
+            >
+              {idCardUpdating ? <ActivityIndicator size="small" color={primary} /> : (
+                <>
+                  <MaterialIcons name={idCard ? 'download' : 'add-card'} size={18} color={primary} />
+                  <ThemedText style={{ color: primary, fontWeight: '600' }}>{idCard ? 'Download PDF' : 'Generate ID Card'}</ThemedText>
+                </>
               )}
             </Pressable>
-
-            {idCardMessage ? <ThemedText style={{ color: c.muted }}>{idCardMessage}</ThemedText> : null}
+            {idCardMessage && <ThemedText style={{ color: c.muted, marginTop: 8 }}>{idCardMessage}</ThemedText>}
           </View>
-        </ScrollView>
-      ) : (
-        <View style={styles.center}>
-          <ThemedText style={{ color: c.muted }}>Reporter not found</ThemedText>
         </View>
-      )}
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
+/* ─────────────────────────────  Sub-Components  ───────────────────────────── */
+
+function InfoRow({ icon, label, value, c }: { icon: keyof typeof MaterialIcons.glyphMap; label: string; value: string; c: typeof Colors.light }) {
+  return (
+    <View style={styles.infoRow}>
+      <MaterialIcons name={icon} size={16} color={c.muted} />
+      <ThemedText style={{ color: c.muted, flex: 1 }}>{label}</ThemedText>
+      <ThemedText style={{ color: c.text, fontWeight: '500' }}>{value}</ThemedText>
+    </View>
+  );
+}
+
+function StatTile({ icon, label, value, color, c }: { icon: keyof typeof MaterialIcons.glyphMap; label: string; value: number; color: string; c: typeof Colors.light }) {
+  return (
+    <View style={[styles.statTile, { backgroundColor: alphaBg(color, 0.08, c.background), borderColor: alphaBg(color, 0.2, c.border) }]}>
+      <MaterialIcons name={icon} size={18} color={color} />
+      <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 18 }}>{value}</ThemedText>
+      <ThemedText style={{ color: c.muted, fontSize: 11 }}>{label}</ThemedText>
+    </View>
+  );
+}
+
+function ReporterDetailSkeleton({ scheme, onBack }: { scheme: 'light' | 'dark'; onBack: () => void }) {
+  const c = Colors[scheme];
+  return (
+    <ScrollView showsVerticalScrollIndicator={false}>
+      <LinearGradient colors={[c.muted, alphaBg(c.muted, 0.7, c.muted)]} style={styles.hero}>
+        <Pressable onPress={onBack} style={styles.backBtn} hitSlop={12}>
+          <MaterialIcons name="arrow-back" size={22} color="#fff" />
+        </Pressable>
+        <View style={styles.heroContent}>
+          <Skeleton width={80} height={80} borderRadius={40} />
+          <View style={{ marginTop: 12 }}>
+            <Skeleton width={180} height={24} borderRadius={12} />
+          </View>
+          <View style={{ marginTop: 8, flexDirection: 'row', gap: 8 }}>
+            <Skeleton width={70} height={24} borderRadius={12} />
+            <Skeleton width={90} height={24} borderRadius={12} />
+          </View>
+        </View>
+      </LinearGradient>
+      <View style={styles.quickStatsRow}>
+        {[1, 2, 3].map((i) => (
+          <View key={i} style={[styles.quickStat, { backgroundColor: c.card, borderColor: c.border }]}>
+            <Skeleton width={40} height={40} borderRadius={20} />
+            <Skeleton width={50} height={18} borderRadius={9} style={{ marginTop: 8 }} />
+            <Skeleton width={60} height={12} borderRadius={6} style={{ marginTop: 4 }} />
+          </View>
+        ))}
+      </View>
+      <View style={styles.content}>
+        {[1, 2, 3].map((i) => (
+          <View key={i} style={[styles.card, { backgroundColor: c.card, borderColor: c.border }]}>
+            <View style={{ flexDirection: 'row', gap: 10, marginBottom: 12 }}>
+              <Skeleton width={24} height={24} borderRadius={12} />
+              <Skeleton width={140} height={18} borderRadius={9} />
+            </View>
+            <Skeleton width="100%" height={14} borderRadius={7} style={{ marginBottom: 8 }} />
+            <Skeleton width="80%" height={14} borderRadius={7} />
+          </View>
+        ))}
+      </View>
+    </ScrollView>
+  );
+}
+
+/* ─────────────────────────────  Styles  ───────────────────────────── */
+
 const styles = StyleSheet.create({
   safe: { flex: 1 },
-  appBar: {
-    height: 54,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    gap: 12,
-    borderBottomWidth: 1,
+
+  /* Hero */
+  hero: {
+    paddingTop: 52,
+    paddingBottom: 32,
+    paddingHorizontal: 20,
+    borderBottomLeftRadius: 32,
+    borderBottomRightRadius: 32,
   },
-  iconBtn: {
+  backBtn: {
+    position: 'absolute',
+    top: 12,
+    left: 16,
     width: 40,
     height: 40,
     borderRadius: 12,
-    borderWidth: 1,
+    backgroundColor: 'rgba(255,255,255,0.15)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 16 },
-  content: { padding: 12, paddingBottom: 20, gap: 12 },
-
-  headerCard: { borderWidth: 1, borderRadius: 16, padding: 14 },
-  headerRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  avatar: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    borderWidth: 1,
+  heroContent: { alignItems: 'center', marginTop: 8 },
+  avatarLarge: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    backgroundColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
+    borderWidth: 3,
+    borderColor: 'rgba(255,255,255,0.3)',
   },
   avatarImg: { width: '100%', height: '100%' },
+  heroName: { color: '#fff', fontSize: 22, fontWeight: '700', marginTop: 12, textAlign: 'center' },
+  heroMeta: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8, marginTop: 10 },
+  heroPill: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 16 },
+  heroPillText: { color: '#fff', fontSize: 12, fontWeight: '500' },
+  heroContactRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12 },
+  heroContactText: { color: 'rgba(255,255,255,0.9)', fontSize: 14 },
 
-  section: { borderWidth: 1, borderRadius: 16, padding: 14, gap: 6 },
-  rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: 6 },
-
-  actionBtn: {
-    marginTop: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 12,
-    borderWidth: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    minHeight: 44,
-  },
-
-  primaryActionBtn: {
-    marginTop: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 44,
-  },
-
-  input: {
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 14,
-  },
-
-  chipSelectRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  selectChip: {
-    borderWidth: 1,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-
-  rowBetweenCompact: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
-
-  tileRow: { flexDirection: 'row', gap: 10, marginTop: 6 },
-  tileRow2: { flexDirection: 'row', gap: 10, marginTop: 6 },
-  tile: {
+  /* Quick Stats */
+  quickStatsRow: { flexDirection: 'row', paddingHorizontal: 16, marginTop: -20, gap: 10 },
+  quickStat: {
     flex: 1,
-    borderWidth: 1,
-    borderRadius: 14,
-    paddingVertical: 12,
-    paddingHorizontal: 10,
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    minHeight: 86,
+    paddingVertical: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 2,
   },
-  tileSpacer: { flex: 1 },
+  quickStatIcon: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', marginBottom: 6 },
 
-  primaryBtn: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, marginTop: 10 },
-  secondaryBtn: {
-    marginTop: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 12,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 44,
-  },
+  /* Content */
+  content: { padding: 16, gap: 16, paddingBottom: 32 },
 
-  idCardBox: {
-    marginTop: 8,
-    borderWidth: 1,
-    borderRadius: 14,
-    padding: 12,
-  },
-  idCardTopRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-  },
-  idCardStatusPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    borderWidth: 1,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
+  /* Cards */
+  card: { borderRadius: 18, borderWidth: 1, padding: 16 },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 },
+
+  /* Info */
+  infoGrid: { gap: 10 },
+  infoRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+
+  /* Settings */
+  settingRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  statusBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12 },
+
+  /* Actions */
+  actionBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, borderWidth: 1 },
+  primaryBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, paddingHorizontal: 16, borderRadius: 12, marginTop: 12 },
+  retryBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 12, marginTop: 12 },
+
+  /* KYC Form */
+  kycForm: { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: 'rgba(0,0,0,0.05)' },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  statusChip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1 },
+  input: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, fontSize: 14 },
+  switchRow: { flexDirection: 'row', alignItems: 'center', marginTop: 10 },
+
+  /* Stats */
+  statsGrid: { flexDirection: 'row', gap: 10 },
+  statTile: { flex: 1, alignItems: 'center', paddingVertical: 14, borderRadius: 14, borderWidth: 1, gap: 4 },
+
+  /* ID Card */
+  idCardBox: { flexDirection: 'row', alignItems: 'center', padding: 14, borderRadius: 14, borderWidth: 1, gap: 12 },
+  idCardStatus: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+
+  /* Error */
+  errorCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
+  errorIcon: { width: 96, height: 96, borderRadius: 48, alignItems: 'center', justifyContent: 'center' },
 });

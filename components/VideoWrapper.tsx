@@ -10,6 +10,16 @@ import('expo-video')
 		VideoView = undefined as any;
 	});
 
+// Suppress expo-keep-awake activation errors (expo-video dependency issue)
+if (typeof globalThis !== 'undefined') {
+	const origErr = console.error;
+	console.error = (...args: any[]) => {
+		const msg = String(args[0] || '');
+		if (msg.includes('Unable to activate keep awake')) return;
+		origErr.apply(console, args);
+	};
+}
+
 type VideoWrapperProps = {
 	player: any;
 	style?: StyleProp<ViewStyle>;

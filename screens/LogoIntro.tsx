@@ -20,10 +20,11 @@ const COLORS = {
   background: '#FFFFFF',
 } as const;
 
-const FADE_IN_MS = 320;
-const FADE_OUT_MS = 260;
-const VISIBLE_MS = 1500;
+const FADE_IN_MS = 160;
+const FADE_OUT_MS = 140;
+const VISIBLE_MS = 250;
 const START_SCALE = 0.9;
+const LOGO_BOX_SIZE = 280;
 
 type LogoItem = {
   key: string;
@@ -122,7 +123,9 @@ export default function LogoIntro({ onDone }: Props) {
   return (
     <View style={styles.container}>
       <Animated.View style={[styles.logoWrap, animatedStyle]}>
-        <CurrentLogo width={'78%'} height={'78%'} />
+        <View style={styles.logoBox}>
+          <CurrentLogo width={LOGO_BOX_SIZE} height={LOGO_BOX_SIZE} />
+        </View>
       </Animated.View>
     </View>
   );
@@ -137,6 +140,12 @@ const styles = StyleSheet.create({
   },
   logoWrap: {
     width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  logoBox: {
+    width: LOGO_BOX_SIZE,
+    height: LOGO_BOX_SIZE,
     alignItems: 'center',
     justifyContent: 'center',
   },

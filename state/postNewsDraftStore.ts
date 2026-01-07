@@ -31,6 +31,9 @@ export type PostNewsDraft = {
   coverImageUri?: string;
   coverCaption?: string;
   imageUris: string[];
+
+  // Step-3 optional media
+  videoUri?: string;
 };
 
 const emptyDraft: PostNewsDraft = {
@@ -46,20 +49,27 @@ const emptyDraft: PostNewsDraft = {
   coverImageUri: undefined,
   coverCaption: undefined,
   imageUris: [],
+
+  videoUri: undefined,
 };
 
 export type PostNewsDraftState = {
   draft: PostNewsDraft;
+  justPosted: boolean;
   setDraft: (patch: Partial<PostNewsDraft>) => void;
   resetDraft: () => void;
   setBullets: (bullets: string[]) => void;
   setImageUris: (imageUris: string[]) => void;
+  setJustPosted: (val: boolean) => void;
 };
 
 export const usePostNewsDraftStore = create<PostNewsDraftState>((set) => ({
   draft: emptyDraft,
+  justPosted: false,
   setDraft: (patch) => set((s) => ({ draft: { ...s.draft, ...patch } })),
-  resetDraft: () => set({ draft: emptyDraft }),
+  // Keep justPosted flag intact during reset - it will be cleared when user enters post-news fresh
+  resetDraft: () => set((s) => ({ draft: emptyDraft, justPosted: s.justPosted })),
   setBullets: (bullets) => set((s) => ({ draft: { ...s.draft, bullets } })),
   setImageUris: (imageUris) => set((s) => ({ draft: { ...s.draft, imageUris } })),
+  setJustPosted: (val) => set({ justPosted: val }),
 }));

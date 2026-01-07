@@ -51,7 +51,7 @@ export default function PostNewsMediaScreen() {
   const primary = c.tint;
   const router = useRouter();
 
-  const { draft, setDraft, setImageUris, resetDraft } = usePostNewsDraftStore();
+  const { draft, setDraft, setImageUris, resetDraft, setJustPosted } = usePostNewsDraftStore();
 
   const [tenantId, setTenantId] = useState<string>('');
   const [tenantCategories, setTenantCategories] = useState<CategoryItem[] | null>(null);
@@ -62,6 +62,7 @@ export default function PostNewsMediaScreen() {
   const [showCongrats, setShowCongrats] = useState(false);
 
   const congratsAnim = useMemo(() => require('../../assets/lotti/congratulation.json'), []);
+  const newsIconAnim = useMemo(() => require('../../assets/lotti/News icon.json'), []);
 
   // Load tenantId for categories
   React.useEffect(() => {
@@ -113,7 +114,8 @@ export default function PostNewsMediaScreen() {
     const mediaTypeImages = (ImagePicker as any).MediaType?.Images ?? 'images';
     const res = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: mediaTypeImages,
-      allowsEditing: !!opts.cover,
+      // Skip native cropper - we display in 16:9 container with cover mode
+      allowsEditing: false,
       quality: 0.85,
     });
 
@@ -129,6 +131,29 @@ export default function PostNewsMediaScreen() {
     const next = [...(draft.imageUris || []), uri];
     setImageUris(next);
   }, [draft.imageUris, setDraft, setImageUris]);
+
+  const pickVideo = useCallback(async () => {
+    const perm = await requestMediaPermissionsOnly();
+    if (perm.mediaLibrary !== 'granted' && perm.mediaLibrary !== 'limited') {
+      Alert.alert('Permission needed', 'Please allow Photos / Media permission.');
+      return;
+    }
+
+    const mediaTypeVideos = (ImagePicker as any).MediaType?.Videos ?? 'videos';
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: mediaTypeVideos,
+      allowsEditing: false,
+      quality: 1,
+    });
+    if (res.canceled) return;
+    const uri = res.assets?.[0]?.uri;
+    if (!uri) return;
+    setDraft({ videoUri: uri });
+  }, [setDraft]);
+
+  const clearVideo = useCallback(() => {
+    setDraft({ videoUri: undefined });
+  }, [setDraft]);
 
   const removeExtra = useCallback((uri: string) => {
     const next = (draft.imageUris || []).filter((x) => x !== uri);
@@ -168,29 +193,15 @@ export default function PostNewsMediaScreen() {
         uploaded.push(up);
       }
 
+      const videoUri = String((draft as any)?.videoUri || '').trim();
+      if (videoUri) {
+        setProgress('Uploading video…');
+        const upVid = await uploadMedia({ uri: videoUri, type: 'video', folder: 'posts' });
+        uploaded.push(upVid);
+      }
+
       setProgress('Posting…');
       const languageCode = String(draft.languageCode || (await readSelectedLanguageCode()) || 'en');
-
-      // Status rule (per product requirement):
-      // - TENANT_REPORTER/REPORTER: autoPublish=true => published, else pending
-      // - Other roles: pending by default (we don't have an explicit "save draft" UI here)
-      let status: 'draft' | 'pending' | 'published' = 'pending';
-      try {
-        const t = await loadTokens();
-        const roleRaw = (t as any)?.user?.role;
-        const roleSaved = await AsyncStorage.getItem('profile_role');
-        const role = String(roleRaw || roleSaved || '').trim().toUpperCase().replace(/[^A-Z0-9_]+/g, '_');
-        if (role === 'TENANT_REPORTER' || role === 'REPORTER') {
-          const autoPublish = !!(
-            (t as any)?.session?.tenantReporter?.autoPublish ??
-            (t as any)?.session?.reporter?.autoPublish ??
-            (t as any)?.user?.autoPublish
-          );
-          status = autoPublish ? 'published' : 'pending';
-        }
-      } catch {
-        // ignore; keep default
-      }
 
       const paragraphs = splitParagraphs(String(draft.body || ''));
       const lead = paragraphs[0] || '';
@@ -208,6 +219,7 @@ export default function PostNewsMediaScreen() {
       }
 
       const imageUrls = uploaded.filter((m) => m.type === 'image').map((m) => m.url).filter(Boolean);
+      const videoUrls = uploaded.filter((m) => m.type === 'video').map((m) => m.url).filter(Boolean);
       const coverUrl = imageUrls[0];
 
       const res = await createNewspaperArticle({
@@ -221,22 +233,26 @@ export default function PostNewsMediaScreen() {
         content: content.length ? content : undefined,
         coverImageUrl: coverUrl || undefined,
         images: imageUrls.length ? imageUrls : undefined,
-        mediaUrls: imageUrls.length ? imageUrls : undefined,
+        videos: videoUrls.length ? videoUrls : undefined,
+        mediaUrls: (imageUrls.length || videoUrls.length) ? [...imageUrls, ...videoUrls] : undefined,
         location,
-        status,
       });
 
-      // Show success animation after 200 OK
-      setShowCongrats(true);
+      // BEST PRACTICE: Show full-screen success, then navigate
+      // 1. Set flags first to prevent any modals from appearing
+      setJustPosted(true);
       resetDraft();
+      
+      // 2. Show congrats animation
+      setShowCongrats(true);
+      
+      // 3. After animation plays, navigate fresh
       setTimeout(() => {
-        try {
-          setShowCongrats(false);
-          router.back();
-        } catch {
-          // ignore
-        }
-      }, 1400);
+        setShowCongrats(false);
+        // Simply replace to post-news - no need to dismissAll
+        router.replace('/post-news' as any);
+      }, 2000);
+      
       return res;
     } catch (e: any) {
       Alert.alert('Post failed', e?.message || 'Could not post your news');
@@ -244,7 +260,7 @@ export default function PostNewsMediaScreen() {
       setProgress('');
       setBusy(false);
     }
-  }, [draft, resetDraft, router]);
+  }, [draft, resetDraft, router, setJustPosted]);
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['top', 'bottom']}>
@@ -270,20 +286,29 @@ export default function PostNewsMediaScreen() {
         <View style={styles.appBarRightSpacer} />
       </View>
 
-      <Modal visible={showCongrats} transparent animationType="fade">
+      <Modal visible={showCongrats} transparent={false} animationType="fade">
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: c.background, justifyContent: 'center', alignItems: 'center' }]}>
+          <LottieView
+            source={congratsAnim}
+            autoPlay
+            loop={false}
+            style={{ width: 280, height: 280 }}
+          />
+          <ThemedText type="defaultSemiBold" style={{ color: c.text, marginTop: 16, fontSize: 18 }}>
+            Posted successfully!
+          </ThemedText>
+        </View>
+      </Modal>
+
+      <Modal visible={busy && !showCongrats} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={[StyleSheet.absoluteFill, { backgroundColor: c.text, opacity: 0.25 }]} />
-          <View style={[styles.modalCard, { backgroundColor: c.card, borderColor: c.border, alignItems: 'center' }]}
-          >
-            <LottieView
-              source={congratsAnim}
-              autoPlay
-              loop={false}
-              style={{ width: 220, height: 220 }}
-            />
-            <ThemedText type="defaultSemiBold" style={{ color: c.text, marginTop: 6 }}>
-              Posted successfully
+          <View style={[styles.modalCard, { backgroundColor: c.card, borderColor: c.border, alignItems: 'center' }]}>
+            <LottieView source={newsIconAnim} autoPlay loop style={{ width: 160, height: 160 }} />
+            <ThemedText style={{ color: c.text, marginTop: 8 }}>
+              {progress || 'Posting…'}
             </ThemedText>
+            <ActivityIndicator style={{ marginTop: 12 }} />
           </View>
         </View>
       </Modal>
@@ -313,11 +338,19 @@ export default function PostNewsMediaScreen() {
           </View>
 
           <View style={[styles.section, { borderColor: c.border, backgroundColor: c.card }]}>
-            <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Cover image (required)</ThemedText>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Cover image (required)</ThemedText>
+              <View style={{ backgroundColor: primary, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 }}>
+                <ThemedText style={{ color: '#fff', fontSize: 11, fontWeight: '600' }}>16:9</ThemedText>
+              </View>
+            </View>
+            <ThemedText style={{ color: c.text, fontSize: 12, marginTop: 4 }}>
+              Image will display in 16:9 banner format
+            </ThemedText>
 
             {!!draft.coverImageUri ? (
               <View style={{ marginTop: 12 }}>
-                <Image source={{ uri: draft.coverImageUri }} style={[styles.coverImg, { borderColor: c.border }]} />
+                <Image source={{ uri: draft.coverImageUri }} style={[styles.coverImg, { borderColor: c.border }]} resizeMode="cover" />
                 <Pressable
                   onPress={() => pickImage({ cover: true })}
                   style={({ pressed }) => [
@@ -335,12 +368,13 @@ export default function PostNewsMediaScreen() {
                 onPress={() => pickImage({ cover: true })}
                 style={({ pressed }) => [
                   styles.pickCard,
-                  { borderColor: c.border, backgroundColor: c.background },
+                  { borderColor: primary, backgroundColor: primary + '10' },
                   pressed && styles.pressed,
                 ]}
               >
                 <MaterialIcons name="add-photo-alternate" size={26} color={primary} />
                 <ThemedText type="defaultSemiBold" style={{ color: primary }}>Choose cover image</ThemedText>
+                <ThemedText style={{ color: c.text, fontSize: 12, marginTop: 4 }}>Displayed in 16:9 banner format</ThemedText>
               </Pressable>
             )}
 
@@ -352,6 +386,45 @@ export default function PostNewsMediaScreen() {
               placeholderTextColor={c.muted}
               style={[styles.input, { borderColor: c.border, color: c.text, backgroundColor: c.background }]}
             />
+          </View>
+
+          <View style={[styles.section, { borderColor: c.border, backgroundColor: c.card }]}
+          >
+            <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Video (optional)</ThemedText>
+
+            {draft.videoUri ? (
+              <View style={{ marginTop: 12, gap: 10 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <MaterialIcons name="videocam" size={20} color={primary} />
+                  <ThemedText style={{ color: c.text, flex: 1 }} numberOfLines={1}>
+                    {String(draft.videoUri).split('/').pop() || 'Selected video'}
+                  </ThemedText>
+                </View>
+                <Pressable
+                  onPress={clearVideo}
+                  style={({ pressed }) => [
+                    styles.smallBtn,
+                    { borderColor: c.border, backgroundColor: c.background },
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <MaterialIcons name="close" size={18} color={c.text} />
+                  <ThemedText style={{ color: c.text }}>Remove video</ThemedText>
+                </Pressable>
+              </View>
+            ) : (
+              <Pressable
+                onPress={() => void pickVideo()}
+                style={({ pressed }) => [
+                  styles.smallBtn,
+                  { borderColor: c.border, backgroundColor: c.background, marginTop: 12 },
+                  pressed && styles.pressed,
+                ]}
+              >
+                <MaterialIcons name="upload" size={18} color={primary} />
+                <ThemedText style={{ color: primary }}>Upload video</ThemedText>
+              </Pressable>
+            )}
           </View>
 
           <View style={[styles.section, { borderColor: c.border, backgroundColor: c.card }]}>
@@ -467,10 +540,11 @@ const styles = StyleSheet.create({
 
   coverImg: {
     width: '100%',
-    height: 220,
+    aspectRatio: 16 / 9,
     borderRadius: 14,
     borderWidth: 1,
     marginBottom: 10,
+    overflow: 'hidden',
   },
 
   smallBtn: {

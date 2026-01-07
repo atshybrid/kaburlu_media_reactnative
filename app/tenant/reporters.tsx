@@ -5,22 +5,26 @@ import { useColorScheme } from '@/hooks/useColorScheme';
 import { loadTokens } from '@/services/auth';
 import { getTenantReporters, type TenantReporter } from '@/services/reporters';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
     Animated,
     Easing,
     FlatList,
     Image,
     Pressable,
+    RefreshControl,
     StyleSheet,
     TextInput,
-    View
+    View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const PAGE_SIZE = 20;
-const SEARCH_HINTS = ['name', 'mobile number'] as const;
+const SEARCH_HINTS = ['name', 'mobile', 'location'] as const;
+
+/* ─────────────────────────────  Helpers  ───────────────────────────── */
 
 function isValidHexColor(v?: string | null) {
   if (!v) return false;
@@ -34,6 +38,12 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
   const full = raw.length === 3 ? raw.split('').map((c) => c + c).join('') : raw;
   const n = parseInt(full, 16);
   return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+function alphaBg(hex: string, alpha: number, fallback: string) {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return fallback;
+  return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${Math.max(0, Math.min(1, alpha))})`;
 }
 
 function pickReadableTextColor(bgHex?: string | null) {
@@ -64,21 +74,15 @@ function normalizeLevel(level: TenantReporter['level']) {
   return 'OTHER';
 }
 
-function levelLabel(level: string) {
-  switch (level) {
-    case 'STATE':
-      return 'State';
-    case 'DISTRICT':
-      return 'District';
-    case 'MANDAL':
-      return 'Mandal';
-    case 'ASSEMBLY':
-      return 'Assembly';
-    default:
-      return 'Other';
-  }
-}
+const LEVEL_META: Record<string, { label: string; icon: keyof typeof MaterialIcons.glyphMap; color: string }> = {
+  STATE: { label: 'State', icon: 'public', color: '#6366f1' },
+  DISTRICT: { label: 'District', icon: 'location-city', color: '#f59e0b' },
+  MANDAL: { label: 'Mandal', icon: 'apartment', color: '#10b981' },
+  ASSEMBLY: { label: 'Assembly', icon: 'how-to-vote', color: '#ec4899' },
+  OTHER: { label: 'Other', icon: 'person-pin', color: '#8b5cf6' },
+};
 
+/* ─────────────────────────────  Main Screen  ───────────────────────────── */
 
 export default function TenantReportersScreen() {
   const scheme = useColorScheme() ?? 'light';
@@ -90,6 +94,7 @@ export default function TenantReportersScreen() {
   const [role, setRole] = useState<string>('');
 
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reporters, setReporters] = useState<TenantReporter[]>([]);
 
@@ -101,24 +106,74 @@ export default function TenantReportersScreen() {
   const hintY = useRef(new Animated.Value(0)).current;
 
   const [levelFilter, setLevelFilter] = useState<string | null>(null);
-
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
-  useEffect(() => {
-    (async () => {
+  const primary = brandPrimary || c.tint;
+  const primaryText = pickReadableTextColor(primary) || Colors.light.background;
+
+  /* ── Load data ── */
+  const load = useCallback(async (isRefresh = false) => {
+    if (isRefresh) setRefreshing(true);
+    else setLoading(true);
+    setError(null);
+
+    try {
       const t = await loadTokens();
       const session: any = (t as any)?.session;
       const tid = session?.tenantId || session?.tenant?.id;
       setTenantId(typeof tid === 'string' ? tid : null);
-
       setRole(String(t?.user?.role || ''));
 
       const ds = session?.domainSettings;
       const colors = ds?.data?.theme?.colors;
-      const primary = colors?.primary || colors?.accent;
-      setBrandPrimary(isValidHexColor(primary) ? String(primary) : null);
-    })();
+      const pColor = colors?.primary || colors?.accent;
+      setBrandPrimary(isValidHexColor(pColor) ? String(pColor) : null);
+
+      if (tid) {
+        const list = await getTenantReporters(tid, { active: true });
+        setReporters(Array.isArray(list) ? list : []);
+        setVisibleCount(PAGE_SIZE);
+      }
+    } catch (e: any) {
+      setError(e?.message || 'Failed to load reporters');
+      setReporters([]);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load]),
+  );
+
+  /* ── Search hint animation ── */
+  const animateHint = useCallback(() => {
+    if (searchFocused || search.trim().length) return;
+    Animated.sequence([
+      Animated.parallel([
+        Animated.timing(hintOpacity, { toValue: 0, duration: 120, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+        Animated.timing(hintY, { toValue: -8, duration: 120, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      ]),
+      Animated.delay(40),
+    ]).start(() => {
+      hintY.setValue(8);
+      setHintIndex((i) => (i + 1) % SEARCH_HINTS.length);
+      Animated.parallel([
+        Animated.timing(hintOpacity, { toValue: 1, duration: 150, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        Animated.timing(hintY, { toValue: 0, duration: 150, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      ]).start();
+    });
+  }, [searchFocused, search, hintOpacity, hintY]);
+
+  useFocusEffect(
+    useCallback(() => {
+      const id = setInterval(animateHint, 2000);
+      return () => clearInterval(id);
+    }, [animateHint]),
+  );
 
   const canCreate = useMemo(() => {
     const r = String(role || '').toUpperCase();
@@ -132,58 +187,17 @@ export default function TenantReportersScreen() {
     [router],
   );
 
-  const load = useCallback(async () => {
-    if (!tenantId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const list = await getTenantReporters(tenantId, {
-        active: true,
-      });
-      setReporters(Array.isArray(list) ? list : []);
-      setVisibleCount(PAGE_SIZE);
-    } catch (e: any) {
-      setError(e?.message || 'Failed to load reporters');
-      setReporters([]);
-    } finally {
-      setLoading(false);
+  /* ── Filtering ── */
+  const levelCounts = useMemo(() => {
+    const counts: Record<string, number> = { STATE: 0, DISTRICT: 0, MANDAL: 0, ASSEMBLY: 0, OTHER: 0 };
+    for (const r of reporters) {
+      const k = normalizeLevel(r.level);
+      counts[k] = (counts[k] || 0) + 1;
     }
-  }, [tenantId]);
-
-  useEffect(() => {
-    if (!tenantId) return;
-    load();
-  }, [tenantId, load]);
-
-  useEffect(() => {
-    // Animated "Search by ..." hint that cycles while the input is empty.
-    if (searchFocused) return;
-    if (search.trim().length) return;
-    let cancelled = false;
-    const tick = () => {
-      Animated.sequence([
-        Animated.parallel([
-          Animated.timing(hintOpacity, { toValue: 0, duration: 140, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-          Animated.timing(hintY, { toValue: -10, duration: 140, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-        ]),
-        Animated.delay(60),
-      ]).start(() => {
-        if (cancelled) return;
-        hintY.setValue(10);
-        setHintIndex((i) => (i + 1) % SEARCH_HINTS.length);
-        Animated.parallel([
-          Animated.timing(hintOpacity, { toValue: 1, duration: 180, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-          Animated.timing(hintY, { toValue: 0, duration: 180, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-        ]).start();
-      });
-    };
-
-    const id = setInterval(tick, 2200);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [searchFocused, search, hintOpacity, hintY]);
+    return (Object.keys(counts) as (keyof typeof counts)[])
+      .filter((k) => counts[k] > 0)
+      .map((k) => ({ key: k, ...LEVEL_META[k], count: counts[k] }));
+  }, [reporters]);
 
   const baseFiltered = useMemo(() => {
     let list = reporters;
@@ -199,162 +213,232 @@ export default function TenantReportersScreen() {
     return baseFiltered.filter((r) => {
       const name = String(r.fullName || '').toLowerCase();
       const mobile = String(r.mobileNumber || '').toLowerCase();
-      return name.includes(q) || mobile.includes(q);
+      const loc = locationNameForReporter(r).toLowerCase();
+      return name.includes(q) || mobile.includes(q) || loc.includes(q);
     });
   }, [baseFiltered, search]);
 
   const visible = useMemo(() => filtered.slice(0, visibleCount), [filtered, visibleCount]);
 
-  const levelCounts = useMemo(() => {
-    const counts: Record<string, number> = { STATE: 0, DISTRICT: 0, MANDAL: 0, ASSEMBLY: 0, OTHER: 0 };
-    for (const r of reporters) {
-      const k = normalizeLevel(r.level);
-      counts[k] = (counts[k] || 0) + 1;
-    }
-    return (Object.keys(counts) as (keyof typeof counts)[]).map((k) => ({ key: k, label: levelLabel(k), value: counts[k] }));
-  }, [reporters]);
+  /* ─────────────────────────────  Render  ───────────────────────────── */
 
-  const accent = brandPrimary || c.tint;
-  const accentText = pickReadableTextColor(accent) || Colors.light.background;
-
-  return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['top', 'bottom']}>
-      <View style={[styles.appBar, { borderBottomColor: c.border, backgroundColor: c.background }]}>
-        <Pressable onPress={() => router.back()} style={[styles.iconBtn, { borderColor: c.border, backgroundColor: c.card }]} hitSlop={10}>
-          <MaterialIcons name="arrow-back" size={22} color={c.text} />
+  const renderHeader = () => (
+    <View style={styles.headerWrap}>
+      {/* Gradient Hero */}
+      <LinearGradient
+        colors={[primary, alphaBg(primary, 0.85, primary)]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.hero}
+      >
+        <Pressable
+          onPress={() => router.back()}
+          style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.8 }]}
+          hitSlop={12}
+        >
+          <MaterialIcons name="arrow-back" size={22} color={primaryText} />
         </Pressable>
 
-        <View style={[styles.searchRow, styles.appBarSearch, { borderColor: c.border, backgroundColor: c.card }]}>
-          <MaterialIcons name="search" size={18} color={c.muted} />
+        <View style={styles.heroContent}>
+          <ThemedText type="title" style={[styles.heroTitle, { color: primaryText }]}>
+            Reporters
+          </ThemedText>
+          <ThemedText style={[styles.heroSubtitle, { color: alphaBg(primaryText, 0.8, primaryText) }]}>
+            {reporters.length} total • Manage your team
+          </ThemedText>
+        </View>
 
+        {/* Stats Pills */}
+        <View style={styles.statsPillRow}>
+          {levelCounts.slice(0, 4).map((item) => (
+            <View key={item.key} style={[styles.statsPill, { backgroundColor: alphaBg('#fff', 0.2, '#fff') }]}>
+              <MaterialIcons name={item.icon} size={14} color={primaryText} />
+              <ThemedText style={[styles.statsPillText, { color: primaryText }]}>
+                {item.count} {item.label}
+              </ThemedText>
+            </View>
+          ))}
+        </View>
+      </LinearGradient>
+
+      {/* Search Bar - overlapping hero */}
+      <View style={styles.searchContainer}>
+        <View style={[styles.searchBar, { backgroundColor: c.card, borderColor: c.border }]}>
+          <MaterialIcons name="search" size={20} color={c.muted} />
           <View style={styles.searchInputWrap}>
             {!searchFocused && !search.trim() ? (
-              <Animated.View style={[styles.searchHintWrap, { opacity: hintOpacity, transform: [{ translateY: hintY }] }]} pointerEvents="none">
-                <ThemedText style={[styles.searchHint, { color: c.muted }]}>Search by {SEARCH_HINTS[hintIndex]}</ThemedText>
+              <Animated.View
+                style={[styles.searchHintWrap, { opacity: hintOpacity, transform: [{ translateY: hintY }] }]}
+                pointerEvents="none"
+              >
+                <ThemedText style={[styles.searchHint, { color: c.muted }]}>
+                  Search by {SEARCH_HINTS[hintIndex]}...
+                </ThemedText>
               </Animated.View>
             ) : null}
-
             <TextInput
               ref={searchRef}
               value={search}
               onChangeText={setSearch}
               onFocus={() => setSearchFocused(true)}
               onBlur={() => setSearchFocused(false)}
-              placeholder={searchFocused ? 'Search by name, mobile number' : ''}
+              placeholder={searchFocused ? 'Search name, mobile, location...' : ''}
               placeholderTextColor={c.muted}
               style={[styles.searchInput, { color: c.text }]}
               returnKeyType="search"
             />
           </View>
-
           {!!search && (
-            <Pressable onPress={() => setSearch('')} hitSlop={10} style={styles.clearBtn}>
+            <Pressable onPress={() => setSearch('')} hitSlop={10}>
               <MaterialIcons name="close" size={18} color={c.muted} />
             </Pressable>
           )}
         </View>
       </View>
 
-      {/* Level-wise counts */}
-      {!loading && !error ? (
-        <View style={styles.levelStripWrap}>
-          <FlatList
-            data={levelCounts}
-            keyExtractor={(it) => it.key}
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.levelStrip}
-            renderItem={({ item }) => (
+      {/* Level Filter Chips */}
+      {levelCounts.length > 0 && (
+        <View style={styles.filterRow}>
+          <Pressable
+            onPress={() => setLevelFilter(null)}
+            style={[
+              styles.filterChip,
+              {
+                backgroundColor: !levelFilter ? primary : c.card,
+                borderColor: !levelFilter ? primary : c.border,
+              },
+            ]}
+          >
+            <ThemedText style={{ color: !levelFilter ? primaryText : c.text, fontSize: 13, fontWeight: '600' }}>
+              All
+            </ThemedText>
+          </Pressable>
+          {levelCounts.map((item) => {
+            const isActive = levelFilter === item.key;
+            return (
               <Pressable
-                onPress={() => setLevelFilter((prev) => (prev === item.key ? null : item.key))}
-                style={({ pressed }) => [
-                  styles.levelCard,
+                key={item.key}
+                onPress={() => setLevelFilter(isActive ? null : item.key)}
+                style={[
+                  styles.filterChip,
                   {
-                    borderColor: levelFilter === item.key ? accent : c.border,
-                    backgroundColor: levelFilter === item.key ? 'rgba(0,0,0,0.03)' : c.card,
+                    backgroundColor: isActive ? item.color : c.card,
+                    borderColor: isActive ? item.color : c.border,
                   },
-                  pressed && { opacity: 0.95 },
                 ]}
               >
-                <View style={styles.levelCardTopRow}>
-                  <ThemedText style={[styles.levelCardValue, { color: c.text }]} type="defaultSemiBold">
-                    {item.value}
-                  </ThemedText>
-                  {levelFilter === item.key ? <MaterialIcons name="check" size={18} color={accent} /> : null}
-                </View>
-                <ThemedText style={{ color: c.muted, fontSize: 12 }} numberOfLines={1}>
+                <MaterialIcons name={item.icon} size={14} color={isActive ? '#fff' : item.color} />
+                <ThemedText style={{ color: isActive ? '#fff' : c.text, fontSize: 13, fontWeight: '500' }}>
                   {item.label}
                 </ThemedText>
+                <View style={[styles.filterBadge, { backgroundColor: isActive ? alphaBg('#fff', 0.3, '#fff') : alphaBg(item.color, 0.15, c.background) }]}>
+                  <ThemedText style={{ color: isActive ? '#fff' : item.color, fontSize: 11, fontWeight: '700' }}>
+                    {item.count}
+                  </ThemedText>
+                </View>
               </Pressable>
-            )}
-          />
+            );
+          })}
         </View>
-      ) : null}
+      )}
 
+      {/* Results count */}
+      {!loading && filtered.length > 0 && (
+        <View style={styles.resultsRow}>
+          <ThemedText style={{ color: c.muted, fontSize: 13 }}>
+            Showing {visible.length} of {filtered.length} reporters
+          </ThemedText>
+        </View>
+      )}
+    </View>
+  );
+
+  return (
+    <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['bottom']}>
       {loading ? (
-        <View style={styles.listContent}>
-          {Array.from({ length: 6 }).map((_, i) => (
-            <ReporterCardSkeleton key={`rep-skel-${i}`} scheme={scheme} accent={accent} />
-          ))}
+        <View style={{ flex: 1 }}>
+          {renderHeader()}
+          <View style={styles.listContent}>
+            {Array.from({ length: 5 }).map((_, i) => (
+              <ReporterCardSkeleton key={`skel-${i}`} scheme={scheme} />
+            ))}
+          </View>
         </View>
       ) : error ? (
-        <View style={styles.center}>
-          <ThemedText type="defaultSemiBold" style={[styles.centerTitle, { color: c.text }]}>
-            Couldn’t load reporters
+        <View style={styles.centerError}>
+          <View style={[styles.errorIcon, { backgroundColor: alphaBg('#ef4444', 0.1, c.background) }]}>
+            <MaterialIcons name="error-outline" size={48} color="#ef4444" />
+          </View>
+          <ThemedText type="defaultSemiBold" style={[styles.errorTitle, { color: c.text }]}>
+            Failed to load
           </ThemedText>
-          <ThemedText style={[styles.centerText, { color: c.muted }]}>{error}</ThemedText>
+          <ThemedText style={[styles.errorText, { color: c.muted }]}>{error}</ThemedText>
           <Pressable
-            onPress={load}
-            style={({ pressed }) => [styles.retryBtn, { backgroundColor: accent }, pressed && { opacity: 0.9 }]}
+            onPress={() => load()}
+            style={({ pressed }) => [styles.retryBtn, { backgroundColor: primary }, pressed && { opacity: 0.9 }]}
           >
-            <ThemedText type="defaultSemiBold" style={{ color: accentText }}>
-              Retry
-            </ThemedText>
+            <MaterialIcons name="refresh" size={18} color={primaryText} />
+            <ThemedText style={{ color: primaryText, fontWeight: '600' }}>Try Again</ThemedText>
           </Pressable>
         </View>
       ) : (
         <FlatList
           data={visible}
           keyExtractor={(it) => it.id}
+          ListHeaderComponent={renderHeader}
           contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => load(true)}
+              colors={[primary]}
+              tintColor={primary}
+            />
+          }
           renderItem={({ item }) => (
             <ReporterCard
               item={item}
               scheme={scheme}
-              accent={accent}
+              accent={primary}
               onOpen={() => openReporter(item.id)}
             />
           )}
-          onEndReachedThreshold={0.3}
+          onEndReachedThreshold={0.4}
           onEndReached={() => {
             if (visibleCount >= filtered.length) return;
             setVisibleCount((n) => Math.min(filtered.length, n + PAGE_SIZE));
           }}
           ListEmptyComponent={
-            <View style={styles.center}>
-              <ThemedText style={[styles.centerText, { color: c.muted }]}>No reporters found</ThemedText>
+            <View style={styles.emptyState}>
+              <View style={[styles.emptyIcon, { backgroundColor: alphaBg(primary, 0.1, c.background) }]}>
+                <MaterialIcons name="person-search" size={48} color={primary} />
+              </View>
+              <ThemedText type="defaultSemiBold" style={{ color: c.text, marginTop: 16 }}>
+                No reporters found
+              </ThemedText>
+              <ThemedText style={{ color: c.muted, textAlign: 'center', marginTop: 6 }}>
+                {search ? 'Try a different search term' : 'Add your first reporter to get started'}
+              </ThemedText>
             </View>
           }
         />
       )}
 
-      {canCreate ? (
+      {/* FAB */}
+      {canCreate && !loading && !error && (
         <Pressable
           onPress={() => router.push('/tenant/create-reporter')}
-          style={({ pressed }) => [
-            styles.fab,
-            { backgroundColor: accent },
-            pressed && { opacity: 0.92 },
-          ]}
-          hitSlop={12}
+          style={({ pressed }) => [styles.fab, { backgroundColor: primary }, pressed && { transform: [{ scale: 0.95 }] }]}
         >
-          <MaterialIcons name="add" size={26} color={accentText} />
+          <MaterialIcons name="person-add" size={24} color={primaryText} />
         </Pressable>
-      ) : null}
-
+      )}
     </SafeAreaView>
   );
 }
+
+/* ─────────────────────────────  Reporter Card  ───────────────────────────── */
 
 function ReporterCard({
   item,
@@ -370,35 +454,18 @@ function ReporterCard({
   const c = Colors[scheme];
   const name = item.fullName || 'Unknown';
   const mobile = item.mobileNumber || '—';
-  const designation = item.designation?.name || '—';
+  const designation = item.designation?.name || 'Reporter';
   const location = locationNameForReporter(item);
-  const kyc = item.kycStatus || '—';
-  const subActive = !!item.subscriptionActive;
-  const autoPublish = item.autoPublish === true;
-
-  const chipText = pickReadableTextColor(accent) || Colors.light.background;
-  const warn = Colors[scheme].warning;
-  const warnText = pickReadableTextColor(warn) || Colors.light.background;
-
-  function alphaBg(hex: string, alpha: number) {
-    const rgb = hexToRgb(hex);
-    if (!rgb) return c.background;
-    const a = Math.max(0, Math.min(1, alpha));
-    return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${a})`;
-  }
-
-  const kycKey = String(kyc).toUpperCase();
-  const kycOk = ['APPROVED', 'VERIFIED', 'COMPLETED', 'SUCCESS'].some((t) => kycKey.includes(t));
-  const kycPending = ['PENDING', 'IN_PROGRESS', 'SUBMITTED', 'REVIEW'].some((t) => kycKey.includes(t));
-
 
   const level = normalizeLevel(item.level);
-  const levelTx = levelLabel(level);
+  const levelMeta = LEVEL_META[level];
 
-  const kycBg = kycOk ? accent : kycPending ? warn : c.background;
-  const kycBorder = kycOk || kycPending ? kycBg : c.border;
-  const kycTx = kycOk ? chipText : kycPending ? warnText : c.text;
-  const kycIcon = kycOk ? 'verified' : kycPending ? 'pending-actions' : 'help-outline';
+  const kyc = String(item.kycStatus || '').toUpperCase();
+  const kycOk = ['APPROVED', 'VERIFIED', 'COMPLETED', 'SUCCESS'].some((t) => kyc.includes(t));
+  const kycPending = ['PENDING', 'IN_PROGRESS', 'SUBMITTED', 'REVIEW'].some((t) => kyc.includes(t));
+
+  const subActive = !!item.subscriptionActive;
+  const autoPublish = item.autoPublish === true;
 
   return (
     <Pressable
@@ -406,252 +473,259 @@ function ReporterCard({
       android_ripple={{ color: c.border }}
       style={({ pressed }) => [
         styles.card,
-        { borderColor: c.border, backgroundColor: c.card },
+        { backgroundColor: c.card, borderColor: c.border },
         pressed && styles.cardPressed,
       ]}
     >
-      <View style={[styles.cardAccentBar, { backgroundColor: alphaBg(accent, 0.9) }]} />
+      {/* Left accent bar */}
+      <View style={[styles.cardAccent, { backgroundColor: levelMeta.color }]} />
 
-      <View style={styles.cardTop}>
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <View style={styles.nameRow}>
-            <ThemedText type="defaultSemiBold" style={[styles.name, { color: c.text }]} numberOfLines={1}>
-              {name}
+      {/* Avatar */}
+      <View style={[styles.avatar, { backgroundColor: alphaBg(levelMeta.color, 0.12, c.background), borderColor: alphaBg(levelMeta.color, 0.25, c.border) }]}>
+        {item.profilePhotoUrl ? (
+          <Image source={{ uri: item.profilePhotoUrl }} style={styles.avatarImg} resizeMode="cover" />
+        ) : (
+          <ThemedText type="defaultSemiBold" style={{ color: levelMeta.color, fontSize: 18 }}>
+            {initials(name)}
+          </ThemedText>
+        )}
+      </View>
+
+      {/* Content */}
+      <View style={styles.cardContent}>
+        <View style={styles.cardTopRow}>
+          <ThemedText type="defaultSemiBold" style={[styles.cardName, { color: c.text }]} numberOfLines={1}>
+            {name}
+          </ThemedText>
+          <View style={[styles.levelTag, { backgroundColor: alphaBg(levelMeta.color, 0.12, c.background) }]}>
+            <MaterialIcons name={levelMeta.icon} size={12} color={levelMeta.color} />
+            <ThemedText style={{ color: levelMeta.color, fontSize: 11, fontWeight: '600' }}>
+              {levelMeta.label}
             </ThemedText>
+          </View>
+        </View>
 
-            <View style={[styles.levelPill, { borderColor: c.border, backgroundColor: c.background }]}>
-              <ThemedText style={{ color: c.muted, fontSize: 12 }}>
-                {levelTx}
-              </ThemedText>
+        <ThemedText style={[styles.cardDesignation, { color: c.muted }]} numberOfLines={1}>
+          {designation}
+        </ThemedText>
+
+        <View style={styles.cardMetaRow}>
+          <View style={styles.cardMeta}>
+            <MaterialIcons name="phone" size={13} color={c.muted} />
+            <ThemedText style={{ color: c.text, fontSize: 12 }}>{mobile}</ThemedText>
+          </View>
+          <View style={styles.cardMeta}>
+            <MaterialIcons name="place" size={13} color={c.muted} />
+            <ThemedText style={{ color: c.text, fontSize: 12 }} numberOfLines={1}>{location}</ThemedText>
+          </View>
+        </View>
+
+        {/* Status badges */}
+        <View style={styles.statusRow}>
+          <View
+            style={[
+              styles.statusBadge,
+              {
+                backgroundColor: kycOk ? alphaBg('#10b981', 0.12, c.background) : kycPending ? alphaBg('#f59e0b', 0.12, c.background) : alphaBg(c.muted, 0.1, c.background),
+              },
+            ]}
+          >
+            <MaterialIcons
+              name={kycOk ? 'verified' : kycPending ? 'pending' : 'help-outline'}
+              size={12}
+              color={kycOk ? '#10b981' : kycPending ? '#f59e0b' : c.muted}
+            />
+            <ThemedText style={{ color: kycOk ? '#10b981' : kycPending ? '#f59e0b' : c.muted, fontSize: 11 }}>
+              KYC
+            </ThemedText>
+          </View>
+
+          <View
+            style={[
+              styles.statusBadge,
+              { backgroundColor: subActive ? alphaBg('#10b981', 0.12, c.background) : alphaBg(c.muted, 0.1, c.background) },
+            ]}
+          >
+            <MaterialIcons
+              name={subActive ? 'check-circle' : 'cancel'}
+              size={12}
+              color={subActive ? '#10b981' : c.muted}
+            />
+            <ThemedText style={{ color: subActive ? '#10b981' : c.muted, fontSize: 11 }}>
+              {subActive ? 'Active' : 'Inactive'}
+            </ThemedText>
+          </View>
+
+          {autoPublish && (
+            <View style={[styles.statusBadge, { backgroundColor: alphaBg(accent, 0.12, c.background) }]}>
+              <MaterialIcons name="flash-on" size={12} color={accent} />
+              <ThemedText style={{ color: accent, fontSize: 11 }}>Auto</ThemedText>
             </View>
-          </View>
-
-          <View style={styles.metaLine}>
-            <MaterialIcons name="call" size={16} color={c.muted} />
-            <ThemedText style={[styles.metaText, { color: c.muted }]} numberOfLines={1}>
-              {mobile}
-            </ThemedText>
-          </View>
-
-          <View style={styles.metaLine}>
-            <MaterialIcons name="badge" size={16} color={c.muted} />
-            <ThemedText style={[styles.metaText, { color: c.text }]} numberOfLines={1}>
-              {designation}
-            </ThemedText>
-          </View>
-
-          <View style={styles.metaLine}>
-            <MaterialIcons name="place" size={16} color={c.muted} />
-            <ThemedText style={[styles.metaText, { color: c.muted }]} numberOfLines={1}>
-              {location}
-            </ThemedText>
-          </View>
-        </View>
-
-        <View style={styles.rightCol}>
-          <View style={[styles.avatar, { borderColor: c.border, backgroundColor: alphaBg(accent, 0.10) }]}>
-            {item.profilePhotoUrl ? (
-              <Image source={{ uri: item.profilePhotoUrl }} style={styles.avatarImg} resizeMode="cover" />
-            ) : (
-              <ThemedText type="defaultSemiBold" style={{ color: accent }}>
-                {initials(name)}
-              </ThemedText>
-            )}
-          </View>
+          )}
         </View>
       </View>
 
-      <View style={styles.chipRow}>
-        <View style={[styles.chip, { backgroundColor: kycBg, borderColor: kycBorder }]}
-        >
-          <MaterialIcons name={kycIcon as any} size={16} color={kycTx} />
-          <ThemedText style={{ color: kycTx, fontSize: 12 }} numberOfLines={1}>
-            KYC {kyc}
-          </ThemedText>
-        </View>
-
-        <View style={[styles.chip, { backgroundColor: c.background, borderColor: c.border }]}
-        >
-          <MaterialIcons name={autoPublish ? 'publish' : 'pause-circle'} size={16} color={autoPublish ? accent : c.muted} />
-          <ThemedText style={{ color: autoPublish ? c.text : c.muted, fontSize: 12 }} numberOfLines={1}>
-            Auto publish {autoPublish ? 'Yes' : 'No'}
-          </ThemedText>
-        </View>
-
-        <View style={[styles.chip, { backgroundColor: c.background, borderColor: c.border }]}
-        >
-          <MaterialIcons name={subActive ? 'check-circle' : 'cancel'} size={16} color={subActive ? accent : c.muted} />
-          <ThemedText style={{ color: subActive ? c.text : c.muted, fontSize: 12 }} numberOfLines={1}>
-            Subscription {subActive ? 'Active' : 'Inactive'}
-          </ThemedText>
-        </View>
-      </View>
+      {/* Chevron */}
+      <MaterialIcons name="chevron-right" size={22} color={c.muted} style={styles.chevron} />
     </Pressable>
   );
 }
 
-function ReporterCardSkeleton({
-  scheme,
-  accent,
-}: {
-  scheme: 'light' | 'dark';
-  accent: string;
-}) {
+/* ─────────────────────────────  Skeleton  ───────────────────────────── */
+
+function ReporterCardSkeleton({ scheme }: { scheme: 'light' | 'dark' }) {
   const c = Colors[scheme];
-
-  function alphaBg(hex: string, alpha: number) {
-    const rgb = hexToRgb(hex);
-    if (!rgb) return c.background;
-    const a = Math.max(0, Math.min(1, alpha));
-    return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${a})`;
-  }
-
   return (
-    <View style={[styles.card, { borderColor: c.border, backgroundColor: c.card }]}>
-      <View style={[styles.cardAccentBar, { backgroundColor: alphaBg(accent, 0.9) }]} />
-
-      <View style={styles.cardTop}>
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <View style={styles.nameRow}>
-            <View style={{ flex: 1 }}>
-              <Skeleton width={'70%'} height={16} borderRadius={8} />
-            </View>
-            <Skeleton width={62} height={20} borderRadius={999} />
-          </View>
-
-          <View style={[styles.metaLine, { marginTop: 10 }]}>
-            <Skeleton width={'55%'} height={12} borderRadius={6} />
-          </View>
-          <View style={[styles.metaLine, { marginTop: 8 }]}>
-            <Skeleton width={'65%'} height={12} borderRadius={6} />
-          </View>
-          <View style={[styles.metaLine, { marginTop: 8 }]}>
-            <Skeleton width={'50%'} height={12} borderRadius={6} />
-          </View>
+    <View style={[styles.card, { backgroundColor: c.card, borderColor: c.border }]}>
+      <View style={[styles.cardAccent, { backgroundColor: c.border }]} />
+      <Skeleton width={52} height={52} borderRadius={26} />
+      <View style={[styles.cardContent, { gap: 8 }]}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+          <Skeleton width="60%" height={16} borderRadius={8} />
+          <Skeleton width={60} height={20} borderRadius={10} />
         </View>
-
-        <View style={styles.rightCol}>
-          <Skeleton width={38} height={38} borderRadius={12} />
-          <Skeleton width={52} height={52} borderRadius={26} />
+        <Skeleton width="40%" height={12} borderRadius={6} />
+        <View style={{ flexDirection: 'row', gap: 16 }}>
+          <Skeleton width={80} height={12} borderRadius={6} />
+          <Skeleton width={90} height={12} borderRadius={6} />
         </View>
-      </View>
-
-      <View style={styles.chipRow}>
-        <Skeleton width={110} height={30} borderRadius={999} />
-        <Skeleton width={120} height={30} borderRadius={999} />
-        <Skeleton width={130} height={30} borderRadius={999} />
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <Skeleton width={50} height={22} borderRadius={11} />
+          <Skeleton width={55} height={22} borderRadius={11} />
+        </View>
       </View>
     </View>
   );
 }
 
+/* ─────────────────────────────  Styles  ───────────────────────────── */
+
 const styles = StyleSheet.create({
   safe: { flex: 1 },
-  appBar: {
-    height: 54,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    gap: 12,
-    borderBottomWidth: 1,
+
+  /* Header / Hero */
+  headerWrap: { marginBottom: 8 },
+  hero: {
+    paddingTop: 52,
+    paddingBottom: 50,
+    paddingHorizontal: 20,
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
   },
-  iconBtn: {
+  backBtn: {
+    position: 'absolute',
+    top: 12,
+    left: 16,
     width: 40,
     height: 40,
     borderRadius: 12,
-    borderWidth: 1,
+    backgroundColor: 'rgba(255,255,255,0.15)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  titleCol: { flex: 1 },
-  title: { fontSize: 16 },
-  subtitle: { fontSize: 12, marginTop: 2 },
+  heroContent: { marginTop: 8 },
+  heroTitle: { fontSize: 28, fontWeight: '700' },
+  heroSubtitle: { fontSize: 14, marginTop: 4 },
+  statsPillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 16 },
+  statsPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 20 },
+  statsPillText: { fontSize: 12, fontWeight: '500' },
 
-  searchRow: {
+  /* Search */
+  searchContainer: { marginTop: -24, marginHorizontal: 16 },
+  searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    margin: 12,
-    paddingHorizontal: 12,
-    height: 44,
-    borderRadius: 12,
+    height: 50,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: 'transparent',
-    backgroundColor: 'transparent',
-    gap: 8,
-  },
-  appBarSearch: {
-    flex: 1,
-    margin: 0,
+    paddingHorizontal: 14,
+    gap: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
   },
   searchInputWrap: { flex: 1, height: '100%', justifyContent: 'center' },
   searchHintWrap: { position: 'absolute', left: 0, right: 0 },
   searchHint: { fontSize: 14 },
-  searchInput: { fontSize: 14, padding: 0, margin: 0 },
-  clearBtn: { padding: 4 },
+  searchInput: { fontSize: 15, padding: 0, margin: 0, flex: 1 },
 
-  levelStripWrap: { marginTop: 2 },
-  levelStrip: { paddingHorizontal: 12, paddingBottom: 6, gap: 10 },
-  levelCard: { width: 96, borderWidth: 1, borderRadius: 14, paddingVertical: 10, paddingHorizontal: 12 },
-  levelCardTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  levelCardValue: { fontSize: 18 },
-
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 16 },
-  centerTitle: { textAlign: 'center' },
-  centerText: { textAlign: 'center' },
-  retryBtn: { marginTop: 10, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12 },
-
-  listContent: { paddingHorizontal: 12, paddingBottom: 16 },
-
-  fab: {
-    position: 'absolute',
-    right: 16,
-    bottom: 16,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+  /* Filter chips */
+  filterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 16, paddingHorizontal: 16 },
+  filterChip: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-  },
-  card: {
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
     borderWidth: 1,
-    borderRadius: 16,
+  },
+  filterBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8, marginLeft: 2 },
+
+  resultsRow: { paddingHorizontal: 16, marginTop: 16 },
+
+  /* List */
+  listContent: { paddingHorizontal: 16, paddingBottom: 100 },
+
+  /* Card */
+  card: {
+    flexDirection: 'row',
+    alignItems: 'center',
     padding: 14,
     marginBottom: 12,
+    borderRadius: 16,
+    borderWidth: 1,
     overflow: 'hidden',
+    gap: 12,
   },
-  cardPressed: { opacity: 0.96, transform: [{ scale: 0.997 }] },
-  cardAccentBar: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    width: 4,
-  },
-  cardTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingLeft: 6 },
-  rightCol: { flexShrink: 0, alignItems: 'flex-end', gap: 10, paddingLeft: 8 },
-  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0 },
-  name: { fontSize: 16, flexGrow: 1, flexShrink: 1, minWidth: 0 },
-  levelPill: { borderWidth: 1, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, flexShrink: 0 },
+  cardPressed: { opacity: 0.95, transform: [{ scale: 0.995 }] },
+  cardAccent: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 4 },
   avatar: {
     width: 52,
     height: 52,
     borderRadius: 26,
-    borderWidth: 1,
+    borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
   },
   avatarImg: { width: '100%', height: '100%' },
+  cardContent: { flex: 1, minWidth: 0 },
+  cardTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  cardName: { fontSize: 16, flex: 1, minWidth: 0 },
+  levelTag: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
+  cardDesignation: { fontSize: 13, marginTop: 2 },
+  cardMetaRow: { flexDirection: 'row', gap: 14, marginTop: 6 },
+  cardMeta: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  statusRow: { flexDirection: 'row', gap: 6, marginTop: 8 },
+  statusBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 10 },
+  chevron: { marginLeft: 4 },
 
-  metaLine: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
-  metaText: { fontSize: 13, flexShrink: 1 },
+  /* Empty / Error */
+  emptyState: { alignItems: 'center', paddingVertical: 48, paddingHorizontal: 24 },
+  emptyIcon: { width: 96, height: 96, borderRadius: 48, alignItems: 'center', justifyContent: 'center' },
+  centerError: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 12 },
+  errorIcon: { width: 96, height: 96, borderRadius: 48, alignItems: 'center', justifyContent: 'center' },
+  errorTitle: { fontSize: 18, marginTop: 8 },
+  errorText: { textAlign: 'center' },
+  retryBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 12, marginTop: 8 },
 
-  chipRow: { flexDirection: 'row', gap: 8, marginTop: 12, flexWrap: 'wrap', paddingLeft: 6 },
-  chip: { paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999, borderWidth: 1, flexDirection: 'row', alignItems: 'center', gap: 6 },
-
-  statLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-
-  statRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  detailSection: { borderTopWidth: 1, paddingTop: 10, gap: 3 },
-
+  /* FAB */
+  fab: {
+    position: 'absolute',
+    right: 20,
+    bottom: 24,
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 6,
+  },
 });

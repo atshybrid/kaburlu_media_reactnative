@@ -12,6 +12,8 @@ import React, { useRef, useState } from 'react';
 import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { canAccessPostNewsByRole, getCachedProfileRole } from '@/services/roles';
+
 export default function AutoHideTabBar(props: BottomTabBarProps) {
   const colorScheme = useColorScheme();
   const theme = Colors[colorScheme ?? 'light'];
@@ -25,6 +27,7 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
   const fabScale = useRef(new Animated.Value(1));
   const [langCode, setLangCode] = useState<string>('');
   const LanguageIcon = getLanguageIcon(langCode);
+  const [profileRole, setProfileRole] = useState<string>('');
 
   const routes = props.state.routes;
   const activeIndex = props.state.index;
@@ -86,6 +89,14 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
         const code = stored ? JSON.parse(stored)?.code ?? '' : '';
         setLangCode(code || '');
       } catch {}
+    })();
+  }, []);
+
+  // Load role for role-gated Post behavior
+  React.useEffect(() => {
+    (async () => {
+      const r = await getCachedProfileRole();
+      if (r) setProfileRole(r);
     })();
   }, []);
 
@@ -191,7 +202,17 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
                 typeof options.tabBarIcon === 'function'
                   ? options.tabBarIcon({ focused: isFocused, color, size })
                   : null;
-              const onPress = () => {
+              const onPress = async () => {
+                // Special case: "Post" tab should go to Post News for tenant editorial roles.
+                if (route.name === 'explore') {
+                  const role = profileRole || (await getCachedProfileRole());
+                  if (canAccessPostNewsByRole(role)) {
+                    try {
+                      router.push('/post-news' as any);
+                      return;
+                    } catch {}
+                  }
+                }
                 if (!isFocused) {
                   // @ts-ignore expo-router compatible
                   props.navigation.navigate(route.name as never);
@@ -204,7 +225,7 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
                   accessibilityRole="button"
                   accessibilityState={isFocused ? { selected: true } : {}}
                   accessibilityLabel={label}
-                  onPress={onPress}
+                  onPress={() => { void onPress(); }}
                 >
                   <View style={styles.tabIconWrap}>{icon}</View>
                   <Text style={[styles.tabLabel, { color }]} numberOfLines={1}>
