@@ -4,7 +4,7 @@ import { Colors } from '@/constants/Colors';
 import { LANGUAGES } from '@/constants/languages';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { getUserPreferences, pickPreferenceLanguage, pickPreferenceLocation } from '@/services/api';
-import { isCitizenReporter, loadTokens, softLogout } from '@/services/auth';
+import { loadTokens, softLogout } from '@/services/auth';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -78,6 +78,7 @@ export default function AccountScreen() {
   const [loading, setLoading] = useState(true);
   const [loggedIn, setLoggedIn] = useState(false);
   const [roleReporter, setRoleReporter] = useState(false);
+  const [roleTenantAdmin, setRoleTenantAdmin] = useState(false);
   const [developerMode, setDeveloperMode] = useState(false);
 
   // User info
@@ -103,8 +104,12 @@ export default function AccountScreen() {
         else if ((t?.user as any)?.profilePhotoUrl) setPhotoUrl((t?.user as any).profilePhotoUrl);
       } catch {}
 
-      // Reporter status
-      try { setRoleReporter(await isCitizenReporter()); } catch {}
+      // Role-based access
+      const role = String(t?.user?.role || '').toUpperCase();
+      const isReporter = role === 'CITIZEN_REPORTER' || role === 'TENANT_REPORTER' || role === 'REPORTER';
+      const isAdmin = role === 'TENANT_ADMIN';
+      setRoleReporter(isReporter);
+      setRoleTenantAdmin(isAdmin);
 
       // Developer mode
       try {
@@ -429,6 +434,27 @@ export default function AccountScreen() {
               />
             ))}
           </View>
+
+          {/* Tenant Admin Dashboard (if applicable) */}
+          {roleTenantAdmin && (
+            <>
+              <SectionHeader title="Administration" c={c} />
+              <View style={[styles.card, { backgroundColor: c.card, borderColor: c.border }]}>
+                <SettingRow
+                  item={{
+                    key: 'tenantAdmin',
+                    icon: 'admin-panel-settings',
+                    title: 'Admin Dashboard',
+                    subtitle: 'Manage reporters, articles & tenant settings',
+                    color: '#6366f1',
+                    route: '/tenant/dashboard',
+                  }}
+                  isLast
+                  c={c}
+                />
+              </View>
+            </>
+          )}
 
           {/* Reporter Dashboard (if applicable) */}
           {roleReporter && (

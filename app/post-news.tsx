@@ -346,9 +346,10 @@ export default function PostNewsScreen() {
   const [rawText, setRawText] = useState<string>(() => String(draft.body || ''));
   const [aiBusy, setAiBusy] = useState(false);
 
-  // Clear justPosted flag after a delay to let old screens unmount first
+  // Clear justPosted flag after a longer delay to allow category modal skip logic in details.tsx to run first.
+  // The delay must exceed category API load time (~1-2s) to prevent category modal from auto-opening.
   useEffect(() => {
-    const timer = setTimeout(() => setJustPosted(false), 500);
+    const timer = setTimeout(() => setJustPosted(false), 3000);
     return () => clearTimeout(timer);
   }, [setJustPosted]);
 

@@ -6,7 +6,7 @@ import { loadTokens } from '@/services/auth';
 import { getTenantReporters, type TenantReporter } from '@/services/reporters';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
     Animated,
@@ -88,6 +88,7 @@ export default function TenantReportersScreen() {
   const scheme = useColorScheme() ?? 'light';
   const c = Colors[scheme];
   const router = useRouter();
+  const params = useLocalSearchParams<{ kycFilter?: string }>();
 
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [brandPrimary, setBrandPrimary] = useState<string | null>(null);
@@ -106,6 +107,7 @@ export default function TenantReportersScreen() {
   const hintY = useRef(new Animated.Value(0)).current;
 
   const [levelFilter, setLevelFilter] = useState<string | null>(null);
+  const [kycFilter, setKycFilter] = useState<string | null>(() => params.kycFilter || null);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
   const primary = brandPrimary || c.tint;
@@ -204,8 +206,23 @@ export default function TenantReportersScreen() {
     if (levelFilter) {
       list = list.filter((r) => normalizeLevel(r.level) === levelFilter);
     }
+    if (kycFilter) {
+      list = list.filter((r) => {
+        const status = String(r.kycStatus || '').toUpperCase();
+        if (kycFilter === 'PENDING') {
+          return ['PENDING', 'IN_PROGRESS', 'SUBMITTED', 'REVIEW'].some((t) => status.includes(t));
+        }
+        if (kycFilter === 'APPROVED') {
+          return ['APPROVED', 'VERIFIED', 'COMPLETED', 'SUCCESS'].some((t) => status.includes(t));
+        }
+        if (kycFilter === 'REJECTED') {
+          return status.includes('REJECTED');
+        }
+        return true;
+      });
+    }
     return list;
-  }, [reporters, levelFilter]);
+  }, [reporters, levelFilter, kycFilter]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -339,6 +356,21 @@ export default function TenantReportersScreen() {
               </Pressable>
             );
           })}
+        </View>
+      )}
+
+      {/* KYC Filter Chips */}
+      {kycFilter && (
+        <View style={[styles.filterRow, { paddingTop: 0 }]}>
+          <View style={[styles.kycFilterBanner, { backgroundColor: alphaBg('#f59e0b', 0.1, c.background), borderColor: alphaBg('#f59e0b', 0.3, c.border) }]}>
+            <MaterialIcons name="verified-user" size={16} color="#f59e0b" />
+            <ThemedText style={{ color: '#f59e0b', fontSize: 13, fontWeight: '600', flex: 1 }}>
+              Showing: {kycFilter === 'PENDING' ? 'Pending KYC' : kycFilter === 'APPROVED' ? 'KYC Approved' : 'KYC Rejected'}
+            </ThemedText>
+            <Pressable onPress={() => setKycFilter(null)} hitSlop={8}>
+              <MaterialIcons name="close" size={18} color="#f59e0b" />
+            </Pressable>
+          </View>
         </View>
       )}
 
@@ -727,5 +759,17 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 8,
     elevation: 6,
+  },
+
+  /* KYC Filter Banner */
+  kycFilterBanner: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
   },
 });

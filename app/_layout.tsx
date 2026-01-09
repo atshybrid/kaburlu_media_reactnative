@@ -1,4 +1,5 @@
 import AppLockGate from '@/components/AppLockGate';
+import LoginBottomSheet from '@/components/LoginBottomSheet';
 import Toast from '@/components/Toast';
 import { ensureFirebaseAuthAsync, isFirebaseConfigComplete, logFirebaseGoogleAlignment } from '@/services/firebaseClient';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
@@ -14,6 +15,7 @@ import { useAppFonts } from '@/components/fonts';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 import { AuthProvider } from '../context/AuthContext';
+import { AuthModalProvider } from '../context/AuthModalContext';
 import { ThemeProviderLocal, useThemePref } from '../context/ThemeContext';
 import { UiPrefsProvider } from '../context/UiPrefsContext';
 import { useColorScheme } from '../hooks/useColorScheme';
@@ -109,19 +111,20 @@ function ThemedApp() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <BottomSheetModalProvider>
         <AuthProvider>
-          <ThemeProvider value={effective === 'dark' ? DarkTheme : DefaultTheme}>
-            <Stack
-              initialRouteName="splash"
-              screenOptions={{
-                headerShown: false,
-                // Avoid freezing previous screen during gestures to prevent blank screen
-                freezeOnBlur: false,
-                // Ensure a solid background during transitions using theme colors
-                contentStyle: { backgroundColor: effective === 'dark' ? DarkTheme.colors.background : DefaultTheme.colors.background },
-                gestureEnabled: true,
-                animationTypeForReplace: 'push',
-              }}
-            >
+          <AuthModalProvider>
+            <ThemeProvider value={effective === 'dark' ? DarkTheme : DefaultTheme}>
+              <Stack
+                initialRouteName="splash"
+                screenOptions={{
+                  headerShown: false,
+                  // Avoid freezing previous screen during gestures to prevent blank screen
+                  freezeOnBlur: false,
+                  // Ensure a solid background during transitions using theme colors
+                  contentStyle: { backgroundColor: effective === 'dark' ? DarkTheme.colors.background : DefaultTheme.colors.background },
+                  gestureEnabled: true,
+                  animationTypeForReplace: 'push',
+                }}
+              >
               <Stack.Screen name="splash" options={{ animation: 'none', contentStyle: { backgroundColor: '#000000' } }} />
               <Stack.Screen
                 name="language"
@@ -153,14 +156,20 @@ function ThemedApp() {
               />
               <Stack.Screen name="+not-found" />
             </Stack>
-            <StatusBar style={effective === 'dark' ? 'light' : 'dark'} />
+            <StatusBar
+              style={effective === 'dark' ? 'light' : 'dark'}
+              translucent={false}
+              backgroundColor={effective === 'dark' ? DarkTheme.colors.background : DefaultTheme.colors.background}
+            />
             <Toast />
             <AppLockGate />
+            <LoginBottomSheet />
           </ThemeProvider>
-        </AuthProvider>
-      </BottomSheetModalProvider>
-    </GestureHandlerRootView>
-  );
+        </AuthModalProvider>
+      </AuthProvider>
+    </BottomSheetModalProvider>
+  </GestureHandlerRootView>
+);
 }
 
 export default function RootLayout() {

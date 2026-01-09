@@ -69,7 +69,8 @@ export default function AccountScreen() {
   const [tenantSecondary, setTenantSecondary] = useState<string>('');
 
   const isTenantAdmin = loggedIn && role === 'TENANT_ADMIN';
-  const isTenantRole = loggedIn && (role === 'TENANT_ADMIN' || role === 'TENANT_REPORTER');
+  const isReporter = loggedIn && (role === 'REPORTER' || role === 'TENANT_REPORTER' || role === 'CITIZEN_REPORTER');
+  const isTenantRole = loggedIn && (role === 'TENANT_ADMIN' || role === 'TENANT_REPORTER' || role === 'REPORTER');
 
   // Refresh account/profile state from tokens + storage
   const refreshProfile = useCallback(async () => {
@@ -363,6 +364,20 @@ export default function AccountScreen() {
                 <View style={{ flex: 1, paddingRight: 12 }}>
                   <Text style={[styles.label, { color: tenantCardFg }]}>Tenant Dashboard</Text>
                   <Text style={[styles.helper, { color: tenantSubtle }]}>Open overview cards and metrics</Text>
+                </View>
+                <MaterialIcons name="chevron-right" size={22} color={tenantCardFg} />
+              </Pressable>
+            ) : null}
+
+            {isReporter ? (
+              <Pressable
+                onPress={() => router.push('/reporter/dashboard')}
+                accessibilityLabel="Open Reporter Dashboard"
+                style={({ pressed }) => [styles.rowBetween, pressed && { opacity: 0.85 }]}
+              >
+                <View style={{ flex: 1, paddingRight: 12 }}>
+                  <Text style={[styles.label, { color: tenantCardFg }]}>Reporter Dashboard</Text>
+                  <Text style={[styles.helper, { color: tenantSubtle }]}>Post news, manage profile & ID card</Text>
                 </View>
                 <MaterialIcons name="chevron-right" size={22} color={tenantCardFg} />
               </Pressable>

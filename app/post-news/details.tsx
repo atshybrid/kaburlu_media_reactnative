@@ -136,7 +136,7 @@ export default function PostNewsDetailsScreen() {
   const primary = c.tint;
   const router = useRouter();
 
-  const { draft, setDraft, setBullets, justPosted } = usePostNewsDraftStore();
+  const { draft, setDraft, setBullets, justPosted, setJustPosted } = usePostNewsDraftStore();
 
   const [newHighlight, setNewHighlight] = useState('');
   const highlightInputRef = useRef<TextInput | null>(null);
@@ -152,6 +152,7 @@ export default function PostNewsDetailsScreen() {
   const [tenantCategories, setTenantCategories] = useState<CategoryItem[] | null>(null);
   const [tenantCategoriesBusy, setTenantCategoriesBusy] = useState(false);
   const [categoryLocked, setCategoryLocked] = useState(false);
+  // Initialize forceCategoryModalVisible to false - the effect will open it if needed (and not justPosted)
   const [forceCategoryModalVisible, setForceCategoryModalVisible] = useState(false);
 
   const [dateLineBusy, setDateLineBusy] = useState(false);
@@ -257,11 +258,29 @@ export default function PostNewsDetailsScreen() {
 
   // If category is not selected, force user to pick a category.
   // Skip if justPosted flag is set (user just posted successfully, navigating away)
+  // We use a ref to track if we've already handled the justPosted flag to avoid re-triggering
+  const justPostedHandledRef = useRef(false);
+  
   useEffect(() => {
-    if (justPosted) return;
     if (tenantCategoriesBusy) return;
     const list = tenantCategories;
     if (!list || !list.length) return;
+    
+    // If just posted, skip showing modal and mark as handled
+    // Don't clear justPosted here to avoid re-triggering this effect
+    if (justPosted) {
+      justPostedHandledRef.current = true;
+      // Clear the flag in a separate timeout to avoid immediate re-render
+      setTimeout(() => setJustPosted(false), 100);
+      return;
+    }
+    
+    // If we just handled justPosted, don't show the modal
+    if (justPostedHandledRef.current) {
+      justPostedHandledRef.current = false;
+      return;
+    }
+    
     const hasCategory = !!String(draft.categoryId || '').trim();
     if (hasCategory) {
       setForceCategoryModalVisible(false);
@@ -269,7 +288,7 @@ export default function PostNewsDetailsScreen() {
     }
     if (categoryLocked) return;
     setForceCategoryModalVisible(true);
-  }, [categoryLocked, draft.categoryId, justPosted, tenantCategories, tenantCategoriesBusy]);
+  }, [categoryLocked, draft.categoryId, justPosted, setJustPosted, tenantCategories, tenantCategoriesBusy]);
 
   const selectedCategory: LiteCategory | null = useMemo(() => {
     const id = String(draft.categoryId || '').trim();

@@ -24,7 +24,9 @@ import * as Sharing from 'expo-sharing';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     ActivityIndicator,
+    Alert,
     Image,
+    Linking,
     Platform,
     Pressable,
     RefreshControl,
@@ -247,22 +249,38 @@ export default function TenantReporterDetailsScreen() {
   }, [tenantId, reporter]);
 
   const onDownloadIdCardPdf = useCallback(async () => {
-    if (!reporter) return;
+    if (!tenantId || !reporter) return;
+    if (!canManageAutoPublish) {
+      Alert.alert('Not Authorized', 'Only tenant admins can download reporter ID cards.');
+      return;
+    }
     try {
       const t = await loadTokens();
       const jwt = t?.jwt;
       if (!jwt) throw new Error('Missing auth token');
 
       const base = getBaseUrl().replace(/\/$/, '');
-      const url = `${base}/id-cards/pdf?reporterId=${encodeURIComponent(reporter.id)}`;
+      // Prefer tenant-scoped endpoints (works for tenant admins). Fallback to legacy reporter endpoint.
+      const primaryUrl = `${base}/tenants/${encodeURIComponent(tenantId)}/reporters/${encodeURIComponent(reporter.id)}/id-card/pdf`;
+      const fallbackUrl = `${base}/id-cards/pdf?reporterId=${encodeURIComponent(reporter.id)}`;
       const cacheRoot = (LegacyFileSystem as any).cacheDirectory as string | null | undefined;
       if (!cacheRoot) throw new Error('Missing cache directory');
       const cacheDir = cacheRoot.endsWith('/') ? cacheRoot : `${cacheRoot}/`;
       const target = `${cacheDir}id-card-${reporter.id}.pdf`;
 
-      const result = await LegacyFileSystem.downloadAsync(url, target, {
-        headers: { Accept: 'application/pdf', Authorization: `Bearer ${jwt}` },
-      });
+      const downloadOnce = async (url: string) => {
+        return await LegacyFileSystem.downloadAsync(url, target, {
+          headers: { Accept: 'application/pdf', Authorization: `Bearer ${jwt}` },
+        });
+      };
+
+      let result = await downloadOnce(primaryUrl);
+      const status = Number((result as any)?.status || 0);
+      if (status === 404) {
+        result = await downloadOnce(fallbackUrl);
+      } else if (status === 403) {
+        throw new Error('Forbidden (403). Backend must allow tenant admin to download this PDF.');
+      }
 
       if ((result as any)?.status && Number((result as any).status) !== 200) {
         throw new Error(`Failed to download PDF (HTTP ${(result as any).status})`);
@@ -309,33 +327,172 @@ export default function TenantReporterDetailsScreen() {
     } catch (e: any) {
       setIdCardMessage(e?.message || 'Failed to download');
     }
-  }, [reporter]);
+  }, [tenantId, reporter, canManageAutoPublish]);
+
+  /** Open ID card HTML in browser - same styling as PDF */
+  const onViewIdCardHtml = useCallback(async () => {
+    if (!tenantId || !reporter) return;
+    if (!canManageAutoPublish) {
+      Alert.alert('Not Authorized', 'Only tenant admins can view reporter ID cards.');
+      return;
+    }
+    try {
+      const base = getBaseUrl().replace(/\/$/, '');
+      const primaryUrl = `${base}/tenants/${encodeURIComponent(tenantId)}/reporters/${encodeURIComponent(reporter.id)}/id-card/html`;
+      const fallbackUrl = `${base}/id-cards/html?reporterId=${encodeURIComponent(reporter.id)}`;
+      const url = primaryUrl;
+      const canOpen = await Linking.canOpenURL(url);
+      if (canOpen) {
+        await Linking.openURL(url);
+      } else {
+        const canOpenFallback = await Linking.canOpenURL(fallbackUrl);
+        if (canOpenFallback) await Linking.openURL(fallbackUrl);
+        else setIdCardMessage('Unable to open browser');
+      }
+    } catch (e: any) {
+      setIdCardMessage(e?.message || 'Failed to open HTML');
+    }
+  }, [tenantId, reporter, canManageAutoPublish]);
+
+  /** Share ID card HTML link or PDF */
+  const onShareIdCard = useCallback(async () => {
+    if (!tenantId || !reporter) return;
+    if (!canManageAutoPublish) {
+      Alert.alert('Not Authorized', 'Only tenant admins can share reporter ID cards.');
+      return;
+    }
+    const base = getBaseUrl().replace(/\/$/, '');
+    const primaryHtmlUrl = `${base}/tenants/${encodeURIComponent(tenantId)}/reporters/${encodeURIComponent(reporter.id)}/id-card/html`;
+    const fallbackHtmlUrl = `${base}/id-cards/html?reporterId=${encodeURIComponent(reporter.id)}`;
+    const htmlUrl = primaryHtmlUrl;
+    
+    Alert.alert(
+      'Share ID Card',
+      'Choose format to share',
+      [
+        {
+          text: 'Share HTML Link',
+          onPress: async () => {
+            try {
+              // Use Share API for URL - Android only uses message (url is treated as file)
+              const { Share, Platform } = await import('react-native');
+              await Share.share(
+                Platform.OS === 'android'
+                  ? { message: `Reporter ID Card: ${htmlUrl}` }
+                  : { message: `Reporter ID Card: ${htmlUrl}`, url: htmlUrl, title: 'Reporter ID Card' }
+              );
+            } catch (e: any) {
+              // If primary URL share fails (e.g., not supported), fallback to legacy share URL.
+              try {
+                const { Share, Platform } = await import('react-native');
+                await Share.share(
+                  Platform.OS === 'android'
+                    ? { message: `Reporter ID Card: ${fallbackHtmlUrl}` }
+                    : { message: `Reporter ID Card: ${fallbackHtmlUrl}`, url: fallbackHtmlUrl, title: 'Reporter ID Card' }
+                );
+              } catch (e2: any) {
+                setIdCardMessage(e2?.message || e?.message || 'Failed to share');
+              }
+            }
+          },
+        },
+        {
+          text: 'Download & Share PDF',
+          onPress: () => onDownloadIdCardPdf(),
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ],
+      { cancelable: true }
+    );
+  }, [tenantId, reporter, canManageAutoPublish, onDownloadIdCardPdf]);
 
   const onIdCardPrimaryAction = useCallback(async () => {
     if (!tenantId || !reporter) return;
+    if (!canManageAutoPublish) {
+      Alert.alert('Not Authorized', 'Only tenant admins can generate reporter ID cards.');
+      return;
+    }
     setIdCardUpdating(true);
     setIdCardMessage(null);
     try {
       let card: ReporterIdCard | null = null;
       try {
         card = await getReporterIdCard(tenantId, reporter.id);
+        // Some backends return `200 null` (or an incomplete object) when card doesn't exist.
+        // Treat that as "not found" so we can trigger generation.
+        if (!card || typeof (card as any)?.cardNumber !== 'string' || !(card as any).cardNumber) {
+          throw new HttpError(404, card, 'ID card not found');
+        }
         setIdCard(card);
       } catch (e: any) {
         if (e instanceof HttpError && e.status === 404) {
+          // Validation checks before generating new ID card
+          
+          // 1. Check if profile photo is uploaded
+          if (!reporter.profilePhotoUrl) {
+            Alert.alert(
+              'Profile Photo Required',
+              'Reporter must upload a profile photo before generating an ID card.',
+              [{ text: 'OK' }]
+            );
+            setIdCardUpdating(false);
+            return;
+          }
+          
+          // 2. Check subscription payment if subscription is active
+          if (reporter.subscriptionActive) {
+            const paymentStatus = reporter.stats?.subscriptionPayment?.currentMonth?.status;
+            const isPaid = paymentStatus && ['PAID', 'COMPLETED', 'SUCCESS'].includes(String(paymentStatus).toUpperCase());
+            if (!isPaid) {
+              Alert.alert(
+                'Payment Required',
+                'Reporter has an active subscription but payment is pending. Please ensure payment is completed before generating an ID card.',
+                [{ text: 'OK' }]
+              );
+              setIdCardUpdating(false);
+              return;
+            }
+          }
+          
+          // All validations passed, generate ID card
           await generateReporterIdCard(tenantId, reporter.id);
-          await loadIdCard();
-          card = await getReporterIdCard(tenantId, reporter.id);
-          setIdCard(card);
+
+          // Generation may be async; retry a few times before giving up.
+          const retryDelaysMs = [300, 800, 1500, 2500];
+          for (const ms of retryDelaysMs) {
+            await new Promise((r) => setTimeout(r, ms));
+            try {
+              const maybe = await getReporterIdCard(tenantId, reporter.id);
+              if (maybe && typeof (maybe as any)?.cardNumber === 'string' && (maybe as any).cardNumber) {
+                card = maybe as ReporterIdCard;
+                break;
+              }
+            } catch (err: any) {
+              if (err instanceof HttpError && err.status === 404) continue;
+              throw err;
+            }
+          }
+
+          if (card) {
+            setIdCard(card);
+          } else {
+            setIdCardMessage('ID card generation started. Please try again in a moment.');
+            return;
+          }
         } else throw e;
       }
       if (card) await onDownloadIdCardPdf();
       else setIdCardMessage('ID card not available');
     } catch (e: any) {
-      setIdCardMessage(e?.message || 'Failed');
+      if (e instanceof HttpError && e.status === 403) {
+        setIdCardMessage('Forbidden (403). Backend must allow this action for your role.');
+      } else {
+        setIdCardMessage(e?.message || 'Failed');
+      }
     } finally {
       setIdCardUpdating(false);
     }
-  }, [tenantId, reporter, onDownloadIdCardPdf, loadIdCard]);
+  }, [tenantId, reporter, canManageAutoPublish, onDownloadIdCardPdf]);
 
   const onSubmitKyc = useCallback(async () => {
     if (!tenantId || !reporter) return;
@@ -541,86 +698,278 @@ export default function TenantReporterDetailsScreen() {
             </View>
           </View>
 
-          {/* ── KYC ── */}
+          {/* ── KYC Verification ── */}
           <View style={[styles.card, { backgroundColor: c.card, borderColor: c.border }]}>
             <View style={styles.cardHeader}>
               <MaterialIcons name="verified-user" size={20} color={primary} />
               <ThemedText type="defaultSemiBold" style={{ color: c.text }}>KYC Verification</ThemedText>
               <View style={{ flex: 1 }} />
-              <View style={[styles.statusBadge, { backgroundColor: kycOk ? alphaBg('#10b981', 0.12, c.background) : kycPending ? alphaBg('#f59e0b', 0.12, c.background) : alphaBg(c.muted, 0.1, c.background) }]}>
-                <MaterialIcons name={kycOk ? 'verified' : kycPending ? 'pending' : 'help-outline'} size={14} color={kycOk ? '#10b981' : kycPending ? '#f59e0b' : c.muted} />
-                <ThemedText style={{ color: kycOk ? '#10b981' : kycPending ? '#f59e0b' : c.muted, fontSize: 12 }}>
-                  {reporter.kycStatus || 'Unknown'}
+              <View style={[styles.statusBadge, { backgroundColor: kycOk ? alphaBg('#10b981', 0.12, c.background) : kycPending ? alphaBg('#f59e0b', 0.12, c.background) : alphaBg('#ef4444', 0.12, c.background) }]}>
+                <MaterialIcons name={kycOk ? 'verified' : kycPending ? 'pending' : 'cancel'} size={14} color={kycOk ? '#10b981' : kycPending ? '#f59e0b' : '#ef4444'} />
+                <ThemedText style={{ color: kycOk ? '#10b981' : kycPending ? '#f59e0b' : '#ef4444', fontSize: 12, fontWeight: '600' }}>
+                  {reporter.kycStatus || 'NOT SUBMITTED'}
                 </ThemedText>
               </View>
             </View>
 
+            {/* Submitted Documents Section */}
+            {reporter.kycData && (
+              <View style={[styles.kycDocSection, { borderColor: c.border, backgroundColor: alphaBg(c.muted, 0.03, c.background) }]}>
+                <ThemedText style={{ color: c.muted, fontSize: 11, fontWeight: '600', textTransform: 'uppercase', marginBottom: 10 }}>Submitted Documents</ThemedText>
+                
+                <View style={styles.kycDocGrid}>
+                  {/* Aadhar Card */}
+                  <View style={[styles.kycDocItem, { borderColor: c.border, backgroundColor: c.background }]}>
+                    <View style={[styles.kycDocIcon, { backgroundColor: alphaBg('#6366f1', 0.1, c.background) }]}>
+                      <MaterialIcons name="credit-card" size={18} color="#6366f1" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <ThemedText style={{ color: c.text, fontSize: 12, fontWeight: '600' }}>Aadhaar Card</ThemedText>
+                      <ThemedText style={{ color: c.muted, fontSize: 11, marginTop: 2 }}>
+                        {reporter.kycData.aadhaarNumber || reporter.kycData.aadharNumberMasked || '—'}
+                      </ThemedText>
+                    </View>
+                    {reporter.kycData.verification?.verifiedAadhar !== undefined && (
+                      <MaterialIcons 
+                        name={reporter.kycData.verification.verifiedAadhar ? 'check-circle' : 'cancel'} 
+                        size={18} 
+                        color={reporter.kycData.verification.verifiedAadhar ? '#10b981' : '#ef4444'} 
+                      />
+                    )}
+                  </View>
+
+                  {/* PAN Card */}
+                  <View style={[styles.kycDocItem, { borderColor: c.border, backgroundColor: c.background }]}>
+                    <View style={[styles.kycDocIcon, { backgroundColor: alphaBg('#f59e0b', 0.1, c.background) }]}>
+                      <MaterialIcons name="badge" size={18} color="#f59e0b" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <ThemedText style={{ color: c.text, fontSize: 12, fontWeight: '600' }}>PAN Card</ThemedText>
+                      <ThemedText style={{ color: c.muted, fontSize: 11, marginTop: 2 }}>
+                        {reporter.kycData.panNumber || reporter.kycData.panNumberMasked || '—'}
+                      </ThemedText>
+                    </View>
+                    {reporter.kycData.verification?.verifiedPan !== undefined && (
+                      <MaterialIcons 
+                        name={reporter.kycData.verification.verifiedPan ? 'check-circle' : 'cancel'} 
+                        size={18} 
+                        color={reporter.kycData.verification.verifiedPan ? '#10b981' : '#ef4444'} 
+                      />
+                    )}
+                  </View>
+
+                  {/* Work Proof */}
+                  {reporter.kycData.workProofUrl && (
+                    <View style={[styles.kycDocItem, { borderColor: c.border, backgroundColor: c.background }]}>
+                      <View style={[styles.kycDocIcon, { backgroundColor: alphaBg('#10b981', 0.1, c.background) }]}>
+                        <MaterialIcons name="work" size={18} color="#10b981" />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <ThemedText style={{ color: c.text, fontSize: 12, fontWeight: '600' }}>Work Proof</ThemedText>
+                        <ThemedText style={{ color: c.muted, fontSize: 11, marginTop: 2 }}>Document uploaded</ThemedText>
+                      </View>
+                      {reporter.kycData.verification?.verifiedWorkProof !== undefined && (
+                        <MaterialIcons 
+                          name={reporter.kycData.verification.verifiedWorkProof ? 'check-circle' : 'cancel'} 
+                          size={18} 
+                          color={reporter.kycData.verification.verifiedWorkProof ? '#10b981' : '#ef4444'} 
+                        />
+                      )}
+                    </View>
+                  )}
+                </View>
+
+                {/* Previous Verification Notes */}
+                {reporter.kycData.verification?.notes && (
+                  <View style={[styles.kycNotesBox, { borderColor: c.border, backgroundColor: alphaBg(c.muted, 0.05, c.background) }]}>
+                    <MaterialIcons name="comment" size={14} color={c.muted} />
+                    <ThemedText style={{ color: c.text, fontSize: 12, flex: 1 }}>{reporter.kycData.verification.notes}</ThemedText>
+                  </View>
+                )}
+
+                {reporter.kycData.verification?.verifiedAt && (
+                  <ThemedText style={{ color: c.muted, fontSize: 10, marginTop: 8 }}>
+                    Last verified: {formatDateISO(reporter.kycData.verification.verifiedAt)}
+                  </ThemedText>
+                )}
+              </View>
+            )}
+
+            {/* No KYC Data */}
+            {!reporter.kycData && !kycPending && (
+              <View style={{ alignItems: 'center', paddingVertical: 20 }}>
+                <MaterialIcons name="folder-off" size={32} color={c.muted} />
+                <ThemedText style={{ color: c.muted, fontSize: 12, marginTop: 8 }}>No KYC documents submitted yet</ThemedText>
+              </View>
+            )}
+
             {canManageKyc && (
               <>
-                <Pressable
-                  onPress={() => { setKycEditing((v) => !v); setKycMessage(null); }}
-                  style={[styles.actionBtn, { borderColor: c.border, backgroundColor: c.background }]}
-                >
-                  <MaterialIcons name={kycEditing ? 'close' : 'edit'} size={16} color={primary} />
-                  <ThemedText style={{ color: primary, fontWeight: '600' }}>{kycEditing ? 'Cancel' : 'Update KYC'}</ThemedText>
-                </Pressable>
+                {/* Quick Action Buttons */}
+                {!kycEditing && kycPending && (
+                  <View style={styles.kycQuickActions}>
+                    <Pressable
+                      onPress={() => {
+                        setKycStatusDraft('APPROVED');
+                        setVerifiedAadharDraft(true);
+                        setVerifiedPanDraft(true);
+                        setVerifiedWorkProofDraft(true);
+                        setKycNotesDraft('Documents verified successfully');
+                        setKycEditing(true);
+                      }}
+                      style={[styles.kycQuickBtn, { backgroundColor: alphaBg('#10b981', 0.1, c.background), borderColor: '#10b981' }]}
+                    >
+                      <MaterialIcons name="check-circle" size={18} color="#10b981" />
+                      <ThemedText style={{ color: '#10b981', fontWeight: '600', fontSize: 13 }}>Quick Approve</ThemedText>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => {
+                        setKycStatusDraft('REJECTED');
+                        setVerifiedAadharDraft(false);
+                        setVerifiedPanDraft(false);
+                        setVerifiedWorkProofDraft(false);
+                        setKycNotesDraft('');
+                        setKycEditing(true);
+                      }}
+                      style={[styles.kycQuickBtn, { backgroundColor: alphaBg('#ef4444', 0.1, c.background), borderColor: '#ef4444' }]}
+                    >
+                      <MaterialIcons name="cancel" size={18} color="#ef4444" />
+                      <ThemedText style={{ color: '#ef4444', fontWeight: '600', fontSize: 13 }}>Reject</ThemedText>
+                    </Pressable>
+                  </View>
+                )}
 
+                {/* Manual Review Toggle */}
+                {!kycEditing && (
+                  <Pressable
+                    onPress={() => { setKycEditing(true); setKycMessage(null); }}
+                    style={[styles.actionBtn, { borderColor: c.border, backgroundColor: c.background, marginTop: kycPending ? 0 : 12 }]}
+                  >
+                    <MaterialIcons name="rate-review" size={16} color={primary} />
+                    <ThemedText style={{ color: primary, fontWeight: '600' }}>Manual Review</ThemedText>
+                  </Pressable>
+                )}
+
+                {/* Expanded Form */}
                 {kycEditing && (
-                  <View style={styles.kycForm}>
-                    <ThemedText style={{ color: c.muted, marginBottom: 6 }}>Status</ThemedText>
+                  <View style={[styles.kycForm, { borderColor: c.border, backgroundColor: alphaBg(primary, 0.02, c.background) }]}>
+                    <View style={styles.kycFormHeader}>
+                      <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 14 }}>Update KYC Status</ThemedText>
+                      <Pressable onPress={() => { setKycEditing(false); setKycMessage(null); }} hitSlop={10}>
+                        <MaterialIcons name="close" size={20} color={c.muted} />
+                      </Pressable>
+                    </View>
+
+                    {/* Status Selection */}
+                    <ThemedText style={{ color: c.muted, fontSize: 11, fontWeight: '600', textTransform: 'uppercase', marginBottom: 8 }}>Decision</ThemedText>
                     <View style={styles.chipRow}>
-                      {(['APPROVED', 'PENDING', 'REJECTED'] as const).map((s) => {
+                      {(['APPROVED', 'REJECTED'] as const).map((s) => {
                         const selected = kycStatusDraft === s;
-                        const chipColor = s === 'APPROVED' ? '#10b981' : s === 'PENDING' ? '#f59e0b' : '#ef4444';
+                        const isApprove = s === 'APPROVED';
+                        const chipColor = isApprove ? '#10b981' : '#ef4444';
+                        const icon = isApprove ? 'check-circle' : 'cancel';
                         return (
                           <Pressable
                             key={s}
                             onPress={() => setKycStatusDraft(s)}
-                            style={[styles.statusChip, { backgroundColor: selected ? chipColor : c.background, borderColor: selected ? chipColor : c.border }]}
+                            style={[styles.kycDecisionChip, { 
+                              backgroundColor: selected ? chipColor : c.background, 
+                              borderColor: selected ? chipColor : c.border,
+                              borderWidth: selected ? 2 : 1,
+                            }]}
                           >
-                            <ThemedText style={{ color: selected ? '#fff' : c.text, fontSize: 12, fontWeight: '600' }}>{s}</ThemedText>
+                            <MaterialIcons name={icon} size={16} color={selected ? '#fff' : chipColor} />
+                            <ThemedText style={{ color: selected ? '#fff' : c.text, fontSize: 13, fontWeight: '600', marginLeft: 6 }}>{s}</ThemedText>
                           </Pressable>
                         );
                       })}
                     </View>
 
-                    <ThemedText style={{ color: c.muted, marginTop: 12, marginBottom: 6 }}>Notes</ThemedText>
+                    {/* Document Verification Checkboxes */}
+                    <ThemedText style={{ color: c.muted, fontSize: 11, fontWeight: '600', textTransform: 'uppercase', marginTop: 16, marginBottom: 8 }}>Document Verification</ThemedText>
+                    <View style={[styles.kycVerifyBox, { borderColor: c.border, backgroundColor: c.background }]}>
+                      <Pressable style={styles.kycVerifyRow} onPress={() => setVerifiedAadharDraft(v => !v)}>
+                        <MaterialIcons 
+                          name={verifiedAadharDraft ? 'check-box' : 'check-box-outline-blank'} 
+                          size={22} 
+                          color={verifiedAadharDraft ? '#10b981' : c.muted} 
+                        />
+                        <ThemedText style={{ color: c.text, flex: 1, marginLeft: 10 }}>Aadhaar Card Verified</ThemedText>
+                      </Pressable>
+                      <View style={[styles.kycVerifyDivider, { backgroundColor: c.border }]} />
+                      <Pressable style={styles.kycVerifyRow} onPress={() => setVerifiedPanDraft(v => !v)}>
+                        <MaterialIcons 
+                          name={verifiedPanDraft ? 'check-box' : 'check-box-outline-blank'} 
+                          size={22} 
+                          color={verifiedPanDraft ? '#10b981' : c.muted} 
+                        />
+                        <ThemedText style={{ color: c.text, flex: 1, marginLeft: 10 }}>PAN Card Verified</ThemedText>
+                      </Pressable>
+                      <View style={[styles.kycVerifyDivider, { backgroundColor: c.border }]} />
+                      <Pressable style={styles.kycVerifyRow} onPress={() => setVerifiedWorkProofDraft(v => !v)}>
+                        <MaterialIcons 
+                          name={verifiedWorkProofDraft ? 'check-box' : 'check-box-outline-blank'} 
+                          size={22} 
+                          color={verifiedWorkProofDraft ? '#10b981' : c.muted} 
+                        />
+                        <ThemedText style={{ color: c.text, flex: 1, marginLeft: 10 }}>Work Proof Verified</ThemedText>
+                      </Pressable>
+                    </View>
+
+                    {/* Notes */}
+                    <ThemedText style={{ color: c.muted, fontSize: 11, fontWeight: '600', textTransform: 'uppercase', marginTop: 16, marginBottom: 8 }}>
+                      {kycStatusDraft === 'REJECTED' ? 'Rejection Reason' : 'Notes'} {kycStatusDraft === 'REJECTED' && <ThemedText style={{ color: '#ef4444' }}>*</ThemedText>}
+                    </ThemedText>
                     <TextInput
                       value={kycNotesDraft}
                       onChangeText={setKycNotesDraft}
-                      placeholder="Optional notes..."
+                      placeholder={kycStatusDraft === 'REJECTED' ? 'Enter reason for rejection...' : 'Optional notes...'}
                       placeholderTextColor={c.muted}
-                      style={[styles.input, { borderColor: c.border, color: c.text, backgroundColor: c.background }]}
+                      multiline
+                      numberOfLines={3}
+                      style={[styles.kycNotesInput, { borderColor: c.border, color: c.text, backgroundColor: c.background }]}
                     />
 
-                    <View style={styles.switchRow}>
-                      <ThemedText style={{ color: c.text, flex: 1 }}>Verified Aadhar</ThemedText>
-                      <Switch value={verifiedAadharDraft} onValueChange={setVerifiedAadharDraft} />
+                    {/* Action Buttons */}
+                    <View style={styles.kycFormActions}>
+                      <Pressable
+                        onPress={() => { setKycEditing(false); setKycMessage(null); }}
+                        style={[styles.kycCancelBtn, { borderColor: c.border, backgroundColor: c.background }]}
+                      >
+                        <ThemedText style={{ color: c.text, fontWeight: '600' }}>Cancel</ThemedText>
+                      </Pressable>
+                      <Pressable
+                        onPress={onSubmitKyc}
+                        disabled={kycUpdating || (kycStatusDraft === 'REJECTED' && !kycNotesDraft.trim())}
+                        style={[styles.kycSubmitBtn, { 
+                          backgroundColor: kycStatusDraft === 'APPROVED' ? '#10b981' : '#ef4444', 
+                          opacity: (kycUpdating || (kycStatusDraft === 'REJECTED' && !kycNotesDraft.trim())) ? 0.5 : 1 
+                        }]}
+                      >
+                        {kycUpdating ? <ActivityIndicator size="small" color="#fff" /> : (
+                          <>
+                            <MaterialIcons name={kycStatusDraft === 'APPROVED' ? 'check' : 'close'} size={18} color="#fff" />
+                            <ThemedText style={{ color: '#fff', fontWeight: '600', marginLeft: 6 }}>
+                              {kycStatusDraft === 'APPROVED' ? 'Approve KYC' : 'Reject KYC'}
+                            </ThemedText>
+                          </>
+                        )}
+                      </Pressable>
                     </View>
-                    <View style={styles.switchRow}>
-                      <ThemedText style={{ color: c.text, flex: 1 }}>Verified PAN</ThemedText>
-                      <Switch value={verifiedPanDraft} onValueChange={setVerifiedPanDraft} />
-                    </View>
-                    <View style={styles.switchRow}>
-                      <ThemedText style={{ color: c.text, flex: 1 }}>Verified Work Proof</ThemedText>
-                      <Switch value={verifiedWorkProofDraft} onValueChange={setVerifiedWorkProofDraft} />
-                    </View>
-
-                    <Pressable
-                      onPress={onSubmitKyc}
-                      disabled={kycUpdating}
-                      style={[styles.primaryBtn, { backgroundColor: primary, opacity: kycUpdating ? 0.7 : 1 }]}
-                    >
-                      {kycUpdating ? <ActivityIndicator size="small" color={primaryText} /> : (
-                        <>
-                          <MaterialIcons name="save" size={18} color={primaryText} />
-                          <ThemedText style={{ color: primaryText, fontWeight: '600' }}>Save KYC</ThemedText>
-                        </>
-                      )}
-                    </Pressable>
                   </View>
                 )}
-                {kycMessage && <ThemedText style={{ color: c.muted, marginTop: 8 }}>{kycMessage}</ThemedText>}
+
+                {/* Message */}
+                {kycMessage && (
+                  <View style={[styles.kycMessageBox, { backgroundColor: alphaBg(kycMessage.includes('Failed') ? '#ef4444' : '#10b981', 0.1, c.background) }]}>
+                    <MaterialIcons 
+                      name={kycMessage.includes('Failed') ? 'error' : 'check-circle'} 
+                      size={16} 
+                      color={kycMessage.includes('Failed') ? '#ef4444' : '#10b981'} 
+                    />
+                    <ThemedText style={{ color: kycMessage.includes('Failed') ? '#ef4444' : '#10b981', fontSize: 12, marginLeft: 6 }}>{kycMessage}</ThemedText>
+                  </View>
+                )}
               </>
             )}
           </View>
@@ -698,19 +1047,109 @@ export default function TenantReporterDetailsScreen() {
               <ThemedText style={{ color: c.muted }}>No ID card generated yet</ThemedText>
             )}
 
-            <Pressable
-              onPress={onIdCardPrimaryAction}
-              disabled={idCardUpdating}
-              style={[styles.actionBtn, { borderColor: primary, backgroundColor: alphaBg(primary, 0.08, c.background), marginTop: 12 }]}
-            >
-              {idCardUpdating ? <ActivityIndicator size="small" color={primary} /> : (
-                <>
-                  <MaterialIcons name={idCard ? 'download' : 'add-card'} size={18} color={primary} />
-                  <ThemedText style={{ color: primary, fontWeight: '600' }}>{idCard ? 'Download PDF' : 'Generate ID Card'}</ThemedText>
-                </>
-              )}
-            </Pressable>
-            {idCardMessage && <ThemedText style={{ color: c.muted, marginTop: 8 }}>{idCardMessage}</ThemedText>}
+            {/* Action buttons row */}
+            {idCard ? (
+              <View style={styles.idCardActionsRow}>
+                {/* Download PDF */}
+                <Pressable
+                  onPress={onIdCardPrimaryAction}
+                  disabled={idCardUpdating}
+                  style={[styles.idCardActionBtn, { borderColor: primary, backgroundColor: alphaBg(primary, 0.08, c.background) }]}
+                >
+                  {idCardUpdating ? <ActivityIndicator size="small" color={primary} /> : (
+                    <>
+                      <MaterialIcons name="download" size={18} color={primary} />
+                      <ThemedText style={{ color: primary, fontWeight: '600', fontSize: 13 }}>Download</ThemedText>
+                    </>
+                  )}
+                </Pressable>
+                
+                {/* View HTML - Same style as PDF */}
+                <Pressable
+                  onPress={onViewIdCardHtml}
+                  style={[styles.idCardActionBtn, { borderColor: '#6366f1', backgroundColor: alphaBg('#6366f1', 0.08, c.background) }]}
+                >
+                  <MaterialIcons name="open-in-browser" size={18} color="#6366f1" />
+                  <ThemedText style={{ color: '#6366f1', fontWeight: '600', fontSize: 13 }}>View</ThemedText>
+                </Pressable>
+                
+                {/* Share */}
+                <Pressable
+                  onPress={onShareIdCard}
+                  style={[styles.idCardActionBtn, { borderColor: '#10b981', backgroundColor: alphaBg('#10b981', 0.08, c.background) }]}
+                >
+                  <MaterialIcons name="share" size={18} color="#10b981" />
+                  <ThemedText style={{ color: '#10b981', fontWeight: '600', fontSize: 13 }}>Share</ThemedText>
+                </Pressable>
+              </View>
+            ) : (
+              <>
+                {/* Requirements checklist */}
+                <View style={[styles.idCardRequirements, { backgroundColor: alphaBg(c.muted, 0.05, c.background), borderColor: c.border }]}>
+                  <ThemedText style={{ color: c.muted, fontSize: 11, fontWeight: '600', textTransform: 'uppercase', marginBottom: 8 }}>Requirements</ThemedText>
+                  
+                  {/* Profile Photo */}
+                  <View style={styles.idCardReqRow}>
+                    <MaterialIcons 
+                      name={reporter.profilePhotoUrl ? 'check-circle' : 'cancel'} 
+                      size={16} 
+                      color={reporter.profilePhotoUrl ? '#10b981' : '#ef4444'} 
+                    />
+                    <ThemedText style={{ color: reporter.profilePhotoUrl ? c.text : '#ef4444', fontSize: 12, marginLeft: 8 }}>
+                      Profile photo uploaded
+                    </ThemedText>
+                  </View>
+                  
+                  {/* Payment (only if subscription is active) */}
+                  {subscriptionActive && (
+                    <View style={styles.idCardReqRow}>
+                      <MaterialIcons 
+                        name={(() => {
+                          const status = reporter.stats?.subscriptionPayment?.currentMonth?.status;
+                          const isPaid = status && ['PAID', 'COMPLETED', 'SUCCESS'].includes(String(status).toUpperCase());
+                          return isPaid ? 'check-circle' : 'cancel';
+                        })()} 
+                        size={16} 
+                        color={(() => {
+                          const status = reporter.stats?.subscriptionPayment?.currentMonth?.status;
+                          const isPaid = status && ['PAID', 'COMPLETED', 'SUCCESS'].includes(String(status).toUpperCase());
+                          return isPaid ? '#10b981' : '#ef4444';
+                        })()} 
+                      />
+                      <ThemedText style={{ 
+                        color: (() => {
+                          const status = reporter.stats?.subscriptionPayment?.currentMonth?.status;
+                          const isPaid = status && ['PAID', 'COMPLETED', 'SUCCESS'].includes(String(status).toUpperCase());
+                          return isPaid ? c.text : '#ef4444';
+                        })(), 
+                        fontSize: 12, 
+                        marginLeft: 8 
+                      }}>
+                        Subscription payment completed
+                      </ThemedText>
+                    </View>
+                  )}
+
+                  <ThemedText style={{ color: c.muted, fontSize: 12, marginTop: 10 }}>
+                    Best practice: use View (HTML) to see the designed card, use Download (PDF) to save/share.
+                  </ThemedText>
+                </View>
+                
+                <Pressable
+                  onPress={onIdCardPrimaryAction}
+                  disabled={idCardUpdating}
+                  style={[styles.actionBtn, { borderColor: primary, backgroundColor: alphaBg(primary, 0.08, c.background), marginTop: 12 }]}
+                >
+                  {idCardUpdating ? <ActivityIndicator size="small" color={primary} /> : (
+                    <>
+                      <MaterialIcons name="add-card" size={18} color={primary} />
+                      <ThemedText style={{ color: primary, fontWeight: '600' }}>Generate ID Card</ThemedText>
+                    </>
+                  )}
+                </Pressable>
+              </>
+            )}
+            {idCardMessage && <ThemedText style={{ color: c.muted, marginTop: 8, textAlign: 'center' }}>{idCardMessage}</ThemedText>}
           </View>
         </View>
       </ScrollView>
@@ -865,11 +1304,40 @@ const styles = StyleSheet.create({
   retryBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 12, marginTop: 12 },
 
   /* KYC Form */
-  kycForm: { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: 'rgba(0,0,0,0.05)' },
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  kycForm: { marginTop: 12, padding: 16, borderRadius: 14, borderWidth: 1 },
+  kycFormHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   statusChip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1 },
+  kycDecisionChip: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 12, borderRadius: 12, borderWidth: 1 },
   input: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, fontSize: 14 },
   switchRow: { flexDirection: 'row', alignItems: 'center', marginTop: 10 },
+  
+  /* KYC Document Display */
+  kycDocSection: { borderRadius: 12, borderWidth: 1, padding: 14, marginTop: 12 },
+  kycDocGrid: { gap: 10 },
+  kycDocItem: { flexDirection: 'row', alignItems: 'center', padding: 12, borderRadius: 10, borderWidth: 1, gap: 12 },
+  kycDocIcon: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  kycNotesBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginTop: 12, padding: 10, borderRadius: 8, borderWidth: 1 },
+  
+  /* KYC Quick Actions */
+  kycQuickActions: { flexDirection: 'row', gap: 10, marginTop: 14 },
+  kycQuickBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, borderRadius: 12, borderWidth: 1.5 },
+  
+  /* KYC Verification Checkboxes */
+  kycVerifyBox: { borderRadius: 12, borderWidth: 1, overflow: 'hidden' },
+  kycVerifyRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12 },
+  kycVerifyDivider: { height: 1, marginHorizontal: 14 },
+  
+  /* KYC Notes Input */
+  kycNotesInput: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, fontSize: 14, minHeight: 80, textAlignVertical: 'top' },
+  
+  /* KYC Form Actions */
+  kycFormActions: { flexDirection: 'row', gap: 10, marginTop: 16 },
+  kycCancelBtn: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 14, borderRadius: 12, borderWidth: 1 },
+  kycSubmitBtn: { flex: 2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 14, borderRadius: 12 },
+  
+  /* KYC Message */
+  kycMessageBox: { flexDirection: 'row', alignItems: 'center', padding: 12, borderRadius: 10, marginTop: 12 },
 
   /* Stats */
   statsGrid: { flexDirection: 'row', gap: 10 },
@@ -878,6 +1346,10 @@ const styles = StyleSheet.create({
   /* ID Card */
   idCardBox: { flexDirection: 'row', alignItems: 'center', padding: 14, borderRadius: 14, borderWidth: 1, gap: 12 },
   idCardStatus: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  idCardActionsRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
+  idCardActionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, paddingHorizontal: 10, borderRadius: 12, borderWidth: 1 },
+  idCardRequirements: { borderRadius: 12, borderWidth: 1, padding: 14, marginTop: 8 },
+  idCardReqRow: { flexDirection: 'row', alignItems: 'center', marginTop: 6 },
 
   /* Error */
   errorCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },

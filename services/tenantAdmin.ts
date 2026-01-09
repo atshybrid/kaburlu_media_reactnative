@@ -273,3 +273,201 @@ export type TenantAdminFullResponse = {
 export async function getTenantAdminDashboard(): Promise<TenantAdminFullResponse> {
   return await request<TenantAdminFullResponse>('/dashboard/admin/full');
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * Newspaper Article Approval APIs
+ * For TENANT_ADMIN and TENANT_EDITOR roles
+ * ───────────────────────────────────────────────────────────────────────────── */
+
+export type NewspaperArticleStatus = 'DRAFT' | 'PENDING' | 'PUBLISHED' | 'REJECTED' | 'ARCHIVED';
+
+export type NewspaperArticleAuthor = {
+  id: string;
+  profile?: {
+    fullName?: string;
+    profilePhotoUrl?: string;
+  };
+  mobileNumber?: string;
+};
+
+export type NewspaperArticleCategory = {
+  id: string;
+  name: string;
+  slug?: string;
+};
+
+export type NewspaperArticleLanguage = {
+  id: string;
+  name: string;
+  code: string;
+};
+
+export type NewspaperArticleWebArticle = {
+  id: string;
+  slug?: string;
+  status?: string;
+  url?: string;
+  languageCode?: string;
+  title?: string;
+  viewCount?: number;
+  publishedAt?: string | null;
+};
+
+export type NewspaperArticleBaseArticle = {
+  contentJson?: unknown;
+  viewCount?: number;
+};
+
+export type NewspaperArticle = {
+  id: string;
+  tenantId: string;
+  authorId: string;
+  baseArticleId?: string;
+  categoryId?: string;
+  languageId?: string;
+  title: string;
+  subTitle?: string;
+  lead?: string;
+  heading?: string;
+  points?: string[];
+  dateline?: string;
+  placeName?: string;
+  content?: string;
+  status: NewspaperArticleStatus;
+  createdAt: string;
+  updatedAt?: string;
+  viewCount?: number;
+  coverImageUrl?: string;
+  // Location IDs
+  stateId?: string;
+  districtId?: string;
+  mandalId?: string;
+  villageId?: string;
+  // Sport link (live website URL)
+  sportLink?: string;
+  sportLinkDomain?: string;
+  sportLinkSlug?: string;
+  // Web article (linked website article)
+  webArticle?: NewspaperArticleWebArticle;
+  webArticleId?: string;
+  webArticleStatus?: string;
+  webArticleUrl?: string;
+  webArticleViewCount?: number;
+  // Relations
+  author?: NewspaperArticleAuthor;
+  baseArticle?: NewspaperArticleBaseArticle;
+  category?: NewspaperArticleCategory;
+  language?: NewspaperArticleLanguage;
+};
+
+export type NewspaperArticlesResponse = {
+  total: number;
+  items: NewspaperArticle[];
+  nextCursor?: string | null;
+};
+
+export type GetNewspaperArticlesParams = {
+  status?: NewspaperArticleStatus;
+  limit?: number;
+  cursor?: string;
+  authorId?: string;
+  categoryId?: string;
+  languageId?: string;
+  search?: string;
+};
+
+/**
+ * Get newspaper articles for tenant admin/editor review
+ * GET /api/v1/articles/newspaper
+ */
+export async function getNewspaperArticles(
+  params: GetNewspaperArticlesParams = {},
+): Promise<NewspaperArticlesResponse> {
+  const sp = new URLSearchParams();
+  if (params.status) sp.set('status', params.status);
+  if (params.limit) sp.set('limit', String(params.limit));
+  if (params.cursor) sp.set('cursor', String(params.cursor));
+  if (params.authorId) sp.set('authorId', params.authorId);
+  if (params.categoryId) sp.set('categoryId', params.categoryId);
+  if (params.languageId) sp.set('languageId', params.languageId);
+  if (params.search) sp.set('search', params.search);
+  const qs = sp.toString();
+  return await request<NewspaperArticlesResponse>(`/articles/newspaper${qs ? `?${qs}` : ''}`);
+}
+
+/**
+ * Tenant dashboard list endpoint (cursor pagination)
+ * GET /api/v1/dashboard/tenants/{tenantId}/newspaper-articles
+ */
+export async function getTenantDashboardNewspaperArticles(
+  tenantId: string,
+  params: GetNewspaperArticlesParams = {},
+): Promise<NewspaperArticlesResponse> {
+  const sp = new URLSearchParams();
+  if (params.status) sp.set('status', params.status);
+  if (params.limit) sp.set('limit', String(params.limit));
+  if (params.cursor) sp.set('cursor', String(params.cursor));
+  if (params.authorId) sp.set('authorId', params.authorId);
+  if (params.categoryId) sp.set('categoryId', params.categoryId);
+  if (params.languageId) sp.set('languageId', params.languageId);
+  if (params.search) sp.set('search', params.search);
+  const qs = sp.toString();
+  return await request<NewspaperArticlesResponse>(`/dashboard/tenants/${encodeURIComponent(tenantId)}/newspaper-articles${qs ? `?${qs}` : ''}`);
+}
+
+/**
+ * Get a single newspaper article by ID
+ * GET /api/v1/articles/newspaper/{articleId}
+ */
+export async function getNewspaperArticle(articleId: string): Promise<NewspaperArticle> {
+  return await request<NewspaperArticle>(`/articles/newspaper/${articleId}`);
+}
+
+export type UpdateNewspaperArticlePayload = {
+  status?: NewspaperArticleStatus;
+  title?: string;
+  subTitle?: string;
+  content?: string;
+  categoryId?: string;
+  // Add other editable fields as needed
+};
+
+export type UpdateNewspaperArticleResponse = {
+  id: string;
+  tenantId: string;
+  title: string;
+  status: NewspaperArticleStatus;
+  updatedAt: string;
+};
+
+/**
+ * Update newspaper article (approve/reject/edit)
+ * PATCH /api/v1/articles/newspaper/{articleId}
+ */
+export async function updateNewspaperArticle(
+  articleId: string,
+  payload: UpdateNewspaperArticlePayload,
+): Promise<UpdateNewspaperArticleResponse> {
+  return await request<UpdateNewspaperArticleResponse>(`/articles/newspaper/${articleId}`, {
+    method: 'PATCH',
+    body: payload,
+  });
+}
+
+/**
+ * Approve a newspaper article (set status to PUBLISHED)
+ */
+export async function approveNewspaperArticle(
+  articleId: string,
+): Promise<UpdateNewspaperArticleResponse> {
+  return updateNewspaperArticle(articleId, { status: 'PUBLISHED' });
+}
+
+/**
+ * Reject a newspaper article (set status to REJECTED)
+ */
+export async function rejectNewspaperArticle(
+  articleId: string,
+): Promise<UpdateNewspaperArticleResponse> {
+  return updateNewspaperArticle(articleId, { status: 'REJECTED' });
+}

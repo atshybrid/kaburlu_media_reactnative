@@ -5,23 +5,28 @@ import { useColorScheme } from '@/hooks/useColorScheme';
 import { loadTokens } from '@/services/auth';
 import {
     getTenantAdminDashboard,
+    getTenantDashboardNewspaperArticles,
+    type NewspaperArticle,
     type QuickAction,
-    type RecentActivityItem,
     type TenantAdminFullResponse,
 } from '@/services/tenantAdmin';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+    Animated,
     Image,
+    Modal,
     Pressable,
     RefreshControl,
     ScrollView,
+    StatusBar,
     StyleSheet,
-    View,
+    View
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 /* ─────────────────────────────  Helpers  ───────────────────────────── */
 
@@ -97,29 +102,24 @@ const ACTION_ICONS: Record<string, keyof typeof MaterialIcons.glyphMap> = {
   create_article: 'edit-note',
 };
 
-const ACTIVITY_ICONS: Record<string, keyof typeof MaterialIcons.glyphMap> = {
-  article: 'article',
-  payment: 'payments',
-  kyc: 'verified-user',
-};
-
-const ACTIVITY_COLORS: Record<string, string> = {
-  article: '#6366f1',
-  payment: '#10b981',
-  kyc: '#f59e0b',
-};
-
 /* ─────────────────────────────  Main Screen  ───────────────────────────── */
 
 export default function TenantDashboardScreen() {
   const scheme = useColorScheme() ?? 'light';
   const c = Colors[scheme];
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<TenantAdminFullResponse | null>(null);
+  const [pendingArticlesList, setPendingArticlesList] = useState<NewspaperArticle[]>([]);
+
+  // Pending articles bottom sheet state
+  const [showPendingSheet, setShowPendingSheet] = useState(false);
+  const pendingSheetShownRef = useRef(false); // Track if sheet was shown this session
+  const slideAnim = useRef(new Animated.Value(400)).current;
 
   // Fallback branding from session
   const [sessionBrand, setSessionBrand] = useState<{ primary?: string; logo?: string; name?: string }>({});
@@ -146,9 +146,20 @@ export default function TenantDashboardScreen() {
         name: session?.tenant?.name || session?.tenantName,
       });
 
-      // Fetch full dashboard
-      const dashboard = await getTenantAdminDashboard();
+      // Fetch full dashboard and pending articles in parallel
+      const tid = session?.tenantId || session?.tenant?.id;
+      const tenantId = typeof tid === 'string' ? tid : undefined;
+
+      const pendingPromise = tenantId
+        ? getTenantDashboardNewspaperArticles(tenantId, { status: 'PENDING', limit: 5 })
+        : Promise.resolve({ items: [] as NewspaperArticle[] });
+
+      const [dashboard, pendingRes] = await Promise.all([
+        getTenantAdminDashboard(),
+        pendingPromise,
+      ]);
       setData(dashboard);
+      setPendingArticlesList(pendingRes.items || []);
     } catch (e: any) {
       setError(e?.message || 'Failed to load dashboard');
     } finally {
@@ -162,6 +173,45 @@ export default function TenantDashboardScreen() {
       void loadData();
     }, [loadData])
   );
+
+  // Show pending articles bottom sheet when there are pending articles (once per session)
+  useEffect(() => {
+    if (pendingArticlesList.length > 0 && !pendingSheetShownRef.current && !loading) {
+      // Check if we've already shown the sheet recently (within last hour)
+      AsyncStorage.getItem('pending_sheet_last_shown').then((lastShown) => {
+        const oneHourAgo = Date.now() - 60 * 60 * 1000;
+        if (!lastShown || parseInt(lastShown, 10) < oneHourAgo) {
+          pendingSheetShownRef.current = true;
+          setShowPendingSheet(true);
+          AsyncStorage.setItem('pending_sheet_last_shown', String(Date.now()));
+          // Animate slide up
+          Animated.spring(slideAnim, {
+            toValue: 0,
+            useNativeDriver: true,
+            tension: 50,
+            friction: 12,
+          }).start();
+        }
+      });
+    }
+  }, [pendingArticlesList, loading, slideAnim]);
+
+  const closePendingSheet = useCallback(() => {
+    Animated.timing(slideAnim, {
+      toValue: 400,
+      duration: 250,
+      useNativeDriver: true,
+    }).start(() => {
+      setShowPendingSheet(false);
+    });
+  }, [slideAnim]);
+
+  const goToPendingApproval = useCallback(() => {
+    closePendingSheet();
+    setTimeout(() => {
+      router.push('/tenant/news-approval' as any);
+    }, 300);
+  }, [closePendingSheet, router]);
 
   const onRefresh = useCallback(() => void loadData(true), [loadData]);
 
@@ -182,7 +232,8 @@ export default function TenantDashboardScreen() {
   if (loading) {
     return (
       <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['bottom']}>
-        <DashboardSkeleton scheme={scheme} onBack={() => router.back()} />
+        <StatusBar barStyle="light-content" backgroundColor={c.muted} translucent={false} />
+        <DashboardSkeleton scheme={scheme} topInset={insets.top} />
       </SafeAreaView>
     );
   }
@@ -212,10 +263,14 @@ export default function TenantDashboardScreen() {
     );
   }
 
-  const { reporters, articles, payments, idCards, billing, aiUsage, recentActivity } = data;
+  const { reporters, articles, payments, idCards, billing, aiUsage } = data;
+
+  // Calculate pending articles count
+  const pendingArticles = (articles.web.byStatus.PENDING || 0) + (articles.raw.pendingReview || 0);
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['bottom']}>
+      <StatusBar barStyle="light-content" backgroundColor={primary} translucent={false} />
       <ScrollView
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[primary]} tintColor={primary} />}
@@ -225,11 +280,12 @@ export default function TenantDashboardScreen() {
           colors={[primary, alphaBg(primary, 0.85, primary)]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
-          style={styles.hero}
+          style={[styles.hero, { paddingTop: insets.top + 12 }]}
         >
+          {/* Back button */}
           <Pressable
             onPress={() => router.back()}
-            style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.8 }]}
+            style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.7 }]}
             hitSlop={12}
           >
             <MaterialIcons name="arrow-back" size={22} color="#fff" />
@@ -262,6 +318,15 @@ export default function TenantDashboardScreen() {
         {/* ── Stats Overview Row ── */}
         <View style={styles.statsRow}>
           <StatCard
+            icon="rate-review"
+            label="Pending Review"
+            value={formatNumber(pendingArticles)}
+            subValue="Articles awaiting"
+            color={pendingArticles > 0 ? '#f59e0b' : '#10b981'}
+            onPress={() => router.push('/tenant/news-approval' as any)}
+            c={c}
+          />
+          <StatCard
             icon="people"
             label="Reporters"
             value={formatNumber(reporters.active)}
@@ -271,22 +336,41 @@ export default function TenantDashboardScreen() {
             c={c}
           />
           <StatCard
-            icon="article"
+            icon="check-circle"
             label="Published"
             value={formatNumber(articles.web.byStatus.PUBLISHED || 0)}
             subValue={`+${articles.web.published7d} this week`}
             color="#10b981"
             c={c}
           />
-          <StatCard
-            icon="visibility"
-            label="Views"
-            value={formatNumber(articles.web.totalViews)}
-            subValue="All time"
-            color="#f59e0b"
-            c={c}
-          />
         </View>
+
+        {/* ── Pending Articles Alert Banner ── */}
+        {pendingArticles > 0 && (
+          <Pressable
+            onPress={() => router.push('/tenant/news-approval' as any)}
+            style={({ pressed }) => [
+              styles.pendingBanner,
+              { backgroundColor: alphaBg('#f59e0b', 0.1, c.background), borderColor: alphaBg('#f59e0b', 0.3, c.border) },
+              pressed && { opacity: 0.9 },
+            ]}
+          >
+            <View style={[styles.pendingBannerIcon, { backgroundColor: alphaBg('#f59e0b', 0.15, c.background) }]}>
+              <MaterialIcons name="notifications-active" size={24} color="#f59e0b" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <ThemedText type="defaultSemiBold" style={{ color: '#d97706', fontSize: 15 }}>
+                📰 {pendingArticles} New Article{pendingArticles !== 1 ? 's' : ''} to Review!
+              </ThemedText>
+              <ThemedText style={{ color: '#b45309', fontSize: 13, marginTop: 2 }}>
+                👆 Tap here to read and approve
+              </ThemedText>
+            </View>
+            <View style={[styles.tapHint, { backgroundColor: '#f59e0b' }]}>
+              <ThemedText style={{ color: '#fff', fontSize: 11, fontWeight: '600' }}>TAP</ThemedText>
+            </View>
+          </Pressable>
+        )}
 
         {/* ── Content ── */}
         <View style={styles.content}>
@@ -303,25 +387,36 @@ export default function TenantDashboardScreen() {
           )}
 
           {/* ── Quick Actions ── */}
-          <SectionHeader icon="flash-on" title="Quick Actions" c={c} />
+          <SectionHeader icon="touch-app" title="What do you want to do?" c={c} />
           <View style={styles.quickActionsRow}>
             <QuickActionButton
+              icon="rate-review"
+              label="Check News"
+              subtitle="Review & Approve"
+              onPress={() => router.push('/tenant/news-approval' as any)}
+              primary={primary}
+              c={c}
+            />
+            <QuickActionButton
               icon="edit-note"
-              label="Post News"
+              label="Write News"
+              subtitle="Create Article"
               onPress={() => router.push('/post-news' as any)}
               primary={primary}
               c={c}
             />
             <QuickActionButton
               icon="person-add"
-              label="Add Reporter"
+              label="New Reporter"
+              subtitle="Add Member"
               onPress={() => router.push('/tenant/create-reporter' as any)}
               primary={primary}
               c={c}
             />
             <QuickActionButton
-              icon="people"
-              label="Reporters"
+              icon="groups"
+              label="My Team"
+              subtitle="All Reporters"
               onPress={() => router.push('/tenant/reporters' as any)}
               primary={primary}
               c={c}
@@ -385,7 +480,13 @@ export default function TenantDashboardScreen() {
           </View>
 
           {/* ── Articles Summary ── */}
-          <SectionHeader icon="article" title="Articles" c={c} />
+          <SectionHeader
+            icon="article"
+            title="Articles"
+            actionLabel="Review Queue"
+            onAction={() => router.push('/tenant/news-approval' as any)}
+            c={c}
+          />
           <View style={[styles.card, { backgroundColor: c.card, borderColor: c.border }]}>
             <View style={styles.articleStatsGrid}>
               <ArticleStatTile
@@ -395,13 +496,15 @@ export default function TenantDashboardScreen() {
                 color="#8b5cf6"
                 c={c}
               />
-              <ArticleStatTile
-                icon="pending"
-                label="Pending"
-                value={articles.web.byStatus.PENDING || 0}
-                color="#f59e0b"
-                c={c}
-              />
+              <Pressable onPress={() => router.push('/tenant/news-approval' as any)}>
+                <ArticleStatTile
+                  icon="pending"
+                  label="Pending"
+                  value={articles.web.byStatus.PENDING || 0}
+                  color="#f59e0b"
+                  c={c}
+                />
+              </Pressable>
               <ArticleStatTile
                 icon="check-circle"
                 label="Published"
@@ -418,7 +521,14 @@ export default function TenantDashboardScreen() {
               />
             </View>
 
-            <View style={[styles.articleMetaRow, { borderTopColor: c.border }]}>
+            <Pressable
+              onPress={() => router.push('/tenant/news-approval' as any)}
+              style={({ pressed }) => [
+                styles.articleMetaRow,
+                { borderTopColor: c.border },
+                pressed && { opacity: 0.7 },
+              ]}
+            >
               <View style={styles.articleMeta}>
                 <MaterialIcons name="newspaper" size={16} color={c.muted} />
                 <ThemedText style={{ color: c.text, fontSize: 13 }}>
@@ -426,12 +536,13 @@ export default function TenantDashboardScreen() {
                 </ThemedText>
               </View>
               <View style={styles.articleMeta}>
-                <MaterialIcons name="rate-review" size={16} color={c.muted} />
-                <ThemedText style={{ color: c.text, fontSize: 13 }}>
+                <MaterialIcons name="rate-review" size={16} color={pendingArticles > 0 ? '#f59e0b' : c.muted} />
+                <ThemedText style={{ color: pendingArticles > 0 ? '#f59e0b' : c.text, fontSize: 13, fontWeight: pendingArticles > 0 ? '600' : '400' }}>
                   {articles.raw.pendingReview} Awaiting Review
                 </ThemedText>
+                {pendingArticles > 0 && <MaterialIcons name="chevron-right" size={16} color="#f59e0b" />}
               </View>
-            </View>
+            </Pressable>
           </View>
 
           {/* ── Payments & ID Cards Row ── */}
@@ -544,14 +655,41 @@ export default function TenantDashboardScreen() {
             </View>
           </View>
 
-          {/* ── Recent Activity ── */}
-          {recentActivity.length > 0 && (
+          {/* ── Pending Articles Preview ── */}
+          {pendingArticlesList.length > 0 && (
             <>
-              <SectionHeader icon="history" title="Recent Activity" c={c} />
+              <SectionHeader
+                icon="inbox"
+                title="📥 Articles Waiting for You"
+                actionLabel="See All →"
+                onAction={() => router.push('/tenant/news-approval' as any)}
+                c={c}
+              />
               <View style={[styles.card, { backgroundColor: c.card, borderColor: c.border, paddingVertical: 8 }]}>
-                {recentActivity.slice(0, 5).map((item, idx) => (
-                  <ActivityItem key={item.id} item={item} isLast={idx === recentActivity.slice(0, 5).length - 1} c={c} />
+                {pendingArticlesList.slice(0, 4).map((article, idx) => (
+                  <PendingArticleItem
+                    key={article.id}
+                    article={article}
+                    isLast={idx === Math.min(pendingArticlesList.length, 4) - 1}
+                    c={c}
+                    onPress={() => router.push('/tenant/news-approval' as any)}
+                  />
                 ))}
+                {pendingArticles > 4 && (
+                  <Pressable
+                    onPress={() => router.push('/tenant/news-approval' as any)}
+                    style={({ pressed }) => [
+                      styles.viewAllBtn,
+                      { borderTopColor: c.border },
+                      pressed && { opacity: 0.7 },
+                    ]}
+                  >
+                    <ThemedText style={{ color: primary, fontSize: 13, fontWeight: '600' }}>
+                      View All {pendingArticles} Pending Articles
+                    </ThemedText>
+                    <MaterialIcons name="arrow-forward" size={16} color={primary} />
+                  </Pressable>
+                )}
               </View>
             </>
           )}
@@ -559,6 +697,97 @@ export default function TenantDashboardScreen() {
           <View style={{ height: 32 }} />
         </View>
       </ScrollView>
+
+      {/* Pending Articles Bottom Sheet */}
+      <Modal
+        visible={showPendingSheet}
+        transparent
+        animationType="none"
+        onRequestClose={closePendingSheet}
+      >
+        <Pressable 
+          style={styles.sheetOverlay} 
+          onPress={closePendingSheet}
+        >
+          <Animated.View 
+            style={[
+              styles.sheetContent, 
+              { 
+                backgroundColor: c.background,
+                transform: [{ translateY: slideAnim }],
+                paddingBottom: insets.bottom + 16,
+              }
+            ]}
+          >
+            <Pressable onPress={(e) => e.stopPropagation()}>
+              {/* Sheet Handle */}
+              <View style={styles.sheetHandle}>
+                <View style={[styles.sheetHandleBar, { backgroundColor: c.border }]} />
+              </View>
+              
+              {/* Sheet Header */}
+              <View style={[styles.sheetHeader, { borderBottomColor: c.border }]}>
+                <View style={[styles.sheetIconBg, { backgroundColor: alphaBg('#f59e0b', 0.15, c.background) }]}>
+                  <MaterialIcons name="pending-actions" size={28} color="#f59e0b" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 18 }}>
+                    Articles Awaiting Review
+                  </ThemedText>
+                  <ThemedText style={{ color: c.muted, fontSize: 13, marginTop: 2 }}>
+                    {pendingArticlesList.length} article{pendingArticlesList.length !== 1 ? 's' : ''} need{pendingArticlesList.length === 1 ? 's' : ''} your approval
+                  </ThemedText>
+                </View>
+                <Pressable onPress={closePendingSheet} hitSlop={12}>
+                  <MaterialIcons name="close" size={24} color={c.muted} />
+                </Pressable>
+              </View>
+
+              {/* Article Preview List */}
+              <View style={{ paddingHorizontal: 16, paddingVertical: 8 }}>
+                {pendingArticlesList.slice(0, 3).map((article, idx) => (
+                  <PendingArticleItem
+                    key={article.id}
+                    article={article}
+                    isLast={idx === Math.min(pendingArticlesList.length, 3) - 1}
+                    c={c}
+                    onPress={goToPendingApproval}
+                  />
+                ))}
+              </View>
+
+              {/* Action Button */}
+              <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
+                <Pressable
+                  onPress={goToPendingApproval}
+                  style={({ pressed }) => [
+                    styles.sheetActionBtn,
+                    { backgroundColor: primary },
+                    pressed && { opacity: 0.9 },
+                  ]}
+                >
+                  <MaterialIcons name="rate-review" size={20} color="#fff" />
+                  <ThemedText style={{ color: '#fff', fontWeight: '600', fontSize: 15, marginLeft: 8 }}>
+                    Review All Pending Articles
+                  </ThemedText>
+                </Pressable>
+                <Pressable
+                  onPress={closePendingSheet}
+                  style={({ pressed }) => [
+                    styles.sheetDismissBtn,
+                    { borderColor: c.border },
+                    pressed && { opacity: 0.7 },
+                  ]}
+                >
+                  <ThemedText style={{ color: c.muted, fontSize: 14 }}>
+                    Remind Me Later
+                  </ThemedText>
+                </Pressable>
+              </View>
+            </Pressable>
+          </Animated.View>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -645,9 +874,23 @@ function ActionCard({
   const color = PRIORITY_COLORS[action.priority] || c.tint;
   const icon = ACTION_ICONS[action.key] || 'arrow-forward';
 
+  const handlePress = () => {
+    // Handle special action keys with custom navigation
+    if (action.key === 'review_kyc') {
+      (router.push as any)({ pathname: '/tenant/reporters', params: { kycFilter: 'PENDING' } });
+      return;
+    }
+    if (action.key === 'review_articles') {
+      (router.push as any)({ pathname: '/tenant/news-approval', params: { status: 'PENDING' } });
+      return;
+    }
+    // Default: use href from API
+    router.push(action.href as any);
+  };
+
   return (
     <Pressable
-      onPress={() => router.push(action.href as any)}
+      onPress={handlePress}
       style={({ pressed }) => [
         styles.alertCard,
         { backgroundColor: alphaBg(color, 0.08, c.card), borderColor: alphaBg(color, 0.2, c.border) },
@@ -668,12 +911,14 @@ function ActionCard({
 function QuickActionButton({
   icon,
   label,
+  subtitle,
   onPress,
   primary,
   c,
 }: {
   icon: keyof typeof MaterialIcons.glyphMap;
   label: string;
+  subtitle?: string;
   onPress: () => void;
   primary: string;
   c: typeof Colors.light;
@@ -684,15 +929,20 @@ function QuickActionButton({
       style={({ pressed }) => [
         styles.quickAction,
         { backgroundColor: c.card, borderColor: c.border },
-        pressed && { opacity: 0.9 },
+        pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] },
       ]}
     >
       <View style={[styles.quickActionIcon, { backgroundColor: alphaBg(primary, 0.12, c.background) }]}>
-        <MaterialIcons name={icon} size={22} color={primary} />
+        <MaterialIcons name={icon} size={26} color={primary} />
       </View>
-      <ThemedText style={{ color: c.text, fontSize: 12, fontWeight: '500', textAlign: 'center' }} numberOfLines={1}>
+      <ThemedText style={{ color: c.text, fontSize: 13, fontWeight: '600', textAlign: 'center', marginTop: 2 }} numberOfLines={1}>
         {label}
       </ThemedText>
+      {subtitle && (
+        <ThemedText style={{ color: c.muted, fontSize: 10, textAlign: 'center', marginTop: 1 }} numberOfLines={1}>
+          {subtitle}
+        </ThemedText>
+      )}
     </Pressable>
   );
 }
@@ -766,49 +1016,79 @@ function ArticleStatTile({
   );
 }
 
-function ActivityItem({
-  item,
+function PendingArticleItem({
+  article,
   isLast,
   c,
+  onPress,
 }: {
-  item: RecentActivityItem;
+  article: NewspaperArticle;
   isLast: boolean;
   c: typeof Colors.light;
+  onPress: () => void;
 }) {
-  const icon = ACTIVITY_ICONS[item.type] || 'circle';
-  const color = ACTIVITY_COLORS[item.type] || c.muted;
+  // Get cover image from multiple sources
+  const coverImage = article.coverImageUrl 
+    || (article.baseArticle?.contentJson as any)?.raw?.coverImageUrl
+    || (article.baseArticle?.contentJson as any)?.raw?.images?.[0]
+    || null;
+  // Get title from article or webArticle
+  const title = article.title || article.webArticle?.title || 'Untitled';
+  // Get author name from author profile
+  const authorName = article.author?.profile?.fullName || 'Unknown Reporter';
 
   return (
-    <View style={[styles.activityItem, !isLast && { borderBottomWidth: 1, borderBottomColor: c.border }]}>
-      <View style={[styles.activityIcon, { backgroundColor: alphaBg(color, 0.1, c.background) }]}>
-        <MaterialIcons name={icon} size={16} color={color} />
-      </View>
-      <View style={{ flex: 1 }}>
-        <ThemedText style={{ color: c.text, fontSize: 13 }} numberOfLines={1}>
-          {item.title || item.type}
-        </ThemedText>
-        <ThemedText style={{ color: c.muted, fontSize: 11 }}>
-          {item.status && <ThemedText style={{ color }}>{item.status} • </ThemedText>}
-          {timeAgo(item.at)}
-        </ThemedText>
-      </View>
-      {item.amountMinor !== undefined && (
-        <ThemedText style={{ color: '#10b981', fontWeight: '600', fontSize: 13 }}>
-          {formatMoney(item.amountMinor)}
-        </ThemedText>
+    <Pressable 
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.pendingArticleItem, 
+        !isLast && { borderBottomWidth: 1, borderBottomColor: c.border },
+        pressed && { opacity: 0.7 }
+      ]}
+    >
+      {coverImage ? (
+        <Image 
+          source={{ uri: coverImage }} 
+          style={styles.pendingArticleThumb} 
+          resizeMode="cover"
+        />
+      ) : (
+        <View style={[styles.pendingArticleThumb, { backgroundColor: alphaBg(c.muted, 0.2, c.background), alignItems: 'center', justifyContent: 'center' }]}>
+          <MaterialIcons name="article" size={20} color={c.muted} />
+        </View>
       )}
-    </View>
+      <View style={{ flex: 1, gap: 2 }}>
+        <ThemedText style={{ color: c.text, fontSize: 13, fontWeight: '600' }} numberOfLines={2}>
+          {title}
+        </ThemedText>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <ThemedText style={{ color: c.muted, fontSize: 11 }}>
+            {authorName}
+          </ThemedText>
+          <View style={{ width: 3, height: 3, borderRadius: 1.5, backgroundColor: c.muted }} />
+          <ThemedText style={{ color: c.muted, fontSize: 11 }}>
+            {timeAgo(article.createdAt)}
+          </ThemedText>
+        </View>
+      </View>
+      <View style={[styles.pendingBadge, { backgroundColor: alphaBg('#f59e0b', 0.15, c.background) }]}>
+        <MaterialIcons name="pending-actions" size={12} color="#f59e0b" />
+      </View>
+    </Pressable>
   );
 }
 
-function DashboardSkeleton({ scheme, onBack }: { scheme: 'light' | 'dark'; onBack: () => void }) {
+function DashboardSkeleton({ scheme, topInset }: { scheme: 'light' | 'dark'; topInset: number }) {
   const c = Colors[scheme];
   return (
     <ScrollView showsVerticalScrollIndicator={false}>
-      <LinearGradient colors={[c.muted, alphaBg(c.muted, 0.7, c.muted)]} style={styles.hero}>
-        <Pressable onPress={onBack} style={styles.backBtn} hitSlop={12}>
-          <MaterialIcons name="arrow-back" size={22} color="#fff" />
-        </Pressable>
+      <LinearGradient 
+        colors={[c.muted, alphaBg(c.muted, 0.7, c.muted)]} 
+        style={[styles.hero, { paddingTop: topInset + 12 }]}
+      >
+        <View style={styles.backBtn}>
+          <Skeleton width={22} height={22} borderRadius={11} />
+        </View>
         <View style={styles.heroContent}>
           <Skeleton width={64} height={64} borderRadius={32} />
           <View style={{ marginTop: 12 }}>
@@ -855,22 +1135,20 @@ const styles = StyleSheet.create({
 
   /* Hero */
   hero: {
-    paddingTop: 52,
     paddingBottom: 40,
     paddingHorizontal: 20,
     borderBottomLeftRadius: 32,
     borderBottomRightRadius: 32,
   },
   backBtn: {
-    position: 'absolute',
-    top: 12,
-    left: 16,
     width: 40,
     height: 40,
     borderRadius: 12,
     backgroundColor: 'rgba(255,255,255,0.15)',
     alignItems: 'center',
     justifyContent: 'center',
+    alignSelf: 'flex-start',
+    marginBottom: 8,
   },
   heroContent: { alignItems: 'center', marginTop: 8 },
   heroLogo: {
@@ -898,6 +1176,30 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   heroBadgeText: { color: '#fff', fontSize: 11, fontWeight: '500' },
+
+  /* Pending Banner */
+  pendingBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginHorizontal: 16,
+    marginTop: 16,
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+  },
+  pendingBannerIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tapHint: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
 
   /* Stats Row */
   statsRow: { flexDirection: 'row', paddingHorizontal: 16, marginTop: -24, gap: 10 },
@@ -936,17 +1238,19 @@ const styles = StyleSheet.create({
   },
   alertIcon: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
 
-  /* Quick Actions */
-  quickActionsRow: { flexDirection: 'row', gap: 10, marginBottom: 10 },
+  /* Quick Actions - larger and more touch-friendly for beginners */
+  quickActionsRow: { flexDirection: 'row', gap: 10, marginBottom: 12 },
   quickAction: {
     flex: 1,
     alignItems: 'center',
-    paddingVertical: 14,
+    paddingVertical: 16,
     paddingHorizontal: 8,
-    borderRadius: 14,
+    borderRadius: 16,
     borderWidth: 1,
+    minHeight: 100,
+    justifyContent: 'center',
   },
-  quickActionIcon: { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginBottom: 6 },
+  quickActionIcon: { width: 52, height: 52, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
 
   /* More Actions */
   moreActionsGrid: { gap: 6, marginBottom: 8 },
@@ -992,8 +1296,33 @@ const styles = StyleSheet.create({
   activityItem: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10 },
   activityIcon: { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
 
+  /* Pending Articles */
+  pendingArticleItem: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
+  pendingArticleThumb: { width: 48, height: 48, borderRadius: 8, overflow: 'hidden' },
+  pendingBadge: { padding: 6, borderRadius: 8 },
+  viewAllBtn: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'center', 
+    gap: 8, 
+    paddingVertical: 12, 
+    marginTop: 8,
+    borderTopWidth: 1, 
+    borderTopColor: 'rgba(0,0,0,0.06)' 
+  },
+
   /* Error */
   errorCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
   errorIcon: { width: 96, height: 96, borderRadius: 48, alignItems: 'center', justifyContent: 'center' },
   retryBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 12, marginTop: 12 },
+
+  /* Bottom Sheet */
+  sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  sheetContent: { borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '70%' },
+  sheetHandle: { alignItems: 'center', paddingVertical: 12 },
+  sheetHandleBar: { width: 40, height: 4, borderRadius: 2 },
+  sheetHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingBottom: 16, borderBottomWidth: 1 },
+  sheetIconBg: { width: 52, height: 52, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  sheetActionBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 16, borderRadius: 14 },
+  sheetDismissBtn: { alignItems: 'center', paddingVertical: 12, marginTop: 8, borderRadius: 10, borderWidth: 1 },
 });

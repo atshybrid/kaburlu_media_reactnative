@@ -246,11 +246,15 @@ export default function PostNewsMediaScreen() {
       // 2. Show congrats animation
       setShowCongrats(true);
       
-      // 3. After animation plays, navigate fresh
+      // 3. After animation plays, navigate to dashboard (clear navigation stack)
       setTimeout(() => {
         setShowCongrats(false);
-        // Simply replace to post-news - no need to dismissAll
-        router.replace('/post-news' as any);
+        // Dismiss all screens and go to reporter dashboard
+        // Using dismissAll to clear navigation stack then navigate fresh
+        if (router.canDismiss()) {
+          router.dismissAll();
+        }
+        router.replace('/reporter/dashboard' as any);
       }, 2000);
       
       return res;
