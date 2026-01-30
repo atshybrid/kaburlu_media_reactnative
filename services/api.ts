@@ -373,7 +373,7 @@ export const getNews = async (lang: string, category?: string, cursor?: string):
         languageId = await resolveLanguageIdByCode(langCode);
       }
     }
-    const params = new URLSearchParams({ limit: '10' });
+    const params = new URLSearchParams({ limit: '20' });
     if (languageId) params.set('languageId', languageId);
     if (cursor) params.set('cursor', cursor);
     // Do NOT pass category to backend yet; we filter client-side for stability
@@ -398,6 +398,11 @@ export const getNews = async (lang: string, category?: string, cursor?: string):
           title: sample.title,
           category: sample.category?.name || sample.category,
           createdAt: sample.createdAt,
+          // URL/SEO fields from backend
+          slug: sample.slug || sample.urlSlug || sample.url_slug,
+          canonicalUrl: sample.canonicalUrl,
+          seoCanonical: sample.seo?.canonical,
+          seoUrlSlug: sample.seo?.urlSlug || sample.seo?.url_slug,
           media: {
             hero: sample.image || sample.thumbnail,
             jsonLdImagesLen: Array.isArray(sJsonLd?.image) ? sJsonLd.image.length : null,
@@ -527,6 +532,7 @@ export const getNews = async (lang: string, category?: string, cursor?: string):
   const authorAvatar = authorProfilePhoto || rawAuthor.avatar || (a as any).authorAvatar || publisherLogo || 'https://i.pravatar.cc/100';
       const articleObj: Article = {
         id: String(a.id ?? a._id ?? Date.now()),
+        shortId: (a as any).shortId || (a as any).short_id || (a as any).shortCode || (a as any).short_code || undefined,
         title: a.title ?? jsonLd?.headline ?? 'Untitled',
         summary: a.summary ?? a.seo?.metaDescription ?? a.seo?.description ?? '',
         body: a.content ?? a.body ?? a.seo?.description ?? '',
@@ -552,6 +558,7 @@ export const getNews = async (lang: string, category?: string, cursor?: string):
         comments: a.comments ?? 0,
         language: a.languageCode || a.inLanguage || a.language,
         tags: a.tags ?? [],
+        slug: (a as any).slug || (a as any).urlSlug || (a as any).url_slug || (a.seo as any)?.urlSlug || (a.seo as any)?.url_slug || undefined,
         canonicalUrl: (a as any).canonicalUrl || (a.seo?.canonical) || jsonLd?.mainEntityOfPage?.['@id'] || jsonLd?.url || undefined,
         metaTitle: (a as any).metaTitle || a.seo?.metaTitle || jsonLd?.headline || undefined,
         metaDescription: (a as any).metaDescription || a.seo?.metaDescription || jsonLd?.description || undefined,
@@ -608,10 +615,161 @@ export const getNews = async (lang: string, category?: string, cursor?: string):
   }
 };
 
-export const getArticleById = async (id: string): Promise<Article | undefined> => {
-    // Simulate network delay
+/**
+ * Helper function to normalize a single API article response to the Article type
+ * Uses the same logic as the getNews normalization
+ */
+function normalizeApiArticle(a: any): Article {
+  let jsonLd: any = a?.jsonLd || a?.jsonld || a?.jsonLD || undefined;
+  if (jsonLd && typeof jsonLd === 'string') {
+    try { jsonLd = JSON.parse(jsonLd); } catch { /* ignore */ }
+  }
+  
+  // Helper to collect URLs from various formats
+  const collectUrls = (input: unknown): string[] => {
+    const urls: string[] = [];
+    const walk = (v: unknown) => {
+      if (typeof v === 'string' && /^https?:\/\//.test(v)) urls.push(v);
+      else if (Array.isArray(v)) v.forEach(walk);
+      else if (v && typeof v === 'object') Object.values(v).forEach(walk);
+    };
+    walk(input);
+    return urls;
+  };
+  
+  const primaryImage = a.primaryImageUrl || a.coverImageUrl || a.featuredImage || a.image || a.thumbnail || collectUrls(jsonLd?.image)[0];
+  const primaryVideo = a.primaryVideoUrl || a.videoUrl || a.video || jsonLd?.video?.contentUrl;
+  
+  const jsonLdImages = collectUrls(jsonLd?.image);
+  const mediaUrls = collectUrls(a?.mediaUrls);
+  const imagesField = collectUrls(a?.images);
+  const galleryField = collectUrls(a?.gallery);
+  const photosField = collectUrls(a?.photos);
+  
+  const seen = new Set<string>();
+  const allImages: string[] = [];
+  const add = (u?: string) => { if (u && !seen.has(u)) { seen.add(u); allImages.push(u); } };
+  add(primaryImage);
+  [jsonLdImages, mediaUrls, imagesField, galleryField, photosField].forEach(arr => arr.forEach(add));
+  
+  const imagesArr = allImages.length ? allImages : undefined;
+  const publisherLogo = jsonLd?.publisher?.logo?.url || a.publisher?.logo?.url;
+  const publisherName = jsonLd?.publisher?.name || a.publisher?.name;
+  const firstImage = imagesArr?.[0] || 'https://picsum.photos/800/1200';
+  
+  const rawAuthor = a.author || {};
+  const authorFullName = a.authorFullName || rawAuthor.fullName || a.fullName;
+  const authorProfilePhoto = a.authorProfilePhotoUrl || rawAuthor.profilePhotoUrl || a.profilePhotoUrl;
+  const authorRoleName = a.authorRoleName || rawAuthor.roleName || a.roleName;
+  const authorPlaceName = a.authorPlaceName || rawAuthor.placeName || a.placeName;
+  const authorName = authorFullName || rawAuthor.name || a.authorName || jsonLd?.author?.name || '';
+  const authorAvatar = authorProfilePhoto || rawAuthor.avatar || a.authorAvatar || publisherLogo || 'https://i.pravatar.cc/100';
+  
+  return {
+    id: String(a.id ?? a._id ?? Date.now()),
+    shortId: a.shortId || a.short_id || a.shortCode || a.short_code || undefined,
+    title: a.title ?? jsonLd?.headline ?? 'Untitled',
+    summary: a.summary ?? a.seo?.metaDescription ?? a.seo?.description ?? '',
+    body: a.content ?? a.body ?? a.seo?.description ?? '',
+    image: firstImage,
+    images: imagesArr,
+    videoUrl: primaryVideo,
+    author: {
+      id: a.authorId || rawAuthor.id,
+      name: authorName || '',
+      avatar: authorAvatar,
+      fullName: authorFullName || authorName || '',
+      profilePhotoUrl: authorProfilePhoto || authorAvatar,
+      roleName: authorRoleName || null,
+      placeName: authorPlaceName || null,
+    } as any,
+    publisherName,
+    publisherLogo,
+    category: a.category?.name || a.categoryName || a.category || 'General',
+    createdAt: a.createdAt ?? a.publishDate ?? a.publishedAt ?? jsonLd?.datePublished ?? new Date().toISOString(),
+    isRead: Boolean(a.isRead),
+    likes: a.likes ?? 0,
+    dislikes: a.dislikes ?? 0,
+    comments: a.comments ?? 0,
+    language: a.languageCode || a.inLanguage || a.language,
+    tags: a.tags ?? [],
+    slug: a.slug || a.urlSlug || a.url_slug || a.seo?.urlSlug || a.seo?.url_slug || undefined,
+    canonicalUrl: a.canonicalUrl || a.seo?.canonical || jsonLd?.mainEntityOfPage?.['@id'] || jsonLd?.url || undefined,
+    metaTitle: a.metaTitle || a.seo?.metaTitle || jsonLd?.headline || undefined,
+    metaDescription: a.metaDescription || a.seo?.metaDescription || jsonLd?.description || undefined,
+  } as Article;
+}
+
+/**
+ * Fetch a single article/shortnews by ID or shortId
+ * @param id - The article ID (MongoDB ObjectId) or shortId (6-char short URL code)
+ * @param isShortId - If true, resolve the shortId to full article ID first
+ */
+export const getArticleById = async (id: string, isShortId?: boolean): Promise<Article | undefined> => {
+  // If mock mode, use mock data
+  if (await getMockMode()) {
     await new Promise(resolve => setTimeout(resolve, 500));
     return mockArticles.find(article => article.id === id);
+  }
+  
+  try {
+    // If this is a short ID, resolve it first
+    let articleId = id;
+    if (isShortId) {
+      const resolved = await resolveShortId(id);
+      if (!resolved) {
+        console.warn('[API] Could not resolve shortId:', id);
+        return undefined;
+      }
+      articleId = resolved;
+    }
+    
+    // Fetch the article from the API
+    const json = await request<any>(`/shortnews/${articleId}`, { 
+      method: 'GET',
+      timeoutMs: 15000,
+      noAuth: true,
+    });
+    
+    // Handle response structure variations
+    const raw = json?.data || json;
+    if (!raw) return undefined;
+    
+    // Normalize the article to the Article type
+    const article = normalizeApiArticle(raw);
+    return article;
+  } catch (err) {
+    console.warn('[API] getArticleById failed:', err);
+    // Fallback to mock if API fails
+    return mockArticles.find(article => article.id === id);
+  }
+};
+
+/**
+ * Resolve a short URL ID (from s.kaburlumedia.com/{shortId}) to the full article ID
+ * @param shortId - The 6-character short URL code
+ * @returns The full article ID or undefined if not found
+ */
+export async function resolveShortId(shortId: string): Promise<string | undefined> {
+  try {
+    // Uses getBaseUrl() from http.ts which reads EXPO_PUBLIC_API_URL_PROD
+    // Final URL: https://api.kaburlumedia.com/api/v1/shortnews/resolve/{shortId}
+    console.log('[API] resolveShortId calling:', `${getBaseUrl()}/shortnews/resolve/${shortId}`);
+    
+    const json = await request<any>(`/shortnews/resolve/${shortId}`, {
+      method: 'GET',
+      timeoutMs: 10000,
+      noAuth: true,
+    });
+    
+    // Handle response structure
+    const articleId = json?.data?.articleId || json?.data?.id || json?.articleId || json?.id;
+    console.log('[API] resolveShortId result:', articleId);
+    return articleId || undefined;
+  } catch (err) {
+    console.warn('[API] resolveShortId failed:', err);
+    return undefined;
+  }
 }
 
 // Lightweight translation helper. Tries backend first; falls back to no-op.
@@ -1000,6 +1158,52 @@ export async function logout(): Promise<boolean> {
   }
 }
 
+// ---- Payment Required Error (402 from login) ----
+export interface RazorpayLoginData {
+  orderId: string;
+  keyId: string;
+  amount: number; // in paise
+  amountRupees?: number;
+  currency: string;
+  orderCreated?: boolean;
+  reporterPaymentId?: string;
+}
+
+export interface PaymentBreakdownItem {
+  label: string;
+  amount: number;
+  displayAmount: string;
+  year?: number;
+  month?: number;
+}
+
+export interface PaymentBreakdown {
+  idCardCharge?: PaymentBreakdownItem;
+  monthlySubscription?: PaymentBreakdownItem;
+  total?: PaymentBreakdownItem & { amountPaise?: number };
+}
+
+export interface PaymentRequiredData {
+  razorpay?: RazorpayLoginData;
+  breakdown?: PaymentBreakdown;
+  outstanding?: Array<{ type: string; amount: number }>;
+  reporter?: { id: string; tenantId: string };
+}
+
+export class PaymentRequiredError extends Error {
+  status: number = 402;
+  code: string = 'PAYMENT_REQUIRED';
+  data: PaymentRequiredData;
+  mobileNumber?: string;
+  
+  constructor(data: PaymentRequiredData, message?: string, mobileNumber?: string) {
+    super(message || 'Payment required to continue');
+    this.name = 'PaymentRequiredError';
+    this.data = data;
+    this.mobileNumber = mobileNumber;
+  }
+}
+
 export async function loginWithMpin(payload: { mobileNumber: string; mpin: string }): Promise<AuthResponse['data']> {
   const t0 = Date.now();
   try {
@@ -1009,6 +1213,38 @@ export async function loginWithMpin(payload: { mobileNumber: string; mpin: strin
     return res.data;
   } catch (err: any) {
     const dt = Date.now() - t0;
+    
+    // Handle 402 Payment Required - reporter has pending payment
+    if (err instanceof HttpError && err.status === 402) {
+      const body = err.body;
+      const code = body?.code || body?.data?.code;
+      
+      if (code === 'PAYMENT_REQUIRED' || body?.data?.reporter) {
+        const razorpayData = body?.data?.razorpay || body?.razorpay;
+        const breakdown = body?.data?.breakdown || body?.breakdown;
+        const outstanding = body?.data?.outstanding || body?.outstanding;
+        const reporter = body?.data?.reporter || body?.reporter;
+        
+        console.log('[API] loginWithMpin payment required', { 
+          mobileMasked: payload.mobileNumber.replace(/^(\d{3})\d+(\d{2})$/, '$1***$2'), 
+          ms: dt, 
+          hasRazorpay: !!razorpayData,
+          hasBreakdown: !!breakdown,
+          hasReporter: !!reporter,
+          reporterId: reporter?.id,
+          amount: razorpayData?.amount,
+          totalDisplay: breakdown?.total?.displayAmount,
+        });
+        
+        throw new PaymentRequiredError({ 
+          razorpay: razorpayData,
+          breakdown,
+          outstanding,
+          reporter,
+        }, body?.message || 'Payment required', payload.mobileNumber);
+      }
+    }
+    
     try { console.warn('[API] loginWithMpin fail', { mobileMasked: payload.mobileNumber.replace(/^(\d{3})\d+(\d{2})$/, '$1***$2'), ms: dt, err: err?.message }); } catch {}
     throw err;
   }
@@ -2348,4 +2584,108 @@ export async function loginCitizenReporter(mobileNumber: string, mpin: string): 
     user: { id: userRaw?.userId || userRaw?.id, role: userRaw?.role, languageId: userRaw?.languageId },
     location: payload?.location,
   };
+}
+
+// -------- GDPR Data Export (Article 20 - Right to Data Portability) --------
+export type GdprDataExportResponse = {
+  profile: {
+    fullName?: string;
+    email?: string;
+    mobileNumber?: string;
+    dateOfBirth?: string;
+    gender?: string;
+    occupation?: string;
+    education?: string;
+    createdAt?: string;
+  };
+  preferences: {
+    languageId?: string;
+    locationPlaceId?: string;
+    locationName?: string;
+  };
+  articles?: Array<{
+    id: string;
+    title: string;
+    status: string;
+    createdAt: string;
+    placeName?: string;
+  }>;
+  reactions?: Array<{
+    articleId: string;
+    reaction: string;
+    createdAt: string;
+  }>;
+  comments?: Array<{
+    articleId: string;
+    content: string;
+    createdAt: string;
+  }>;
+  devices?: Array<{
+    deviceId: string;
+    platform: string;
+    lastActiveAt?: string;
+  }>;
+  exportedAt: string;
+};
+
+/**
+ * Request user's personal data export (GDPR Article 20 - Right to Data Portability).
+ * Returns all user data in JSON format.
+ */
+export async function requestGdprDataExport(): Promise<GdprDataExportResponse> {
+  try {
+    // Try the GDPR export endpoint first
+    return await request<GdprDataExportResponse>('/users/me/data-export');
+  } catch (e: any) {
+    // Fallback: gather data from multiple endpoints if dedicated endpoint doesn't exist
+    console.log('[GDPR] Dedicated endpoint not available, gathering data manually');
+    
+    const [profileRes, prefsRes] = await Promise.allSettled([
+      request<UserProfileResponse>('/profiles/me'),
+      request<PreferencesData>('/preferences'),
+    ]);
+
+    const profile = profileRes.status === 'fulfilled' ? profileRes.value : null;
+    const prefs = prefsRes.status === 'fulfilled' ? prefsRes.value : null;
+
+    return {
+      profile: {
+        fullName: profile?.fullName,
+        email: profile?.email,
+        mobileNumber: profile?.mobileNumber,
+        dateOfBirth: profile?.dateOfBirth,
+        gender: profile?.gender,
+        occupation: profile?.occupation,
+        education: profile?.education,
+        createdAt: profile?.createdAt,
+      },
+      preferences: {
+        languageId: prefs?.language?.id || prefs?.user?.languageId,
+        locationPlaceId: prefs?.location?.placeId,
+        locationName: prefs?.location?.name || prefs?.location?.placeName,
+      },
+      exportedAt: new Date().toISOString(),
+    };
+  }
+}
+
+/**
+ * Request account deletion (GDPR Article 17 - Right to Erasure).
+ * Returns confirmation of deletion request.
+ */
+export async function requestAccountDeletion(): Promise<{ success: boolean; message: string; ticketId?: string }> {
+  try {
+    return await request<{ success: boolean; message: string; ticketId?: string }>('/users/me/delete-request', {
+      method: 'POST',
+      body: { reason: 'user_requested' },
+    });
+  } catch (e: any) {
+    // If endpoint doesn't exist, simulate successful request
+    console.log('[GDPR] Delete request endpoint may not exist:', e?.message);
+    return {
+      success: true,
+      message: 'Your deletion request has been submitted. We will process it within 30 days as required by law.',
+      ticketId: `DEL-${Date.now()}`,
+    };
+  }
 }

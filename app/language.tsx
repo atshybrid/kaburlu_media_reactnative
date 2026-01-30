@@ -16,7 +16,6 @@ import { LanguageSkeleton } from '@/components/ui/LanguageSkeleton';
 import { getLanguageIcon } from '@/icons/languageIcons';
 import { saveTokens } from '@/services/auth';
 import { getDeviceIdentity } from '@/services/device';
-import { requestAppPermissions } from '@/services/permissions';
 import { Language } from '../constants/languages';
 import { afterPreferencesUpdated, getLanguages, registerGuestUser, updatePreferences } from '../services/api';
 
@@ -67,7 +66,9 @@ const LanguageSelectionScreen = () => {
         return;
       }
 
-      const perms = await requestAppPermissions();
+      // Only check existing permissions - don't request during registration (Play Store policy)
+      const { checkPermissionsOnly } = await import('@/services/permissions');
+      const perms = await checkPermissionsOnly();
       const authResponse = await registerGuestUser({
         // Backend expects string IDs like "cmfdwhqk80009ugtof37yt8vv"
         languageId: language.id,

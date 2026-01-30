@@ -20,7 +20,7 @@ import { useTransliteration } from '../../hooks/useTransliteration';
 import { checkDuplicateShortNews, createShortNews, getCategories, getLanguages, uploadMedia } from '../../services/api';
 import { loadTokens } from '../../services/auth';
 import { log } from '../../services/logger';
-import { requestAppPermissions, type PermissionStatus } from '../../services/permissions';
+import type { PermissionStatus } from '../../services/permissions';
 
 // Add missing styles object
 export default function PostCreateScreen() {
@@ -256,9 +256,11 @@ export default function PostCreateScreen() {
           if (savedRole) setRole(savedRole);
         }
       } catch {}
-      // request permissions (notif + location) upfront for smoother UX
+      // Only CHECK permissions status at load (don't request upfront - Play Store policy)
+      // Actual permission request happens when user tries to submit
       try {
-        const st = await requestAppPermissions();
+        const { checkPermissionsOnly } = await import('@/services/permissions');
+        const st = await checkPermissionsOnly();
         setPerms(st);
       } catch {}
       // fetch categories for dropdown using effective language id (fallback handled in API as well)
@@ -365,9 +367,11 @@ export default function PostCreateScreen() {
   const imageCount = items.filter((m: any) => m.type === 'image').length;
   if (hasVideo && imageCount === 0) { Alert.alert('Add an image', 'If you upload a video, you must also include at least 1 image.'); return undefined; }
     let effectivePerms = perms;
+    // Only request location permission when user is trying to publish (in-context - Play Store compliant)
     if (!effectivePerms?.location || effectivePerms.location !== 'granted' || !effectivePerms.coordsDetailed) {
       try {
-        const st = await requestAppPermissions();
+        const { requestLocationPermissionOnly } = await import('@/services/permissions');
+        const st = await requestLocationPermissionOnly();
         setPerms(st);
         effectivePerms = st;
       } catch {}

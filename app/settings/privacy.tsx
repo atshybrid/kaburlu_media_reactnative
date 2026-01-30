@@ -1,10 +1,13 @@
 import { useThemeColor } from '@/hooks/useThemeColor';
 import { getLockMode, type AppLockMode } from '@/services/appLock';
+import { requestAccountDeletion, requestGdprDataExport } from '@/services/api';
 import { Feather } from '@expo/vector-icons';
+import * as FileSystem from 'expo-file-system';
 import * as Linking from 'expo-linking';
+import * as Sharing from 'expo-sharing';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 export default function PrivacyScreen() {
   const bg = useThemeColor({}, 'background');
@@ -19,7 +22,67 @@ export default function PrivacyScreen() {
   const [analytics, setAnalytics] = useState(true);
   const [crashReports, setCrashReports] = useState(true);
   const [lockMode, setLockModeSummary] = useState<AppLockMode>('off');
+  const [exporting, setExporting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   useEffect(() => { (async () => setLockModeSummary(await getLockMode()))(); }, []);
+
+  // GDPR Article 20 - Export user data as JSON file
+  const handleExportData = async () => {
+    try {
+      setExporting(true);
+      const data = await requestGdprDataExport();
+      
+      // Create JSON file
+      const fileName = `kaburlu-data-export-${new Date().toISOString().split('T')[0]}.json`;
+      const filePath = `${FileSystem.documentDirectory}${fileName}`;
+      await FileSystem.writeAsStringAsync(filePath, JSON.stringify(data, null, 2));
+      
+      // Share the file
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(filePath, {
+          mimeType: 'application/json',
+          dialogTitle: 'Your Kaburlu Data Export',
+          UTI: 'public.json',
+        });
+      } else {
+        Alert.alert('Success', `Your data has been saved to: ${filePath}`);
+      }
+    } catch (e: any) {
+      Alert.alert('Export Failed', e?.message || 'Could not export your data. Please try again.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  // GDPR Article 17 - Request account deletion
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      'Delete Account',
+      'This will permanently delete your account and all associated data. This action cannot be undone.\n\nYou will receive a confirmation once your data has been deleted (within 30 days as required by GDPR).',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete My Account',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setDeleting(true);
+              const result = await requestAccountDeletion();
+              Alert.alert(
+                'Request Submitted',
+                result.message || 'Your deletion request has been submitted.',
+                [{ text: 'OK' }]
+              );
+            } catch (e: any) {
+              Alert.alert('Error', e?.message || 'Could not submit deletion request. Please try again.');
+            } finally {
+              setDeleting(false);
+            }
+          },
+        },
+      ]
+    );
+  };
 
   type SectionItem = {
     icon: string;
@@ -94,17 +157,24 @@ export default function PrivacyScreen() {
           onPress: () => router.push('/settings/permissions'),
         },
         {
+          icon: 'download',
+          title: 'Export My Data',
+          subtitle: 'Download all your personal data (GDPR)',
+          right: exporting ? <ActivityIndicator size="small" /> : undefined,
+          onPress: handleExportData,
+          disabled: exporting,
+        },
+        {
           icon: 'trash-2',
           title: 'Delete Account',
-          subtitle: 'Permanently remove your data from our servers',
-          onPress: () => Alert.alert('Delete Account', 'This will permanently delete your account and data. This action cannot be undone.', [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Delete', style: 'destructive', onPress: () => Alert.alert('Requested', 'Your deletion request has been submitted.') },
-          ]),
+          subtitle: 'Permanently remove your data (GDPR)',
+          right: deleting ? <ActivityIndicator size="small" color="#EF4444" /> : undefined,
+          onPress: handleDeleteAccount,
+          disabled: deleting,
         },
       ],
     },
-  ]), [personalizedAds, analytics, crashReports, lockMode, router]);
+  ]), [personalizedAds, analytics, crashReports, lockMode, router, exporting, deleting, handleExportData, handleDeleteAccount]);
 
   return (
     <View style={[styles.safe, { backgroundColor: bg }]}>

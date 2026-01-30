@@ -238,14 +238,14 @@ export default function NewsApprovalScreen() {
             setActionLoading(article.id);
             try {
               await approveNewspaperArticle(article.id);
-              // Update local state
-              setArticles((prev) =>
-                prev.map((a) => (a.id === article.id ? { ...a, status: 'PUBLISHED' as NewspaperArticleStatus } : a))
-              );
-              // If we're on PENDING tab, remove the article
+              // Update local state - If on PENDING tab, remove the article; otherwise update status
               if (activeTab === 'PENDING') {
                 setArticles((prev) => prev.filter((a) => a.id !== article.id));
                 setTotal((t) => Math.max(0, t - 1));
+              } else {
+                setArticles((prev) =>
+                  prev.map((a) => (a.id === article.id ? { ...a, status: 'PUBLISHED' as NewspaperArticleStatus } : a))
+                );
               }
               setPreviewArticle(null);
             } catch (e: any) {

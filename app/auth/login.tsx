@@ -12,10 +12,8 @@
 
 import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
-import { createCitizenReporterMobile, getMpinStatus, loginWithMpin, requestOtpForMpinReset, setNewMpin, verifyOtpForMpinReset } from '@/services/api';
+import { createCitizenReporterMobile, getMpinStatus, loginWithMpin, PaymentRequiredError, requestOtpForMpinReset, setNewMpin, verifyOtpForMpinReset } from '@/services/api';
 import { getLastMobile, saveTokens } from '@/services/auth';
-import { getDeviceIdentity } from '@/services/device';
-import { requestAppPermissions } from '@/services/permissions';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BlurView } from 'expo-blur';
@@ -381,6 +379,32 @@ export default function LoginScreen() {
         navigateAfterAuth();
       }, 1800);
     } catch (e: any) {
+      // Handle 402 Payment Required - navigate to payment screen
+      if (e instanceof PaymentRequiredError) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+        
+        // Store credentials temporarily for auto-login after payment
+        await AsyncStorage.setItem('pendingPaymentCredentials', JSON.stringify({
+          mobile: mobile,
+          mpin: mpin,
+          timestamp: Date.now(),
+        }));
+        
+        router.push({
+          pathname: '/auth/payment',
+          params: {
+            reporterId: e.data?.reporter?.id || '',
+            tenantId: e.data?.reporter?.tenantId || '',
+            mobile: mobile,
+            mpin: mpin,
+            // Pass razorpay data as JSON string
+            razorpayData: e.data?.razorpay ? JSON.stringify(e.data.razorpay) : '',
+            breakdownData: e.data?.breakdown ? JSON.stringify(e.data.breakdown) : '',
+          },
+        });
+        return;
+      }
+      
       if (e?.status === 401) {
         const remaining = attemptsLeft - 1;
         setAttemptsLeft(remaining);
@@ -418,8 +442,10 @@ export default function LoginScreen() {
       const device = await getDeviceIdentity();
       let pushToken: string | undefined;
       let location: any;
+      // Only check existing permissions - don't request during registration (Play Store policy)
       try {
-        const perms = await requestAppPermissions();
+        const { checkPermissionsOnly } = await import('@/services/permissions');
+        const perms = await checkPermissionsOnly();
         pushToken = perms.pushToken;
         if (perms.coordsDetailed) {
           location = {
@@ -1407,5 +1433,104 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: PRIMARY,
     marginTop: -20,
+  },
+  // Payment Modal
+  paymentBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  paymentCard: {
+    width: '100%',
+    maxWidth: 360,
+    borderRadius: 24,
+    padding: 28,
+    alignItems: 'center',
+  },
+  paymentHeader: {
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  paymentIconContainer: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#EFF6FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  paymentTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    marginBottom: 8,
+  },
+  paymentSubtitle: {
+    fontSize: 14,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  paymentAmountBox: {
+    width: '100%',
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 20,
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  paymentLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 4,
+  },
+  paymentAmount: {
+    fontSize: 36,
+    fontWeight: '800',
+  },
+  paymentActions: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+  },
+  paymentCancelBtn: {
+    flex: 1,
+    height: 52,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  paymentCancelText: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  paymentPayBtn: {
+    flex: 2,
+    height: 52,
+    borderRadius: 14,
+    backgroundColor: PRIMARY,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  paymentPayText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  paymentSecure: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 16,
+  },
+  paymentSecureText: {
+    fontSize: 11,
+    fontWeight: '500',
   },
 });

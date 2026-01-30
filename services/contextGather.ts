@@ -23,27 +23,37 @@ export async function gatherRegistrationContext(): Promise<GatheredContext> {
       try { out.languageId = JSON.parse(raw)?.id; } catch {}
     }
   } catch {}
+  
+  // Only GET existing permission status - don't REQUEST permissions during registration
+  // This is Play Store compliant - permissions should be requested in-context
   try {
     const perm = await Notifications.getPermissionsAsync();
-    if (!perm.granted) {
-      const req = await Notifications.requestPermissionsAsync();
-      if (!req.granted) throw new Error('push denied');
+    if (perm.granted) {
+      // Only get token if already granted
+      const tokenData = await Notifications.getExpoPushTokenAsync();
+      out.pushToken = tokenData.data;
     }
-    const tokenData = await Notifications.getExpoPushTokenAsync();
-    out.pushToken = tokenData.data;
   } catch {}
+  
   try {
-    const { status } = await Location.requestForegroundPermissionsAsync();
+    // Check if location permission is already granted (don't request)
+    const { status } = await Location.getForegroundPermissionsAsync();
     if (status === 'granted') {
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      out.location = {
-        latitude: loc.coords.latitude,
-        longitude: loc.coords.longitude,
-        accuracyMeters: loc.coords.accuracy || undefined,
-        provider: loc.coords.altitude ? 'gps' : 'network',
-        timestampUtc: new Date(loc.timestamp).toISOString(),
-        source: 'device',
-      };
+      // Try to get last known position (faster, no GPS wait)
+      let loc = await Location.getLastKnownPositionAsync();
+      if (!loc) {
+        loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      }
+      if (loc) {
+        out.location = {
+          latitude: loc.coords.latitude,
+          longitude: loc.coords.longitude,
+          accuracyMeters: loc.coords.accuracy || undefined,
+          provider: loc.coords.altitude ? 'gps' : 'network',
+          timestampUtc: new Date(loc.timestamp).toISOString(),
+          source: 'device',
+        };
+      }
     }
   } catch {}
   return out;

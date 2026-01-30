@@ -180,3 +180,122 @@ export async function requestMediaPermissionsOnly(): Promise<Pick<PermissionStat
     return { mediaLibrary: 'undetermined', mediaCanAskAgain: true } as any;
   }
 }
+
+/**
+ * Request ONLY location permission - for in-context use (e.g., when user tries to post news).
+ * This is Play Store compliant as it's called only when the user performs a location-requiring action.
+ */
+export async function requestLocationPermissionOnly(): Promise<PermissionStatus> {
+  const status: PermissionStatus = await getCachedPermissions();
+
+  try {
+    const { status: locStatus } = await Location.requestForegroundPermissionsAsync();
+    status.location = locStatus as any;
+    if (locStatus === 'granted') {
+      const last = await Location.getLastKnownPositionAsync();
+      let pos = last;
+      if (!pos) {
+        pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      }
+      if (pos?.coords) {
+        const c = pos.coords;
+        status.coords = { latitude: c.latitude, longitude: c.longitude };
+        status.coordsDetailed = {
+          latitude: c.latitude,
+          longitude: c.longitude,
+          accuracy: c.accuracy ?? null,
+          altitude: c.altitude ?? null,
+          altitudeAccuracy: c.altitudeAccuracy ?? null,
+          heading: c.heading ?? null,
+          speed: c.speed ?? null,
+          timestamp: pos.timestamp,
+        };
+        try {
+          const places = await Location.reverseGeocodeAsync({ latitude: c.latitude, longitude: c.longitude });
+          const p = places?.[0];
+          if (p) {
+            status.place = {
+              name: p.name || p.city || p.street || undefined,
+              street: p.street || undefined,
+              district: (p.district as any) || p.subregion || undefined,
+              city: p.city || undefined,
+              subregion: p.subregion || undefined,
+              region: p.region || undefined,
+              postalCode: p.postalCode || undefined,
+              country: p.country || undefined,
+              isoCountryCode: p.isoCountryCode || undefined,
+              fullName: [p.name, p.district || p.subregion, p.region, p.country].filter(Boolean).join(', '),
+            };
+          } else {
+            status.place = null;
+          }
+        } catch {
+          status.place = null;
+        }
+      } else {
+        status.coords = null;
+        status.coordsDetailed = null;
+        status.place = null;
+      }
+    } else {
+      status.coords = null;
+      status.coordsDetailed = null;
+      status.place = null;
+    }
+    console.log('[PERM] Location (in-context)', {
+      status: status.location,
+      coords: status.coords ? { lat: status.coords.latitude, lng: status.coords.longitude } : null,
+    });
+  } catch (e) {
+    console.warn('[PERM] Location permission request failed', e instanceof Error ? e.message : e);
+  }
+
+  await AsyncStorage.setItem(PERM_KEY, JSON.stringify(status));
+  return status;
+}
+
+/**
+ * Check current permission status WITHOUT requesting any permissions.
+ * Use this for UI display or deciding when to show permission prompts.
+ * Play Store compliant - no permission dialogs shown.
+ */
+export async function checkPermissionsOnly(): Promise<PermissionStatus> {
+  const status: PermissionStatus = await getCachedPermissions();
+
+  try {
+    const Notifications = await import('expo-notifications');
+    const current = await Notifications.getPermissionsAsync();
+    status.notifications = current.status as any;
+  } catch {}
+
+  try {
+    const current = await ImagePicker.getMediaLibraryPermissionsAsync();
+    status.mediaLibrary = (current as any)?.status || (current?.granted ? 'granted' : 'undetermined');
+    status.mediaCanAskAgain = (current as any)?.canAskAgain ?? true;
+  } catch {}
+
+  try {
+    const { status: locStatus } = await Location.getForegroundPermissionsAsync();
+    status.location = locStatus as any;
+    // If already granted, try to get cached location
+    if (locStatus === 'granted') {
+      const last = await Location.getLastKnownPositionAsync();
+      if (last?.coords) {
+        status.coords = { latitude: last.coords.latitude, longitude: last.coords.longitude };
+        status.coordsDetailed = {
+          latitude: last.coords.latitude,
+          longitude: last.coords.longitude,
+          accuracy: last.coords.accuracy ?? null,
+          altitude: last.coords.altitude ?? null,
+          altitudeAccuracy: last.coords.altitudeAccuracy ?? null,
+          heading: last.coords.heading ?? null,
+          speed: last.coords.speed ?? null,
+          timestamp: last.timestamp,
+        };
+      }
+    }
+  } catch {}
+
+  await AsyncStorage.setItem(PERM_KEY, JSON.stringify(status));
+  return status;
+}

@@ -7,22 +7,47 @@
     "icon": "./assets/images/app-icon.png",
     "scheme": "kaburlu",
     "userInterfaceStyle": "automatic",
-  "newArchEnabled": false,
+    "newArchEnabled": false,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.media.kaburlu"
     },
     "android": {
-        "icon": "./assets/images/app-icon.png",
-        "adaptiveIcon": {
-          "foregroundImage": "./assets/images/app-icon-foreground.png",
-          "backgroundColor": "#ffffff"
-        },
+      "icon": "./assets/images/app-icon.png",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/app-icon-foreground.png",
+        "backgroundImage": "./assets/images/app-icon-background.png",
+        "backgroundColor": "#ff9934"
+      },
       "edgeToEdgeEnabled": true,
       "package": "com.media.kaburlu",
       "googleServicesFile": "./google-services.json",
       "softwareKeyboardLayoutMode": "pan",
       "permissions": [
         "android.permission.RECORD_AUDIO"
+      ],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            { "scheme": "https", "host": "s.kaburlumedia.com", "pathPrefix": "/" }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        },
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            { "scheme": "https", "host": "kaburlumedia.com", "pathPrefix": "/article" }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        },
+        {
+          "action": "VIEW",
+          "data": [{ "scheme": "kaburlu" }],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
       ]
     },
     "web": {
@@ -44,9 +69,15 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow kaburlu to access your photos to attach media to your posts.",
-          "cameraPermission": "Allow kaburlu to use your camera to capture photos and videos.",
-          "microphonePermission": "Allow kaburlu to record audio with videos."
+          "photosPermission": "kaburlu needs access to your photos to attach images and videos to your news posts.",
+          "cameraPermission": "kaburlu needs camera access to capture photos and videos for your news posts.",
+          "microphonePermission": "kaburlu needs microphone access to record audio with your videos."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "kaburlu needs your location to tag news articles with your current place. This helps readers find local news in their area."
         }
       ],
       "@react-native-google-signin/google-signin"

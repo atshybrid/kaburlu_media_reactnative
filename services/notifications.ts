@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
+import { router } from 'expo-router';
 
 type PushStatus = 'granted' | 'denied' | 'undetermined';
 
@@ -22,7 +23,23 @@ Notifications.setNotificationHandler({
 	} as any),
 });
 
-async function ensureNotificationsSetupInternal(options?: { requestPermission?: boolean }): Promise<{ status: PushStatus; expoToken?: string; deviceToken?: string }> {
+// Handle notification tap - navigate to article
+function handleNotificationTap(data: any) {
+	try {
+		console.log('[NOTIF] Handling tap with data:', JSON.stringify(data));
+		if (data?.articleId) {
+			router.push({ pathname: '/article/[id]', params: { id: data.articleId } });
+		} else if (data?.shortId) {
+			router.push({ pathname: '/article/[id]', params: { id: data.shortId, isShortId: 'true' } });
+		} else if (data?.shortNewsId) {
+			router.push({ pathname: '/article/[id]', params: { id: data.shortNewsId } });
+		}
+	} catch (e) {
+		console.warn('[NOTIF] Navigation failed:', e);
+	}
+}
+
+async function ensureNotificationsSetupInternal(options?: { requestPermission?: boolean }): Promise<{ status: PushStatus; fcmToken?: string; expoToken?: string; deviceToken?: string }> {
 	try {
 		const requestPermission = options?.requestPermission !== false;
 		if (!initDone) {
@@ -42,8 +59,14 @@ async function ensureNotificationsSetupInternal(options?: { requestPermission?: 
 			Notifications.addNotificationReceivedListener((n) => {
 				console.log('[NOTIF] received (fg)', JSON.stringify(n.request?.content));
 			});
+			
+			// Handle notification tap - navigate to article
 			Notifications.addNotificationResponseReceivedListener((resp) => {
 				console.log('[NOTIF] response', JSON.stringify(resp.notification?.request?.content));
+				const data = resp.notification?.request?.content?.data;
+				if (data) {
+					handleNotificationTap(data);
+				}
 			});
 
 			initDone = true;
@@ -61,45 +84,54 @@ async function ensureNotificationsSetupInternal(options?: { requestPermission?: 
 			return { status };
 		}
 
-		// Fetch Expo push token (preferred)
-		let expoToken: string | undefined;
+		// ✅ PRIMARY: Get FCM/APNs device token (preferred for Firebase backend)
+		let fcmToken: string | undefined;
 		try {
-			const projectId = (Constants as any)?.expoConfig?.extra?.eas?.projectId
-				|| (Constants as any)?.default?.expoConfig?.extra?.eas?.projectId
-				|| undefined;
-			const tokenData = await Notifications.getExpoPushTokenAsync(projectId ? { projectId } as any : undefined as any);
-			expoToken = tokenData?.data;
-			cachedToken = expoToken || cachedToken;
-			if (expoToken) await AsyncStorage.setItem(PUSH_TOKEN_KEY, expoToken);
+			const device = await Notifications.getDevicePushTokenAsync();
+			fcmToken = (device as any)?.data || (device as any)?.token;
+			if (fcmToken) {
+				cachedToken = fcmToken;
+				await AsyncStorage.setItem(PUSH_TOKEN_KEY, fcmToken);
+				console.log('[NOTIF] FCM Token:', fcmToken.substring(0, 20) + '...');
+			}
 		} catch (e) {
-			console.warn('[NOTIF] getExpoPushTokenAsync failed', e instanceof Error ? e.message : e);
+			console.warn('[NOTIF] getDevicePushTokenAsync failed', e instanceof Error ? e.message : e);
 		}
 
-		// Device token fallback (FCM/APNS)
-		let deviceToken: string | undefined;
-		if (!expoToken) {
+		// FALLBACK: Expo push token (if FCM fails)
+		let expoToken: string | undefined;
+		if (!fcmToken) {
 			try {
-				const device = await Notifications.getDevicePushTokenAsync();
-				deviceToken = (device as any)?.data || (device as any)?.token || String(device || '');
+				const projectId = (Constants as any)?.expoConfig?.extra?.eas?.projectId
+					|| (Constants as any)?.default?.expoConfig?.extra?.eas?.projectId
+					|| undefined;
+				const tokenData = await Notifications.getExpoPushTokenAsync(projectId ? { projectId } as any : undefined as any);
+				expoToken = tokenData?.data;
+				cachedToken = expoToken || cachedToken;
+				if (expoToken) await AsyncStorage.setItem(PUSH_TOKEN_KEY, expoToken);
 			} catch (e) {
-				console.warn('[NOTIF] getDevicePushTokenAsync failed', e instanceof Error ? e.message : e);
+				console.warn('[NOTIF] getExpoPushTokenAsync failed', e instanceof Error ? e.message : e);
 			}
 		}
 
-		console.log('[NOTIF] setup done', { status, expoToken: expoToken ? `${expoToken.slice(0, 12)}…` : 'none', deviceToken: deviceToken ? 'yes' : 'no' });
-		return { status, expoToken, deviceToken };
+		console.log('[NOTIF] setup done', { 
+			status, 
+			fcmToken: fcmToken ? `${fcmToken.slice(0, 12)}…` : 'none', 
+			expoToken: expoToken ? `${expoToken.slice(0, 12)}…` : 'none' 
+		});
+		return { status, fcmToken, expoToken, deviceToken: fcmToken };
 	} catch (e) {
 		console.warn('[NOTIF] setup failed', e instanceof Error ? e.message : e);
 		return { status: 'undetermined' };
 	}
 }
 
-export async function ensureNotificationsSetup(): Promise<{ status: PushStatus; expoToken?: string; deviceToken?: string }> {
+export async function ensureNotificationsSetup(): Promise<{ status: PushStatus; fcmToken?: string; expoToken?: string; deviceToken?: string }> {
 	// Existing behavior: request permission if not yet granted
 	return ensureNotificationsSetupInternal({ requestPermission: true });
 }
 
-export async function ensureNotificationsSetupOnceAfterSplash(): Promise<{ status: PushStatus; expoToken?: string; deviceToken?: string }> {
+export async function ensureNotificationsSetupOnceAfterSplash(): Promise<{ status: PushStatus; fcmToken?: string; expoToken?: string; deviceToken?: string }> {
 	// New behavior: prompt at most once across app opens.
 	// - If permission already granted: fetch tokens.
 	// - If not granted and already prompted: do not prompt again.

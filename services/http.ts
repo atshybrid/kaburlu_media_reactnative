@@ -31,6 +31,16 @@ const DEBUG_HTTP = (() => {
   const raw = String(process.env.EXPO_PUBLIC_HTTP_DEBUG ?? '').toLowerCase();
   return raw === '1' || raw === 'true' || raw === 'on' || raw === 'yes';
 })();
+// Optional: log request body (can be large)
+const DEBUG_HTTP_BODY = (() => {
+  const raw = String(process.env.EXPO_PUBLIC_HTTP_DEBUG_BODY ?? '').toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'on' || raw === 'yes';
+})();
+// Optional: log full request body (VERY large). Prefer enabling only temporarily.
+const DEBUG_HTTP_BODY_FULL = (() => {
+  const raw = String(process.env.EXPO_PUBLIC_HTTP_DEBUG_BODY_FULL ?? '').toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'on' || raw === 'yes';
+})();
 const TIMEOUT_MS = Number(process.env.EXPO_PUBLIC_HTTP_TIMEOUT_MS || '30000');
 if (DEBUG_HTTP) {
   console.log('[HTTP] BASE_URL =', BASE_URL, '| DEV =', isDev);
@@ -118,12 +128,36 @@ export async function request<T = any>(path: string, options: { method?: HttpMet
     if (DEBUG_HTTP) {
       console.log('[HTTP] →', method, url);
     }
+
+     if (DEBUG_HTTP && options.body != null && method !== 'GET' && (DEBUG_HTTP_BODY || DEBUG_HTTP_BODY_FULL)) {
+      try {
+        const bodyStr = typeof options.body === 'string' ? options.body : JSON.stringify(options.body);
+        const len = bodyStr.length;
+        const maxPreview = 600;
+        const preview = bodyStr.slice(0, maxPreview);
+        console.log('[HTTP]   body:', `(len=${len})`, preview);
+        if (DEBUG_HTTP_BODY_FULL) {
+          const maxFull = 20000;
+          if (len > maxFull) {
+            console.log('[HTTP]   body(full) truncated:', bodyStr.slice(0, maxFull));
+          } else {
+            console.log('[HTTP]   body(full):', bodyStr);
+          }
+        }
+      } catch {
+        // ignore logging failures
+      }
+    }
+
     let res: Response;
     try {
       res = await withTimeout(fetch(url, {
         method,
         headers,
-        body: options.body ? JSON.stringify(options.body) : undefined,
+        // Allow passing either an object (we JSON encode) or a pre-encoded string body.
+        body: options.body
+          ? (typeof options.body === 'string' ? options.body : JSON.stringify(options.body))
+          : undefined,
       }), options.timeoutMs ?? TIMEOUT_MS);
     } catch (e: any) {
       const msg = String(e?.message || e || '').trim();
@@ -148,7 +182,9 @@ export async function request<T = any>(path: string, options: { method?: HttpMet
     }
     if (DEBUG_HTTP) {
       const elapsed = Date.now() - started;
-      const preview = typeof data === 'string' ? String(data).slice(0, 160).replace(/\n/g, ' ') : undefined;
+      const preview = typeof data === 'string'
+        ? String(data).slice(0, 160).replace(/\n/g, ' ')
+        : (data ? JSON.stringify(data).slice(0, 160).replace(/\n/g, ' ') : undefined);
       console.log('[HTTP] ←', method, url, res.status, `${elapsed}ms`, ct || '(no-ct)', preview ? `| body: ${preview}` : '');
     }
     if (!res.ok) {

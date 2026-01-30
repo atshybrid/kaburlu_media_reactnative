@@ -84,16 +84,45 @@ function ThemedApp() {
 
   // Notifications permission prompt is intentionally deferred until after splash.
 
-  // Deep link & initial URL handling for kaburlu://article/<id>
+  // Deep link & initial URL handling for:
+  // - kaburlu://article/<id>
+  // - https://s.kaburlumedia.com/<shortId>
+  // - https://kaburlumedia.com/article/<id>
   React.useEffect(() => {
     const handleUrl = (url?: string | null) => {
       if (!url) return;
       try {
+        console.log('[DEEP_LINK] Received URL:', url);
+        
+        // Handle short URL: https://s.kaburlumedia.com/{shortId}
+        if (url.includes('s.kaburlumedia.com')) {
+          const match = url.match(/s\.kaburlumedia\.com\/([a-zA-Z0-9]+)/);
+          if (match && match[1]) {
+            const shortId = match[1];
+            console.log('[DEEP_LINK] Short URL detected, shortId:', shortId);
+            // Navigate to article with short ID - the article screen will resolve it
+            router.push({ pathname: '/article/[id]', params: { id: shortId, isShortId: 'true' } });
+            return;
+          }
+        }
+        
+        // Handle main domain: https://kaburlumedia.com/article/{id}
+        if (url.includes('kaburlumedia.com/article/')) {
+          const match = url.match(/kaburlumedia\.com\/article\/([a-zA-Z0-9-]+)/);
+          if (match && match[1]) {
+            const articleId = match[1];
+            console.log('[DEEP_LINK] Main domain article URL, id:', articleId);
+            router.push({ pathname: '/article/[id]', params: { id: articleId } });
+            return;
+          }
+        }
+        
+        // Handle custom scheme: kaburlu://article/{id}
         const parsed = Linking.parse(url);
         const segments = parsed?.path ? parsed.path.split('/') : [];
         if (segments[0] === 'article' && segments[1]) {
           const articleId = segments[1];
-          // Navigate only if not already on that screen
+          console.log('[DEEP_LINK] Custom scheme article, id:', articleId);
           router.push({ pathname: '/article/[id]', params: { id: articleId } });
         }
       } catch (e) {

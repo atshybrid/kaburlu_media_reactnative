@@ -8,14 +8,17 @@ import { getArticleById } from '@/services/api';
 
 
 export default function ArticleDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, isShortId } = useLocalSearchParams<{ id: string; isShortId?: string }>();
   const [article, setArticle] = useState<Article | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (id) {
-      getArticleById(id)
+      // Check if this is a short ID from deep link
+      const shouldResolveShortId = isShortId === 'true';
+      
+      getArticleById(id, shouldResolveShortId)
         .then(response => {
           if (response) {
             setArticle(response);
@@ -30,7 +33,7 @@ export default function ArticleDetailScreen() {
           setLoading(false);
         });
     }
-  }, [id]);
+  }, [id, isShortId]);
 
   if (loading) {
     return <ActivityIndicator size="large" style={styles.center} />;

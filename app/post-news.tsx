@@ -4,9 +4,11 @@ import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { loadTokens } from '@/services/auth';
 import { getBaseUrl } from '@/services/http';
+import { aiRewriteUnified, getCategoryNamesForAI, type AIRewriteUnifiedResponse } from '@/services/aiRewriteUnified';
 import { usePostNewsDraftStore } from '@/state/postNewsDraftStore';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Audio } from 'expo-av';
 import { useRouter } from 'expo-router';
 import LottieView from 'lottie-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -345,6 +347,8 @@ export default function PostNewsScreen() {
 
   const [rawText, setRawText] = useState<string>(() => String(draft.body || ''));
   const [aiBusy, setAiBusy] = useState(false);
+  const [aiAudioMuted, setAiAudioMuted] = useState(false);
+  const aiSoundRef = useRef<Audio.Sound | null>(null);
 
   // Clear justPosted flag after a longer delay to allow category modal skip logic in details.tsx to run first.
   // The delay must exceed category API load time (~1-2s) to prevent category modal from auto-opening.
@@ -479,81 +483,109 @@ export default function PostNewsScreen() {
     if (aiBusy) return;
 
     setAiBusy(true);
+    
+    // Start playing AI rewrite audio (looping) - respect mute preference
+    try {
+      const { sound: audioSound } = await Audio.Sound.createAsync(
+        require('../assets/audio/newsai.mp3'),
+        { isLooping: true, shouldPlay: !aiAudioMuted, volume: 0.7 }
+      );
+      aiSoundRef.current = audioSound;
+    } catch (audioErr) {
+      console.log('Audio playback failed:', audioErr);
+    }
+    
     try {
       const tokens = await loadTokens();
-      const jwt = tokens?.jwt;
+      const session = (tokens as any)?.session;
+      
+      // Get tenant info
+      const tenant = session?.tenant;
+      const tenantId = String(tenant?.id || '').trim();
+      const newspaperName = String(tenant?.nativeName || tenant?.name || '').trim() || 'Daily News';
+      
+      // Get language info
+      const languageCode = String(session?.languageCode || tenant?.languageCode || 'te').trim();
+      const language = {
+        code: languageCode,
+        name: languageCode === 'te' ? 'Telugu' : languageCode === 'hi' ? 'Hindi' : 'English',
+        script: languageCode === 'te' ? 'Telugu' : languageCode === 'hi' ? 'Devanagari' : 'Latin',
+        region: languageCode === 'te' ? 'Telangana' : null,
+      };
 
-      // Cache tenant names for later fallback (and use them to sanitize AI input).
-      const tenantObj = (tokens as any)?.session?.tenant || (tokens as any)?.user?.tenant || (tokens as any)?.tenant || undefined;
-      const tn = String((tenantObj as any)?.name || '').trim();
-      const tnn = String((tenantObj as any)?.nativeName || '').trim();
-      const ds = (tokens as any)?.session?.domainSettings;
-      const tenantPrimaryColor = String(ds?.data?.theme?.colors?.primary || ds?.theme?.colors?.primary || '').trim();
-      if (tn) {
-        try { await AsyncStorage.setItem(POST_NEWS_TENANT_NAME_KEY, tn); } catch {}
-      }
-      if (tnn) {
-        try { await AsyncStorage.setItem(POST_NEWS_TENANT_NATIVE_NAME_KEY, tnn); } catch {}
-      }
-      if (isValidHexColor(tenantPrimaryColor)) {
-        try { await AsyncStorage.setItem(POST_NEWS_TENANT_PRIMARY_COLOR_KEY, tenantPrimaryColor); } catch {}
-        try { setTenantPrimary(tenantPrimaryColor); } catch {}
-      }
-      let cachedTn = '';
-      let cachedTnn = '';
-      try {
-        cachedTn = String((await AsyncStorage.getItem(POST_NEWS_TENANT_NAME_KEY)) || '').trim();
-        cachedTnn = String((await AsyncStorage.getItem(POST_NEWS_TENANT_NATIVE_NAME_KEY)) || '').trim();
-      } catch {
-        // ignore
-      }
-
-      const safeText = stripSensitiveFromAiText(text, {
-        tenantName: tn || cachedTn,
-        tenantNativeName: tnn || cachedTnn,
-      });
-      if (!safeText) {
-        Alert.alert('AI News', 'Please paste the full news content (not only date/month/location).');
+      // Get categories
+      const categories = await getCategoryNamesForAI(tenantId);
+      if (!categories || categories.length === 0) {
+        Alert.alert('Error', 'Failed to load categories. Please try again.');
         return;
       }
 
-      const model = String(process.env.EXPO_PUBLIC_AINEWS_MODEL || 'gpt-4o');
-      const payload = await aiRewriteNews({ rawText: safeText, jwt: jwt || undefined, model });
+      console.log('=== POST NEWS AI CALL DEBUG ===');
+      console.log('Tenant ID:', tenantId);
+      console.log('Newspaper Name:', newspaperName);
+      console.log('Language Code:', languageCode);
+      console.log('Language Object:', JSON.stringify(language, null, 2));
+      console.log('Categories Count:', categories.length);
+      console.log('Categories:', JSON.stringify(categories, null, 2));
+      console.log('Raw Text Length:', text.length);
+      console.log('Raw Text Preview:', text.substring(0, 100));
+      console.log('=== END DEBUG ===');
 
-      const category = String(payload?.category || '').trim();
-      const title = String(payload?.title || '').trim();
-      const subtitle = String(payload?.subtitle || '').trim();
-      const lead = String(payload?.lead || '').trim();
-      const highlights = Array.isArray(payload?.highlights)
-        ? payload.highlights.map((x) => String(x || '').trim()).filter(Boolean)
-        : [];
-      const body = String(payload?.article?.body || '').trim();
-      const locationDate = String(payload?.article?.location_date || '').trim();
-      const place = extractPlaceFromLocationDate(locationDate);
-
-      // Lead is not shown separately; keep it in body for posting.
-      const combinedBody = [lead, body].filter(Boolean).join('\n\n').trim() || text;
-
-      setDraft({
-        categoryId: undefined,
-        categorySlug: undefined,
-        categoryName: category || undefined,
-        title: title || '',
-        subtitle: subtitle || undefined,
-        body: combinedBody,
-        locationQuery: place || '',
-        dateLine: null,
+      // Call unified AI API
+      const response = await aiRewriteUnified({
+        rawText: text,
+        categories,
+        newspaperName,
+        language,
+        temperature: 0.2,
+        model: '5.2',
       });
 
-      if (highlights.length) setBullets(highlights.slice(0, 5));
+      // Store response in AsyncStorage for review screen
+      await AsyncStorage.setItem('AI_REWRITE_RESPONSE', JSON.stringify(response));
+      await AsyncStorage.setItem('AI_REWRITE_TENANT_ID', tenantId);
+      await AsyncStorage.setItem('AI_REWRITE_LANGUAGE', languageCode);
 
-      goDetails();
+      // Stop audio before navigation
+      if (aiSoundRef.current) {
+        await aiSoundRef.current.stopAsync();
+        await aiSoundRef.current.unloadAsync();
+        aiSoundRef.current = null;
+      }
+
+      // Navigate to review screen
+      router.push('/post-news/review' as any);
     } catch (e: any) {
       Alert.alert('AI News failed', String(e?.message || 'Could not rewrite the article'));
     } finally {
+      // Stop and cleanup audio if still playing
+      if (aiSoundRef.current) {
+        try {
+          await aiSoundRef.current.stopAsync();
+          await aiSoundRef.current.unloadAsync();
+          aiSoundRef.current = null;
+        } catch {}
+      }
       setAiBusy(false);
     }
-  }, [MAX_AI_REWRITE_WORDS, aiBusy, goDetails, rawText, setBullets, setDraft]);
+  }, [MAX_AI_REWRITE_WORDS, aiBusy, aiAudioMuted, rawText, router]);
+
+  // Toggle mute for AI audio
+  const toggleAiAudioMute = useCallback(async () => {
+    setAiAudioMuted((prev) => !prev);
+    if (aiSoundRef.current) {
+      try {
+        if (aiAudioMuted) {
+          // Currently muted, unmute
+          await aiSoundRef.current.setVolumeAsync(0.7);
+          await aiSoundRef.current.playAsync();
+        } else {
+          // Currently playing, mute
+          await aiSoundRef.current.pauseAsync();
+        }
+      } catch {}
+    }
+  }, [aiAudioMuted]);
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['top', 'bottom']}>
@@ -578,59 +610,108 @@ export default function PostNewsScreen() {
 
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.select({ ios: 'padding', android: undefined })}>
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-          <View style={[styles.section, { borderColor: c.border, backgroundColor: c.card }]}>
+          {/* Full Text Input */}
+          <View style={[styles.mainInputContainer, { backgroundColor: c.card, borderColor: c.border }]}>
+            {/* Header Row */}
+            <View style={[styles.inputHeaderRow, { borderBottomColor: c.border }]}>
+              <MaterialIcons name="edit-note" size={22} color={c.tint} />
+              <ThemedText style={{ color: c.text, fontWeight: '600', fontSize: 15, flex: 1 }}>
+                మీ వార్త రాయండి
+              </ThemedText>
+              {rawText.trim() && (
+                <View style={[styles.wordBadge, { backgroundColor: c.tint + '15' }]}>
+                  <ThemedText style={{ color: c.tint, fontSize: 11, fontWeight: '600' }}>
+                    {rawText.split(/\s+/g).filter(Boolean).length} పదాలు
+                  </ThemedText>
+                </View>
+              )}
+            </View>
+
+            {/* Text Area */}
             <TextInput
               ref={rawTextInputRef}
               value={rawText}
               onChangeText={setRawText}
-              placeholder="type or paste your news article here"
+              placeholder="ఇక్కడ టైప్ చేయండి లేదా పేస్ట్ చేయండి...
+
+• ఎవరు - వార్తలో ఎవరు పాల్గొన్నారు?
+• ఏమి జరిగింది - ప్రధాన సంఘటన?  
+• ఎప్పుడు - తేదీ మరియు సమయం?
+• ఎక్కడ - ప్రదేశం / గ్రామం / జిల్లా?"
               placeholderTextColor={c.muted}
-              style={[styles.textArea, { borderColor: c.border, color: c.text, backgroundColor: c.background }]}
+              style={[styles.fullTextArea, { color: c.text }]}
               multiline
               textAlignVertical="top"
             />
+
+            {/* Bottom Hint */}
+            <View style={[styles.inputFooter, { borderTopColor: c.border, backgroundColor: c.background }]}>
+              <MaterialIcons name="auto-awesome" size={14} color={c.tint} />
+              <ThemedText style={{ color: c.muted, fontSize: 11, flex: 1 }}>
+                AI స్వయంచాలకంగా category, location గుర్తిస్తుంది
+              </ThemedText>
+            </View>
           </View>
+
           <View style={styles.bottomPad} />
         </ScrollView>
 
+        {/* Bottom Action Bar */}
         <View style={[styles.bottomBar, { borderTopColor: c.border, backgroundColor: c.background }]}>
           <Pressable
             onPress={() => void onAiNews()}
-            disabled={aiBusy || aiTooLong}
+            disabled={aiBusy || aiTooLong || !rawText.trim()}
             style={({ pressed }) => [
-              styles.bottomBtn,
-              { borderColor: primary, backgroundColor: c.card },
+              styles.aiButton,
+              { backgroundColor: primary },
               pressed && styles.pressed,
-              (aiBusy || aiTooLong) && { opacity: 0.5 },
+              (aiBusy || aiTooLong || !rawText.trim()) && styles.aiButtonDisabled,
             ]}
           >
-            <MaterialIcons name="psychology" size={18} color={primary} />
-            <ThemedText style={{ color: primary }}>AI News</ThemedText>
-          </Pressable>
-
-          <Pressable
-            onPress={onProceed}
-            disabled={aiBusy}
-            style={({ pressed }) => [
-              styles.bottomBtn,
-              { borderColor: primary, backgroundColor: primary },
-              pressed && styles.pressed,
-              aiBusy && { opacity: 0.7 },
-            ]}
-          >
-            <MaterialIcons name="article" size={18} color={c.background} />
-            <ThemedText style={{ color: c.background }}>Proceed</ThemedText>
+            <View style={styles.aiButtonContent}>
+              <View style={styles.aiButtonIcon}>
+                <MaterialIcons name="auto-awesome" size={24} color="#fff" />
+              </View>
+              <View style={styles.aiButtonText}>
+                <ThemedText style={styles.aiButtonTitle}>Generate with AI</ThemedText>
+                <ThemedText style={styles.aiButtonSubtitle}>Transform into professional article</ThemedText>
+              </View>
+              <MaterialIcons name="arrow-forward" size={22} color="#fff" />
+            </View>
           </Pressable>
         </View>
       </KeyboardAvoidingView>
 
       <Modal visible={aiBusy} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: c.text, opacity: 0.25 }]} />
-          <View style={[styles.modalCard, { backgroundColor: c.card, borderColor: c.border, alignItems: 'center' }]}>
-            <LottieView source={aiAnim} autoPlay loop style={{ width: 140, height: 140 }} />
-            <ThemedText style={{ color: c.text, marginTop: 10 }}>Generating…</ThemedText>
-            <ActivityIndicator style={{ marginTop: 12 }} />
+        <View style={styles.aiModalOverlay}>
+          <View style={[styles.aiModalContent, { backgroundColor: c.background }]}>
+            <LottieView source={aiAnim} autoPlay loop style={{ width: 220, height: 220 }} />
+            <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 20, marginTop: 16, textAlign: 'center' }}>
+              AI is writing your article...
+            </ThemedText>
+            <ThemedText style={{ color: c.muted, fontSize: 14, marginTop: 8, textAlign: 'center', paddingHorizontal: 20 }}>
+              Please wait while AI rewrites your news in professional format. This may take 10-20 seconds.
+            </ThemedText>
+            <ActivityIndicator style={{ marginTop: 20 }} size="large" color={c.tint} />
+            
+            {/* Mute/Unmute button */}
+            <Pressable
+              onPress={toggleAiAudioMute}
+              style={({ pressed }) => [
+                styles.muteButton,
+                { backgroundColor: aiAudioMuted ? c.muted + '30' : c.tint + '20' },
+                pressed && { opacity: 0.7 },
+              ]}
+            >
+              <MaterialIcons 
+                name={aiAudioMuted ? 'volume-off' : 'volume-up'} 
+                size={22} 
+                color={aiAudioMuted ? c.muted : c.tint} 
+              />
+              <ThemedText style={{ color: aiAudioMuted ? c.muted : c.tint, marginLeft: 8, fontWeight: '600' }}>
+                {aiAudioMuted ? 'Sound Off' : 'Sound On'}
+              </ThemedText>
+            </Pressable>
           </View>
         </View>
       </Modal>
@@ -641,6 +722,28 @@ export default function PostNewsScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1 },
   flex: { flex: 1 },
+  aiModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  aiModalContent: {
+    flex: 1,
+    width: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  muteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 24,
+    marginTop: 24,
+  },
   appBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -651,34 +754,161 @@ const styles = StyleSheet.create({
   iconBtn: {
     width: 40,
     height: 40,
-    borderRadius: 12,
+    borderRadius: 20,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
   appBarCenter: { position: 'absolute', left: 0, right: 0, alignItems: 'center', justifyContent: 'center' },
   title: { fontSize: 16 },
   step: { fontSize: 12, marginTop: 2 },
-  scroll: { padding: 14, paddingBottom: 24 },
-  section: {
+  scroll: { padding: 12, paddingBottom: 24, flex: 1 },
+  // Main Input Container - Full Screen Style
+  mainInputContainer: {
+    flex: 1,
     borderWidth: 1,
     borderRadius: 16,
-    padding: 12,
+    overflow: 'hidden',
+  },
+  inputHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+  },
+  wordBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  fullTextArea: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 16,
+    lineHeight: 26,
+    minHeight: 400,
+  },
+  inputFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderTopWidth: 1,
+  },
+  // Legacy styles kept for compatibility
+  heroSection: {
+    alignItems: 'center',
+    paddingVertical: 20,
+    marginBottom: 16,
+  },
+  heroIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  heroTitle: {
+    fontSize: 22,
+    marginBottom: 6,
+  },
+  heroSubtitle: {
+    fontSize: 14,
+    textAlign: 'center',
+    lineHeight: 20,
+    paddingHorizontal: 20,
+  },
+  inputCard: {
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 16,
+  },
+  inputHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  wordCount: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    marginLeft: 'auto',
   },
   textArea: {
     borderWidth: 1,
     borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    minHeight: 420,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    minHeight: 280,
+    fontSize: 15,
+    lineHeight: 22,
   },
-  bottomPad: { height: 90 },
+  tipsCard: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 14,
+    gap: 10,
+  },
+  tipRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  bottomPad: { height: 100 },
+  // Bottom Bar
   bottomBar: {
     borderTopWidth: 1,
-    padding: 12,
+    padding: 16,
+  },
+  // AI Button - Full Width Premium Style
+  aiButton: {
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  aiButtonDisabled: {
+    opacity: 0.5,
+  },
+  aiButtonContent: {
     flexDirection: 'row',
-    gap: 10,
-    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    gap: 12,
+  },
+  aiButtonIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  aiButtonText: {
+    flex: 1,
+  },
+  aiButtonTitle: {
+    color: '#fff',
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  aiButtonSubtitle: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 12,
+    marginTop: 2,
+  },
+  // Legacy styles kept for compatibility
+  section: {
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 12,
   },
   bottomBtn: {
     flex: 1,
@@ -689,6 +919,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     flexDirection: 'row',
     gap: 8,
+  },
+  bottomBtnFull: {
+    height: 52,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 10,
   },
   modalOverlay: { flex: 1, justifyContent: 'center', padding: 16 },
   modalCard: { borderWidth: 1, borderRadius: 16, padding: 14 },
@@ -1715,10 +1953,11 @@ const styles = StyleSheet.create({
   iconBtn: {
     width: 40,
     height: 40,
-    borderRadius: 12,
+    borderRadius: 20,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
   appBarCenter: { position: 'absolute', left: 0, right: 0, alignItems: 'center', justifyContent: 'center' },
   title: { fontSize: 16 },

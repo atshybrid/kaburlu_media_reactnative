@@ -1,0 +1,43 @@
+#############################################
+# Clean production environment configuration
+#############################################
+
+# API base URL override (highest priority for both dev and prod)
+# NOTE: Keep this commented for local development, otherwise it forces production even in dev.
+# EXPO_PUBLIC_API_URL=https://api.kaburlumedia.com/api/v1
+
+# Dev-only API base URL (used when __DEV__ and EXPO_PUBLIC_API_URL not set)
+# Android emulator: use 10.0.2.2 to reach your PC localhost
+# Physical phone: use your PC LAN IP (e.g. http://192.168.1.50:3001/api/v1)
+# EXPO_PUBLIC_API_URL_DEV=http://192.168.1.24:3000/api/v1
+EXPO_PUBLIC_API_URL_DEV=https://api.kaburlumedia.com/api/v1
+# Prod-only API base URL (used for release builds when EXPO_PUBLIC_API_URL not set)
+EXPO_PUBLIC_API_URL_PROD=https://api.kaburlumedia.com/api/v1
+
+# Disable mock mode in production
+EXPO_PUBLIC_FORCE_MOCK=false
+
+# Keep HTTP debug logs off for production bundles
+EXPO_PUBLIC_HTTP_DEBUG=true
+
+# Dev-only: log full request body for POST /articles/newspaper (can be large)
+EXPO_PUBLIC_NEWSPAPER_FULL_BODY_LOG=false
+
+# Optional developer toggles
+EXPO_PUBLIC_TRANSLIT_DEBUG=0
+EXPO_PUBLIC_NAV_DEBUG=0
+EXPO_PUBLIC_DEVELOPER_MODE=false
+
+# Firebase env fallbacks (used by config/firebase.ts). These mirror app.json extra.firebase.
+EXPO_PUBLIC_FIREBASE_API_KEY=AIzaSyCANwGIO9-ZYDkxs7P1JlgXRLbim1kWldQ
+EXPO_PUBLIC_FIREBASE_PROJECT_ID=kaburlu-2f6de
+EXPO_PUBLIC_FIREBASE_APP_ID=1:636832421919:android:601ac5660d3f00f19c9d2a
+EXPO_PUBLIC_FIREBASE_SENDER_ID=636832421919
+EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET=khabarx-f0365.firebasestorage.app
+
+# Google OAuth (public client IDs)
+EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=827657659496-7k1qr8f36k8j5gu7nrgjs060lbbviruo.apps.googleusercontent.com
+EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID=572758255210-gubenuc6g6p9j5tudgaqo5m6lc8irtn4.apps.googleusercontent.com
+
+
+

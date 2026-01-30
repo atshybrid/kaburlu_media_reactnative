@@ -37,7 +37,13 @@ const NewsScreen = () => {
     const task = InteractionManager.runAfterInteractions(() => {
       ensureNotificationsSetupOnceAfterSplash()
         .then((res) => {
-          console.log('[NOTIF_INIT] (after splash) status', res.status, 'expoToken?', !!res.expoToken, 'deviceToken?', !!res.deviceToken);
+          console.log('[NOTIF_INIT] (after splash) status', res.status, 
+            'fcmToken?', !!res.fcmToken, 
+            'expoToken?', !!res.expoToken);
+          // FCM token is now preferred for Firebase backend
+          if (res.fcmToken) {
+            console.log('[NOTIF_INIT] Using FCM token:', res.fcmToken.substring(0, 20) + '...');
+          }
         })
         .catch((e: any) => {
           console.log('[NOTIF_INIT] (after splash) failed', e?.message);

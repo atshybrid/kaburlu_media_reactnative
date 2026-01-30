@@ -23,6 +23,7 @@ import {
     Dimensions,
     Easing,
     Platform,
+    Pressable,
     Share as RnShare,
     ScrollView,
     StyleSheet,
@@ -218,16 +219,19 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
   const lastScrollAtRef = useRef(0);
   const lastScrollYRef = useRef(0);
   const scrollThrottle = 200;
-  const lastTouchYRef = useRef(0);
-  const lastTouchStartAtRef = useRef(0);
-  const lastTouchMovedRef = useRef(false);
 
   const [fontsLoaded] = useFonts({
     Ramabhadra_400Regular,
   });
 
-  // Footer fixed at device bottom within safe area (does not move with tab bar)
-  const footerBottomOffset = Math.max(insets.bottom, 0);
+  // Footer fixed at device bottom within safe area
+  // When tab bar is visible, add extra offset to avoid overlap (tab bar is ~64px + safe area)
+  const tabBarHeight = 64;
+  const footerBottomOffset = isTabBarVisible 
+    ? tabBarHeight + insets.bottom
+    : 0;
+  // Footer padding to extend background into safe area when tab bar is hidden
+  const footerSafeAreaPadding = isTabBarVisible ? 0 : insets.bottom;
 
   // Relative time helper for createdAt: Xm, Xh (<=24h), then X day(s)
   const formatRelativeTime = (iso?: string): string => {
@@ -352,10 +356,15 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
 
   // Build share text (metadata prioritized). Separate function so we can reuse.
   const buildSharePayload = () => {
-    // Assume canonicalUrl already normalized server-side. If missing, fall back to configured WEB_BASE_URL.
-    const fallbackWeb = `${WEB_BASE_URL.replace(/\/$/, '')}/article/${encodeURIComponent(article.id)}`;
+    // Use canonicalUrl if available, otherwise build from slug or id
+    const baseUrl = WEB_BASE_URL.replace(/\/$/, '');
+    const slug = (article as any).slug;
+    // Prefer canonicalUrl > slug-based URL > id-based fallback
+    const fallbackWeb = slug 
+      ? `${baseUrl}/${encodeURIComponent(slug)}`
+      : `${baseUrl}/article/${encodeURIComponent(article.id)}`;
     const canonical = article.canonicalUrl || fallbackWeb;
-  const deepLink = `kaburlu://article/${article.id}`;
+    const deepLink = `kaburlu://article/${article.id}`;
     const shareTitle = article.metaTitle || article.title;
     // Meta description intentionally removed per user request
     const messageLines = [
@@ -451,11 +460,11 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
     // paddings and spacing in content area (approx): 15 (container pad) + 10 (title margin) + 15 (bottom padding)
     const extraPad = 15 + (isSmallScreen ? 8 : 10) + 15;
     const available = winH - heroH - footerBottomOffset - footerHeight - extraPad;
-  const lineHeight = isSmallScreen ? 26 : 30; // updated to match increased body lineHeight
+  const lineHeight = isSmallScreen ? 22 : 24; // updated to match new optimized body lineHeight
     const remainingForBody = Math.max(0, available - titleHeight);
     const lines = Math.floor(remainingForBody / lineHeight);
     // Guard against negative or excessively large counts
-    const clamped = Math.max(0, Math.min(lines, 18));
+    const clamped = Math.max(0, Math.min(lines, 20));
     setMaxBodyLines(clamped);
   }, [footerBottomOffset, footerHeight, titleHeight, isSmallScreen]);
   return (
@@ -581,46 +590,26 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
             )}
           </ViewShot>
 
-          <View style={[styles.articleArea, { backgroundColor: bg }] }>
+          <Pressable 
+            style={[styles.articleArea, { backgroundColor: bg }]}
+            onPress={() => {
+              if (isTabBarVisible) {
+                hide();
+                setTabBarVisible(false);
+              } else {
+                show();
+                setTabBarVisible(true);
+              }
+            }}
+          >
             <View
               style={styles.articleContent}
-              onTouchStart={(e) => {
-                lastTouchYRef.current = e.nativeEvent.pageY;
-                lastTouchStartAtRef.current = Date.now();
-                lastTouchMovedRef.current = false;
-              }}
-              onTouchMove={(e) => {
-                const y = e.nativeEvent.pageY;
-                const dy = y - (lastTouchYRef.current || y);
-                if (Math.abs(dy) > 2) lastTouchMovedRef.current = true;
-                lastTouchYRef.current = y;
-                // If visible and user slightly swipes up, hide immediately
-                if (isTabBarVisible && dy < -2) {
-                  console.log('[Article] small upward glide -> hide');
-                  hide();
-                  setTabBarVisible(false);
-                }
-              }}
-              onTouchEnd={() => {
-                const dt = Date.now() - (lastTouchStartAtRef.current || 0);
-                const isTap = !lastTouchMovedRef.current && dt < 300;
-                if (isTap) {
-                  // Toggle on content tap only
-                  if (isTabBarVisible) {
-                    hide();
-                    setTabBarVisible(false);
-                  } else {
-                    show();
-                    setTabBarVisible(true);
-                  }
-                }
-              }}
             >
               <Text style={[
                 styles.title,
                 fontsLoaded ? { fontFamily: 'Ramabhadra_400Regular' } : null,
-                { color: textColor, letterSpacing: 0.2, textAlign: 'left' },
-                isSmallScreen ? { fontSize: 24, marginBottom: 10 } : { fontSize: 26 },
+                { color: textColor, letterSpacing: 0.3, textAlign: 'left' },
+                isSmallScreen ? { fontSize: 20, marginBottom: 10, lineHeight: 26 } : { fontSize: 22, lineHeight: 28, marginBottom: 12 },
               ]}
                 numberOfLines={2}
                 ellipsizeMode="tail"
@@ -630,8 +619,8 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
               </Text>
               <Text style={[
                 styles.body,
-                { color: textColor, letterSpacing: 0.1, textAlign: 'left' },
-                isSmallScreen ? { fontSize: 17, lineHeight: 26 } : { fontSize: 19, lineHeight: 30 },
+                { color: textColor, letterSpacing: 0, textAlign: 'left' },
+                isSmallScreen ? { fontSize: 15, lineHeight: 22 } : { fontSize: 16, lineHeight: 24 },
               ]} numberOfLines={maxBodyLines || undefined} ellipsizeMode="tail">
                 {article.body}
               </Text>
@@ -665,9 +654,9 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
                 </View>
               </>
             )}
-          </View>
+          </Pressable>
       </ScrollView>
-  <View style={[styles.footerContainer, { bottom: footerBottomOffset, backgroundColor: card }]} onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}>
+  <View style={[styles.footerContainer, { bottom: footerBottomOffset, paddingBottom: footerSafeAreaPadding, backgroundColor: card }]} onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}>
         <View style={[styles.footerInfo, { borderTopColor: border }]}>
           <View style={styles.footerLeft}>
             <Feather name="clock" size={14} color={muted} />
@@ -1180,13 +1169,16 @@ const styles = StyleSheet.create<Styles>({
     gap: 0,
   },
   engagementButton: {
-    alignItems: 'flex-end',
-    paddingLeft: 0,
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    minWidth: 56,
   },
   engagementButtonText: {
     color: '#555',
-    marginTop: 0,
-    fontSize: 0,
+    marginTop: 3,
+    fontSize: 11,
+    fontWeight: '600',
   },
   engagementRail: {
     // Remove fixed width so the rail hugs the icons
@@ -1209,8 +1201,10 @@ const styles = StyleSheet.create<Styles>({
     alignItems: 'center',
     justifyContent: 'space-around',
     paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingVertical: 8,
     borderTopWidth: StyleSheet.hairlineWidth,
+    minHeight: 52,
+    gap: 2,
   },
   footerContainer: {
     position: 'absolute',
@@ -1224,29 +1218,35 @@ const styles = StyleSheet.create<Styles>({
   footerInfo: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 4,
-    borderTopWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: '#eee',
     justifyContent: 'space-between',
+    minHeight: 32,
   },
   footerLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 5,
+    flex: 1,
   },
   infoText: {
     fontSize: 11,
     color: '#888',
+    flexShrink: 1,
+    fontWeight: '500',
   },
   categoryPill: {
-    maxWidth: '50%',
+    maxWidth: '45%',
     backgroundColor: '#f3f4f6',
     color: '#444',
     paddingHorizontal: 10,
-    paddingVertical: 2,
+    paddingVertical: 3,
     borderRadius: 10,
-    fontSize: 11,
+    fontSize: 10,
+    fontWeight: '600',
+    textAlign: 'center',
   },
   watermark: {
     position: 'absolute',

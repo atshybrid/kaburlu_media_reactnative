@@ -13,28 +13,21 @@ export function canAccessPostNewsByRole(role: string | null | undefined): boolea
   const r = normalizeRole(role);
   if (!r) return false;
 
-  // Exact matches (expected backend role enums)
+  // CITIZEN_REPORTER uses the old explore/short news flow
+  if (r === 'CITIZEN_REPORTER' || r.includes('CITIZEN')) return false;
+
+  // These roles can access AI Rewrite (4 screens) post-news flow
   const allowed = new Set([
     'TENANT_ADMIN',
-    'TENANT_EDITOR',
-    'CHIEF_EDITOR',
-    'DESK_EDITOR',
     'REPORTER',
     'CHIEF_EDITOR',
     'CHIF_EDITOR', // tolerate common typo
-    // tolerant legacy/alt names
-    'TENANT_REPORTER',
-    'NEWS_DESK',
-    'NEWS_DESK_EDITOR',
-    'NEWS_DESK_USER',
-    'NEWSDESK',
+    'DESK_EDITOR',
   ]);
   if (allowed.has(r)) return true;
 
   // Tolerant matching for variants
   if (r.includes('TENANT') && r.includes('ADMIN')) return true;
-  if (r.includes('TENANT') && r.includes('EDITOR')) return true;
-  if (r.includes('NEWS') && r.includes('DESK')) return true;
   if (r.includes('CHIEF') && r.includes('EDITOR')) return true;
   if (r.includes('DESK') && r.includes('EDITOR')) return true;
 

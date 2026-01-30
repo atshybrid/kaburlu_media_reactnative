@@ -1,7 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Modal, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { createCitizenReporterMobile, getMpinStatus, loginWithMpin } from '../services/api';
+import { createCitizenReporterMobile, getMpinStatus, loginWithMpin, PaymentRequiredError } from '../services/api';
 import { gatherRegistrationContext } from '../services/contextGather';
 
 interface Props {
@@ -14,6 +15,7 @@ interface Props {
 type Status = 'idle' | 'mpin' | 'register';
 
 export const MobileLoginModal: React.FC<Props> = ({ visible, onClose, onSuccess }) => {
+  const router = useRouter();
   const [mobile, setMobile] = useState('');
   const [mpin, setMpin] = useState('');
   const [fullName, setFullName] = useState('');
@@ -191,6 +193,26 @@ export const MobileLoginModal: React.FC<Props> = ({ visible, onClose, onSuccess 
       reset();
     } catch (e: any) {
       console.error('[MOBILE_LOGIN] Login failed', e);
+      
+      // Handle 402 Payment Required - navigate to payment screen
+      if (e instanceof PaymentRequiredError) {
+        console.log('[MOBILE_LOGIN] Payment required, navigating to payment screen');
+        onClose(); // Close modal
+        router.push({
+          pathname: '/auth/payment',
+          params: {
+            reporterId: e.data?.reporter?.id || '',
+            tenantId: e.data?.reporter?.tenantId || '',
+            mobile: mobile,
+            mpin: mpin,
+            // Pass razorpay data as JSON string
+            razorpayData: e.data?.razorpay ? JSON.stringify(e.data.razorpay) : '',
+            breakdownData: e.data?.breakdown ? JSON.stringify(e.data.breakdown) : '',
+          },
+        });
+        return;
+      }
+      
       setError(e?.message || 'Login failed');
     } finally { 
       console.log('[MOBILE_LOGIN] Login process finished');

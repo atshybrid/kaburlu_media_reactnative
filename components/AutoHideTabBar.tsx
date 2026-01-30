@@ -59,7 +59,7 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
 
   const translateY = animatedRef.current.interpolate({
     inputRange: [0, 1],
-    outputRange: [measuredHeight + Math.max(insets.bottom, 0), 0],
+    outputRange: [measuredHeight, 0],
   });
 
   // Solid background comes from theme.card
@@ -118,7 +118,6 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
       style={[
         styles.container,
         {
-          paddingBottom: Math.max(insets.bottom, 8),
           transform: [{ translateY }],
         },
       ]}
@@ -127,7 +126,7 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
   accessibilityElementsHidden={!shouldShow}
   importantForAccessibility={shouldShow ? 'yes' : 'no-hide-descendants'}
     >
-      <Animated.View style={[styles.shadowWrap, { transform: [{ scale: scaleRef.current }] }]}>
+      <Animated.View style={[styles.shadowWrap, { transform: [{ scale: scaleRef.current }], backgroundColor: theme.card }]}>
         <View
           style={[
             styles.inner,
@@ -135,6 +134,7 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
               backgroundColor: theme.card,
               borderTopColor: theme.border,
               borderTopWidth: StyleSheet.hairlineWidth,
+              paddingBottom: insets.bottom,
             },
           ]}
           onLayout={onContainerLayout}
@@ -203,14 +203,21 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
                   ? options.tabBarIcon({ focused: isFocused, color, size })
                   : null;
               const onPress = async () => {
-                // Special case: "Post" tab should go to Post News for tenant editorial roles.
+                // Special case: "Post" tab - route based on role
                 if (route.name === 'explore') {
                   const role = profileRole || (await getCachedProfileRole());
                   if (canAccessPostNewsByRole(role)) {
+                    // Tenant editorial roles go to post-news
                     try {
                       router.push('/post-news' as any);
                       return;
                     } catch {}
+                  } else {
+                    // Citizen reporters and others go to explore (old flow)
+                    if (!isFocused) {
+                      props.navigation.navigate('explore' as never);
+                    }
+                    return;
                   }
                 }
                 if (!isFocused) {
@@ -242,8 +249,8 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
             style={[
               styles.fabWrap,
               {
-                // Place FAB so the label visually aligns with other tab labels
-                bottom: Math.max(insets.bottom, 8) + 14,
+                // Place FAB with optimal spacing above tab bar (includes safe area padding)
+                bottom: insets.bottom + 48,
                 transform: [{ scale: fabScale.current }],
               },
             ]}
@@ -281,38 +288,44 @@ const styles = StyleSheet.create({
     bottom: 0,
   },
   shadowWrap: {
-    elevation: 0,
+    elevation: 8,
     borderRadius: 0,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowOffset: { width: 0, height: -4 },
+    shadowRadius: 8,
   },
   inner: {
     borderRadius: 0,
     overflow: 'hidden',
-    minHeight: 62,
+    minHeight: 64,
     // backgroundColor moved to themed inline style
-    paddingHorizontal: 0, // remove left/right padding to maximize usable width
+    paddingHorizontal: 2,
   },
   tabRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: 6,
-    paddingHorizontal: 0,
+    paddingTop: 8,
+    paddingHorizontal: 2,
   },
   tabItem: {
     flex: 1,
     alignItems: 'center',
     paddingVertical: 8,
+    paddingHorizontal: 2,
   },
   tabIconWrap: {
-    height: 24,
+    height: 26,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 2,
+    marginBottom: 3,
   },
   tabLabel: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '600',
     textAlign: 'center',
+    letterSpacing: -0.2,
   },
   fabWrap: {
     position: 'absolute',
@@ -320,17 +333,19 @@ const styles = StyleSheet.create({
     bottom: 52, // lift to avoid overlapping center label
   },
   fab: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     // backgroundColor themed at render time
     backgroundColor: Colors.light.secondary,
-    elevation: 8,
+    elevation: 12,
     shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowOffset: { width: 0, height: 6 },
-    shadowRadius: 10,
+    shadowOpacity: 0.28,
+    shadowOffset: { width: 0, height: 8 },
+    shadowRadius: 12,
     overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
   },
   fabPressed: { opacity: 0.92 },
   fabInner: {

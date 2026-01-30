@@ -1,5 +1,6 @@
 export interface Article {
   id: string;
+  shortId?: string; // Short URL code for s.kaburlumedia.com/{shortId}
   title: string;
   summary: string;
   body: string;
@@ -26,6 +27,7 @@ export interface Article {
   language?: string;
   tags?: string[];
   // SEO / canonical metadata
+  slug?: string;
   canonicalUrl?: string;
   metaTitle?: string;
   metaDescription?: string;
