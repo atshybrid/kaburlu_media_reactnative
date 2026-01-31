@@ -14,12 +14,19 @@ export default function ArticleDetailScreen() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    console.log('[ARTICLE] ========================================');
+    console.log('[ARTICLE] Screen loaded with id:', id, 'isShortId:', isShortId);
+    console.log('[ARTICLE] ========================================');
+    
     if (id) {
       // Check if this is a short ID from deep link
       const shouldResolveShortId = isShortId === 'true';
       
+      console.log('[ARTICLE] Fetching article with id:', id, 'resolveShortId:', shouldResolveShortId);
+      
       getArticleById(id, shouldResolveShortId)
         .then(response => {
+          console.log('[ARTICLE] API response:', response ? 'Got article' : 'No article', response?.id);
           if (response) {
             setArticle(response);
           } else {
@@ -27,11 +34,16 @@ export default function ArticleDetailScreen() {
           }
         })
         .catch(err => {
+          console.error('[ARTICLE] API error:', err);
           setError(err.message)
         })
         .finally(() => {
           setLoading(false);
         });
+    } else {
+      console.log('[ARTICLE] No id provided!');
+      setError("No article ID provided.");
+      setLoading(false);
     }
   }, [id, isShortId]);
 

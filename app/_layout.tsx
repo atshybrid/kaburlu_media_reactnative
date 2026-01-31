@@ -2,6 +2,7 @@ import AppLockGate from '@/components/AppLockGate';
 import LoginBottomSheet from '@/components/LoginBottomSheet';
 import Toast from '@/components/Toast';
 import { ensureFirebaseAuthAsync, isFirebaseConfigComplete, logFirebaseGoogleAlignment } from '@/services/firebaseClient';
+import { setupNotificationListeners } from '@/services/notifications';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import * as Linking from 'expo-linking';
@@ -25,6 +26,10 @@ LogBox.ignoreLogs(['Unable to activate keep awake']);
 
 // Keep native splash visible until splash screen video first frame is ready
 SplashScreen.preventAutoHideAsync().catch(() => {});
+
+// Setup notification listeners early to catch notification clicks
+// even when app is opened from quit state
+setupNotificationListeners();
 
 // Custom Header Component
 const CustomHeader = () => {

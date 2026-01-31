@@ -1,6 +1,5 @@
 import { getMockMode, setMockMode } from '@/services/api';
-import { clearTokens } from '@/services/auth';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { clearAllAppData, clearTokens } from '@/services/auth';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
@@ -19,7 +18,7 @@ export default function AccountDebugScreen() {
   };
 
   const handleClearAllStorage = async () => {
-    await AsyncStorage.clear();
+    await clearAllAppData();
     console.log('[NAV] AccountDebugScreen: All AsyncStorage cleared');
     alert('All app storage cleared. Restart app to test onboarding.');
   };

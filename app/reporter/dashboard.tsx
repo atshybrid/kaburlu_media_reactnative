@@ -1,496 +1,450 @@
 /**
- * Reporter Dashboard - Redesigned
- * Uses primary color from domainSettings, shows reporter level/designation/work area
- * Focuses on article list with status tabs (Pending, Published, Rejected)
+ * Reporter Dashboard - Clean & Simple Design
+ * 
+ * Main Features:
+ * 1. Profile Photo - Check and upload if missing
+ * 2. Post News - Simple raw text submission  
+ * 3. My Articles - List with status and share
+ * 4. ID Card - Download
+ * 5. KYC - Easy verification
  */
 import ShareableArticleImage, { type ShareableArticleData, type ShareableArticleImageRef } from '@/components/ShareableArticleImage';
+import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { loadTokens } from '@/services/auth';
 import {
-    getMyNewspaperArticles,
-    getReporterMe,
-    type MyNewspaperArticle,
-    type NewspaperArticleStatus,
-    type ReporterMeResponse,
+  getMyNewspaperArticles,
+  getReporterMe,
+  updateReporterProfilePhoto,
+  type MyNewspaperArticle,
+  type NewspaperArticleStatus,
+  type ReporterMeResponse,
 } from '@/services/reporters';
-import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { uploadMedia } from '@/services/media';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Audio } from 'expo-av';
+import * as ImagePicker from 'expo-image-picker';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    FlatList,
-    Linking,
-    Platform,
-    RefreshControl,
-    ScrollView,
-    Share,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Linking,
+  Modal,
+  Pressable,
+  RefreshControl,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-// Primary color from domainSettings
-const PRIMARY_COLOR = '#109edc';
+/* ─────────────────────────────  Constants  ───────────────────────────── */
 
-// Status tabs
-type TabType = 'ALL' | 'PENDING' | 'PUBLISHED' | 'REJECTED' | 'DRAFT';
-const TABS: { key: TabType; label: string }[] = [
-  { key: 'ALL', label: 'All' },
-  { key: 'PENDING', label: 'Pending' },
-  { key: 'PUBLISHED', label: 'Published' },
-  { key: 'REJECTED', label: 'Rejected' },
+const DEFAULT_PRIMARY = '#109edc';
+
+// Validate hex color
+function isValidHexColor(color: any): boolean {
+  if (!color || typeof color !== 'string') return false;
+  return /^#[0-9A-Fa-f]{6}$/.test(color);
+}
+
+type TabType = 'ALL' | 'PENDING' | 'PUBLISHED' | 'REJECTED';
+const TABS: { key: TabType; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+  { key: 'ALL', label: 'అన్నీ', icon: 'list' },
+  { key: 'PENDING', label: 'పెండింగ్', icon: 'time-outline' },
+  { key: 'PUBLISHED', label: 'పబ్లిష్', icon: 'checkmark-circle-outline' },
+  { key: 'REJECTED', label: 'రిజెక్ట్', icon: 'close-circle-outline' },
 ];
 
-// Badge colors for status
 const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
   PENDING: { bg: '#FEF3C7', text: '#D97706' },
   PUBLISHED: { bg: '#D1FAE5', text: '#059669' },
   REJECTED: { bg: '#FEE2E2', text: '#DC2626' },
   DRAFT: { bg: '#E5E7EB', text: '#6B7280' },
-  ARCHIVED: { bg: '#E5E7EB', text: '#6B7280' },
 };
 
-// Helper to format date
-function formatTimeAgo(dateStr: string): string {
-  try {
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffSec = Math.floor(diffMs / 1000);
-    const diffMin = Math.floor(diffSec / 60);
-    const diffHrs = Math.floor(diffMin / 60);
-    const diffDays = Math.floor(diffHrs / 24);
+/* ─────────────────────────────  Helpers  ───────────────────────────── */
 
-    if (diffDays > 30) {
-      return date.toLocaleDateString();
-    } else if (diffDays > 0) {
-      return `${diffDays}d ago`;
-    } else if (diffHrs > 0) {
-      return `${diffHrs}h ago`;
-    } else if (diffMin > 0) {
-      return `${diffMin}m ago`;
-    } else {
-      return 'Just now';
-    }
+function timeAgo(dateStr: string): string {
+  try {
+    const diff = Date.now() - new Date(dateStr).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'ఇప్పుడే';
+    if (mins < 60) return `${mins} ని. క్రితం`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs} గం. క్రితం`;
+    const days = Math.floor(hrs / 24);
+    if (days < 7) return `${days} రోజుల క్రితం`;
+    return new Date(dateStr).toLocaleDateString('te-IN');
   } catch {
     return '';
   }
 }
 
-// Session type from login response
-type SessionData = {
-  reporter?: {
-    id?: string;
-    tenantId?: string;
-    userId?: string;
-    level?: string;
-    designation?: { id?: string; code?: string; name?: string; level?: string } | string;
-    profilePhoto?: string;
-    contact?: { email?: string; phone?: string };
-    user?: { id?: string; name?: string; email?: string; mobileNumber?: string };
-    state?: { id?: string; name?: string };
-    district?: { id?: string; name?: string };
-    mandal?: { id?: string; name?: string };
-  };
-  tenant?: { id?: string; name?: string };
-  domainSettings?: {
-    data?: {
-      theme?: { colors?: { primary?: string; secondary?: string } };
-    };
-  };
-  user?: {
-    id?: string;
-    name?: string;
-    mobileNumber?: string;
-    role?: string;
-  };
-};
+/* ─────────────────────────────  Article Card  ───────────────────────────── */
 
-// KYC Status colors
-const KYC_STATUS_META: Record<string, { label: string; color: string; bg: string; icon: string }> = {
-  APPROVED: { label: 'Verified', color: '#059669', bg: '#D1FAE5', icon: 'shield-checkmark' },
-  SUBMITTED: { label: 'Under Review', color: '#D97706', bg: '#FEF3C7', icon: 'time' },
-  PENDING: { label: 'Pending', color: '#8B5CF6', bg: '#EDE9FE', icon: 'alert-circle' },
-  REJECTED: { label: 'Rejected', color: '#DC2626', bg: '#FEE2E2', icon: 'close-circle' },
-};
-
-// ----- Article Card Component -----
 interface ArticleCardProps {
   article: MyNewspaperArticle;
   onPress: () => void;
-  onShareAsImage?: (article: MyNewspaperArticle) => void;
+  onShare?: () => void;
 }
 
-const ArticleCard: React.FC<ArticleCardProps> = ({ article, onPress, onShareAsImage }) => {
+const ArticleCard: React.FC<ArticleCardProps> = ({ article, onPress, onShare }) => {
   const statusColors = STATUS_COLORS[article.status] || STATUS_COLORS.DRAFT;
-
-  // Get cover image with multiple fallbacks
-  const coverImage = article.coverImageUrl 
-    || article.imageUrl
-    || article.coverImage
-    || article.thumbnailUrl
-    || article.baseArticle?.contentJson?.raw?.coverImageUrl
-    || article.baseArticle?.contentJson?.raw?.images?.[0]
-    || null;
-  
-  // Debug log if no image found (remove after debugging)
-  if (!coverImage && __DEV__) {
-    console.log('[ArticleCard] No cover image found for article:', {
-      id: article.id,
-      title: article.title?.substring(0, 30),
-      coverImageUrl: article.coverImageUrl,
-      hasBaseArticle: !!article.baseArticle,
-    });
-  }
-
-  const handleWebUrlPress = () => {
-    if (article.webArticle?.url) {
-      Linking.openURL(article.webArticle.url);
-    }
-  };
-
-  // Direct share - image for published, link for others
-  const handleShare = async () => {
-    // For published articles with share handler, directly share as image
-    if (onShareAsImage) {
-      onShareAsImage(article);
-      return;
-    }
-
-    // Fallback to link share
-    const shareUrl = article.sportLink || article.webArticle?.url || article.webArticleUrl;
-    if (!shareUrl) {
-      Alert.alert('Not Available', 'Share link is not available for this article.');
-      return;
-    }
-
-    try {
-      await Share.share(
-        Platform.OS === 'android'
-          ? { message: `${article.title}\n\n${shareUrl}` }
-          : { message: `${article.title}\n\n${shareUrl}`, url: shareUrl, title: article.title }
-      );
-    } catch (error: any) {
-      console.error('[Dashboard] Share error:', error);
-    }
-  };
-
-  const formattedDate = useMemo(() => formatTimeAgo(article.createdAt), [article.createdAt]);
-
-  // Check if share is available
-  const shareUrl = article.sportLink || article.webArticle?.url || article.webArticleUrl;
-  const canShare = (!!shareUrl || !!onShareAsImage) && article.status === 'PUBLISHED';
+  const coverImage = article.coverImageUrl || article.imageUrl || null;
+  const canShare = article.status === 'PUBLISHED' && onShare;
 
   return (
-    <TouchableOpacity style={styles.articleCard} onPress={onPress} activeOpacity={0.7}>
-      {/* Left Image */}
-      <View style={styles.articleImageContainer}>
+    <Pressable style={styles.articleCard} onPress={onPress}>
+      {/* Image */}
+      <View style={styles.articleImageBox}>
         {coverImage ? (
-          <Image
-            source={{ uri: coverImage }}
-            style={styles.articleImage}
-            contentFit="cover"
-          />
+          <Image source={{ uri: coverImage }} style={styles.articleImage} contentFit="cover" />
         ) : (
           <View style={[styles.articleImage, styles.noImage]}>
-            <Ionicons name="newspaper-outline" size={32} color="#9CA3AF" />
+            <Ionicons name="newspaper-outline" size={28} color="#9CA3AF" />
           </View>
-        )}
-        
-        {/* Share button overlay on image */}
-        {canShare && (
-          <TouchableOpacity
-            style={styles.shareOverlay}
-            onPress={handleShare}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="share-social" size={16} color="#FFF" />
-          </TouchableOpacity>
         )}
       </View>
 
-      {/* Right Content */}
+      {/* Content */}
       <View style={styles.articleContent}>
-        {/* Title */}
-        <Text style={styles.articleTitle} numberOfLines={2}>
-          {article.title}
-        </Text>
-
-        {/* Subtitle */}
-        <Text style={styles.articleSubtitle} numberOfLines={1}>
-          {article.subTitle || 'No description available'}
-        </Text>
-
-        {/* Status, Date, Views row */}
+        <Text style={styles.articleTitle} numberOfLines={2}>{article.title}</Text>
+        
+        {/* Meta row */}
         <View style={styles.articleMeta}>
           <View style={[styles.statusBadge, { backgroundColor: statusColors.bg }]}>
-            <Text style={[styles.statusText, { color: statusColors.text }]}>
-              {article.status}
-            </Text>
+            <Text style={[styles.statusText, { color: statusColors.text }]}>{article.status}</Text>
           </View>
-          <Text style={styles.articleDate}>{formattedDate}</Text>
-          {article.viewCount !== undefined && (
-            <View style={styles.viewsContainer}>
+          <Text style={styles.articleDate}>{timeAgo(article.createdAt)}</Text>
+          {article.viewCount !== undefined && article.viewCount > 0 && (
+            <View style={styles.viewsBox}>
               <Ionicons name="eye-outline" size={12} color="#6B7280" />
               <Text style={styles.viewsText}>{article.viewCount}</Text>
             </View>
           )}
         </View>
 
-        {/* Sport Link / Web URL with share */}
-        {shareUrl && (
-          <View style={styles.sportLinkRow}>
-            <TouchableOpacity
-              style={styles.sportLinkBtn}
-              onPress={handleWebUrlPress}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="globe-outline" size={14} color={PRIMARY_COLOR} />
-              <Text style={styles.sportLinkText} numberOfLines={1}>
-                {article.sportLinkDomain || 'View on web'}
-              </Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={styles.shareBtn}
-              onPress={handleShare}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="share-social-outline" size={16} color="#FFF" />
-              <Text style={styles.shareBtnText}>Share</Text>
-            </TouchableOpacity>
-          </View>
+        {/* Share button for published */}
+        {canShare && (
+          <Pressable style={styles.shareBtn} onPress={onShare}>
+            <Ionicons name="share-social" size={16} color="#FFF" />
+            <Text style={styles.shareBtnText}>షేర్</Text>
+          </Pressable>
         )}
       </View>
-    </TouchableOpacity>
+    </Pressable>
   );
 };
 
-// ----- Main Dashboard Component -----
+/* ─────────────────────────────  Main Dashboard  ───────────────────────────── */
+
 export default function ReporterDashboard() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === 'dark';
+  const scheme = useColorScheme() ?? 'light';
+  const c = Colors[scheme];
 
-  const [activeTab, setActiveTab] = useState<TabType>('ALL');
-  const [articles, setArticles] = useState<MyNewspaperArticle[]>([]);
+  // State
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [page, setPage] = useState(1);
+  const [reporter, setReporter] = useState<ReporterMeResponse | null>(null);
+  const [articles, setArticles] = useState<MyNewspaperArticle[]>([]);
+  const [activeTab, setActiveTab] = useState<TabType>('ALL');
   const [hasMore, setHasMore] = useState(true);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [stats, setStats] = useState({
-    total: 0,
-    pending: 0,
-    published: 0,
-    rejected: 0,
-  });
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [showPhotoModal, setShowPhotoModal] = useState(false);
+  const [tenantName, setTenantName] = useState<string>('');
+  const [tenantId, setTenantId] = useState<string>('');
+  const [primaryColor, setPrimaryColor] = useState(DEFAULT_PRIMARY);
 
-  // Session data loaded from tokens
-  const [session, setSession] = useState<SessionData | null>(null);
-  
-  // Reporter data from /reporters/me API
-  const [reporter, setReporter] = useState<ReporterMeResponse | null>(null);
-
-  // Share as image state
+  // Share state
   const shareImageRef = useRef<ShareableArticleImageRef>(null);
   const [shareArticle, setShareArticle] = useState<ShareableArticleData | null>(null);
   const [isSharing, setIsSharing] = useState(false);
 
-  // Get session reporter for fallback
-  const sessionReporter = session?.reporter;
-  const tenant = session?.tenant;
+  // Audio ref for first login
+  const audioRef = useRef<Audio.Sound | null>(null);
 
-  // KYC Status check - only show warning AFTER reporter data is loaded to prevent flicker
+  // Derived
+  const hasProfilePhoto = !!reporter?.profilePhotoUrl;
   const kycStatus = reporter?.kycStatus;
   const isKycApproved = kycStatus === 'APPROVED';
-  // Only show KYC banner if reporter is loaded AND KYC is not approved
-  const showKycBanner = reporter !== null && !isKycApproved;
-  const kycMeta = KYC_STATUS_META[kycStatus || 'PENDING'] || KYC_STATUS_META.PENDING;
 
-  // Get designation name
-  const designationName = reporter?.designation?.name || 
-    (typeof sessionReporter?.designation === 'string' 
-      ? sessionReporter.designation 
-      : sessionReporter?.designation?.name);
+  // Access control states
+  const accessStatus = reporter?.accessStatus?.status || 'ACTIVE';
+  const paymentRequired = accessStatus === 'PAYMENT_REQUIRED';
+  const accessExpired = accessStatus === 'ACCESS_EXPIRED' || reporter?.manualLoginStatus?.expired === true;
+  const publisherContact = reporter?.manualLoginStatus?.publisherContact;
+  const paymentInfo = reporter?.paymentStatus;
   
-  const reporterLevel = reporter?.level || sessionReporter?.level;
-
-  // Build work area string based on level
-  const workArea = useMemo(() => {
-    // Based on level, show appropriate location
-    const level = reporter?.level || sessionReporter?.level;
-    
-    if (level === 'STATE' && reporter?.state?.name) {
-      return reporter.state.name;
-    }
-    if (level === 'DISTRICT') {
-      const parts: string[] = [];
-      if (reporter?.district?.name) parts.push(reporter.district.name);
-      if (reporter?.state?.name) parts.push(reporter.state.name);
-      return parts.join(', ') || 'Not assigned';
-    }
-    if (level === 'MANDAL') {
-      const parts: string[] = [];
-      if (reporter?.mandal?.name) parts.push(reporter.mandal.name);
-      if (reporter?.district?.name) parts.push(reporter.district.name);
-      return parts.join(', ') || 'Not assigned';
-    }
-    if (level === 'ASSEMBLY') {
-      const parts: string[] = [];
-      if (reporter?.assemblyConstituency?.name) parts.push(reporter.assemblyConstituency.name);
-      if (reporter?.state?.name) parts.push(reporter.state.name);
-      return parts.join(', ') || 'Not assigned';
-    }
-    
-    // Fallback - show all available
-    const parts: string[] = [];
-    if (reporter?.mandal?.name) parts.push(reporter.mandal.name);
-    if (reporter?.district?.name) parts.push(reporter.district.name);
-    if (reporter?.state?.name) parts.push(reporter.state.name);
-    // Fallback to session data
-    if (parts.length === 0 && sessionReporter) {
-      if (sessionReporter.mandal?.name) parts.push(sessionReporter.mandal.name);
-      if (sessionReporter.district?.name) parts.push(sessionReporter.district.name);
-      if (sessionReporter.state?.name) parts.push(sessionReporter.state.name);
-    }
-    return parts.join(', ') || 'Not assigned';
-  }, [reporter, sessionReporter]);
-
-  // Load session from tokens
-  const loadSession = useCallback(async () => {
-    try {
-      const tokens = await loadTokens();
-      const sess = (tokens as any)?.session as SessionData | undefined;
-      if (sess) {
-        setSession(sess);
-      }
-    } catch (e) {
-      console.error('[Dashboard] Failed to load session:', e);
-    }
-  }, []);
-
-  // Load reporter profile from /reporters/me API
-  const loadReporter = useCallback(async () => {
-    try {
-      const data = await getReporterMe();
-      setReporter(data);
-      // Also update stats from reporter response if available
-      if (data.stats?.newspaperArticles) {
-        const total = data.stats.newspaperArticles.total;
-        setStats({
-          total: (total?.submitted || 0) + (total?.published || 0) + (total?.rejected || 0),
-          pending: total?.submitted || 0,
-          published: total?.published || 0,
-          rejected: total?.rejected || 0,
-        });
-      }
-    } catch (e) {
-      console.error('[Dashboard] Failed to load reporter:', e);
-    }
-  }, []);
-
-  // Load articles
-  const loadArticles = useCallback(
-    async (cursor?: string | null, refresh = false) => {
-      try {
-        if (refresh) {
-          setRefreshing(true);
-          setPage(1);
-          setNextCursor(null);
-        } else if (!cursor) {
-          setLoading(true);
-          setPage(1);
-          setNextCursor(null);
-        } else {
-          setLoadingMore(true);
-        }
-
-        const status: NewspaperArticleStatus | undefined =
-          activeTab === 'ALL' ? undefined : (activeTab as NewspaperArticleStatus);
-
-        const response = await getMyNewspaperArticles({
-          limit: 10,
-          cursor: cursor || undefined,
-          status,
-        });
-
-        if (response.data) {
-          if (!cursor || refresh) {
-            setArticles(response.data);
-          } else {
-            setArticles((prev) => [...prev, ...response.data]);
-          }
-
-          const nc = response.nextCursor ?? null;
-          setNextCursor(nc);
-          setHasMore(!!nc);
-          if (cursor && !refresh) setPage((p) => p + 1);
-        }
-      } catch (error) {
-        console.error('[Dashboard] Failed to load articles:', error);
-      } finally {
-        setLoading(false);
-        setRefreshing(false);
-        setLoadingMore(false);
-      }
-    },
-    [activeTab]
-  );
-
-  // Initial load and on tab change
+  // Play level-based audio for Telugu reporters (max 5 times total, once per day)
   useFocusEffect(
     useCallback(() => {
-      loadSession();
-      loadReporter();
-      loadArticles(null, true);
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [activeTab, loadArticles, loadReporter, loadSession])
+      let mounted = true;
+      const REPORTER_AUDIO_KEY = 'reporter_audio_plays';
+      const APP_SOUND_MUTED_KEY = 'app_sound_muted';
+      const MAX_TOTAL_PLAYS = 5;
+      
+      if (!reporter) return;
+      
+      (async () => {
+        try {
+          // Check global mute setting first
+          const isMuted = await AsyncStorage.getItem(APP_SOUND_MUTED_KEY);
+          if (isMuted === 'true') {
+            console.log('[ReporterDashboard] Sound is globally muted');
+            return;
+          }
+          
+          // Check play data (total count + last played date)
+          const stored = await AsyncStorage.getItem(REPORTER_AUDIO_KEY);
+          const today = new Date().toDateString();
+          let playData = { totalCount: 0, lastPlayedDate: '' };
+          
+          if (stored) {
+            try {
+              playData = JSON.parse(stored);
+            } catch {}
+          }
+          
+          // Check if already played today
+          if (playData.lastPlayedDate === today) {
+            console.log('[ReporterDashboard] Audio already played today');
+            return;
+          }
+          
+          // Check if max total reached
+          if (playData.totalCount >= MAX_TOTAL_PLAYS) {
+            console.log('[ReporterDashboard] Audio limit reached:', playData.totalCount, '/', MAX_TOTAL_PLAYS);
+            return;
+          }
+
+          // Check language
+          const langRaw = await AsyncStorage.getItem('selectedLanguage');
+          const parsed = langRaw ? JSON.parse(langRaw) : null;
+          const langCode = String(parsed?.code || parsed?.id || '').toLowerCase();
+          
+          console.log('[ReporterDashboard] Language check:', { langCode, totalPlays: playData.totalCount });
+          
+          if (!langCode.startsWith('te')) {
+            console.log('[ReporterDashboard] Not Telugu, skipping');
+            return;
+          }
+
+          // Get reporter level
+          const level = reporter.designation?.level?.toUpperCase();
+          console.log('[ReporterDashboard] Reporter level:', level);
+          let audioFile;
+          
+          switch (level) {
+            case 'STATE':
+              audioFile = require('../../assets/audio/state_te.mp3');
+              break;
+            case 'DISTRICT':
+              audioFile = require('../../assets/audio/Staff_Reporter_te.mp3');
+              break;
+            case 'ASSEMBLY':
+              audioFile = require('../../assets/audio/RC-Incharge_te.mp3');
+              break;
+            case 'MANDAL':
+              audioFile = require('../../assets/audio/Mandal_Reporter_te.mp3');
+              break;
+            default:
+              console.log('[ReporterDashboard] Unknown level, skipping');
+              return; // Unknown level, don't play
+          }
+
+          // Configure audio mode
+          await Audio.setAudioModeAsync({
+            playsInSilentModeIOS: true,
+            staysActiveInBackground: false,
+            shouldDuckAndroid: true,
+          });
+
+          // Play audio
+          console.log('[ReporterDashboard] Playing audio for level:', level, '(day', playData.totalCount + 1, 'of', MAX_TOTAL_PLAYS, ')');
+          const { sound } = await Audio.Sound.createAsync(audioFile, { shouldPlay: true });
+          if (mounted) {
+            audioRef.current = sound;
+            // Update play data
+            playData.totalCount += 1;
+            playData.lastPlayedDate = today;
+            await AsyncStorage.setItem(REPORTER_AUDIO_KEY, JSON.stringify(playData));
+            console.log('[ReporterDashboard] Audio started, total plays:', playData.totalCount);
+            // Auto unload when finished
+            sound.setOnPlaybackStatusUpdate((status) => {
+              if ('didJustFinish' in status && status.didJustFinish) {
+                console.log('[ReporterDashboard] Audio finished');
+                sound.unloadAsync().catch(() => {});
+                if (audioRef.current === sound) audioRef.current = null;
+              }
+            });
+          } else {
+            await sound.unloadAsync();
+          }
+        } catch (e) {
+          console.warn('[ReporterDashboard] Audio error:', e);
+        }
+      })();
+
+      return () => {
+        mounted = false;
+        if (audioRef.current) {
+          audioRef.current.stopAsync().then(() => audioRef.current?.unloadAsync()).catch(() => {});
+          audioRef.current = null;
+        }
+      };
+    }, [reporter])
   );
 
-  // Refresh handler
+  /* ─────────────────────  Data Loading  ───────────────────── */
+
+  const loadReporter = useCallback(async () => {
+    try {
+      const tokens = await loadTokens();
+      const session = (tokens as any)?.session;
+      setTenantName(session?.tenant?.name || '');
+      setTenantId(session?.reporter?.tenantId || session?.tenant?.id || '');
+
+      // Extract tenant primary color from domainSettings
+      const domainSettings = session?.domainSettings;
+      const colors = domainSettings?.data?.theme?.colors;
+      if (colors) {
+        const pColor = colors.primary || colors.accent;
+        if (isValidHexColor(pColor)) setPrimaryColor(pColor);
+      }
+
+      const data = await getReporterMe();
+      setReporter(data);
+
+      // If no profile photo, show modal
+      if (!data.profilePhotoUrl) {
+        setTimeout(() => setShowPhotoModal(true), 500);
+      }
+    } catch (e) {
+      console.error('[Dashboard] Load reporter failed:', e);
+    }
+  }, []);
+
+  const loadArticles = useCallback(async (cursor?: string | null, refresh = false) => {
+    try {
+      if (refresh) {
+        setRefreshing(true);
+        setNextCursor(null);
+      } else if (!cursor) {
+        setLoading(true);
+        setNextCursor(null);
+      } else {
+        setLoadingMore(true);
+      }
+
+      const status: NewspaperArticleStatus | undefined = activeTab === 'ALL' ? undefined : activeTab as NewspaperArticleStatus;
+      const res = await getMyNewspaperArticles({ limit: 15, cursor: cursor || undefined, status });
+
+      if (!cursor || refresh) {
+        setArticles(res.data || []);
+      } else {
+        setArticles(prev => [...prev, ...(res.data || [])]);
+      }
+
+      setNextCursor(res.nextCursor || null);
+      setHasMore(!!res.nextCursor);
+    } catch (e) {
+      console.error('[Dashboard] Load articles failed:', e);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+      setLoadingMore(false);
+    }
+  }, [activeTab]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadReporter();
+      loadArticles(null, true);
+    }, [loadReporter, loadArticles])
+  );
+
   const onRefresh = useCallback(() => {
-    setPage(1);
-    setNextCursor(null);
     loadReporter();
     loadArticles(null, true);
-  }, [loadArticles, loadReporter]);
+  }, [loadReporter, loadArticles]);
 
-  // Load more handler
   const onLoadMore = useCallback(() => {
     if (!loading && !refreshing && !loadingMore && hasMore && nextCursor) {
       loadArticles(nextCursor);
     }
   }, [loading, refreshing, loadingMore, hasMore, nextCursor, loadArticles]);
 
-  // Handle tab change
-  const handleTabChange = (tab: TabType) => {
+  const handleTabChange = useCallback((tab: TabType) => {
     setActiveTab(tab);
-    setPage(1);
     setArticles([]);
-    setNextCursor(null);
     setHasMore(true);
-  };
+    setNextCursor(null);
+  }, []);
 
-  // Navigation handlers
-  const goToPostArticle = useCallback(() => router.push('/post-news' as any), [router]);
-  const goToKyc = useCallback(() => router.push('/reporter/kyc'), [router]);
-  const goToIdCard = useCallback(() => router.push('/reporter/id-card' as any), [router]);
-  const goToProfile = useCallback(() => router.push('/reporter/profile'), [router]);
-  const goToArticleDetail = useCallback((id: string) => router.push(`/reporter/article/${id}` as any), [router]);
-  const goToSettings = useCallback(() => router.push('/settings' as any), [router]);
+  // Reload articles when tab changes
+  React.useEffect(() => {
+    loadArticles(null, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
-  // Handle share as image
+  /* ─────────────────────  Profile Photo Upload  ───────────────────── */
+
+  const pickAndUploadPhoto = useCallback(async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+
+      if (result.canceled || !result.assets?.[0]?.uri) return;
+
+      setUploadingPhoto(true);
+      setShowPhotoModal(false);
+
+      // Upload image
+      const uploadRes = await uploadMedia({
+        uri: result.assets[0].uri,
+        folder: 'profiles',
+        kind: 'image',
+      });
+
+      if (!uploadRes?.publicUrl) {
+        throw new Error('Upload failed');
+      }
+
+      // Update reporter profile photo
+      if (reporter?.id && tenantId) {
+        await updateReporterProfilePhoto(tenantId, reporter.id, uploadRes.publicUrl);
+      }
+
+      // Refresh reporter data
+      await loadReporter();
+      Alert.alert('విజయం', 'ప్రొఫైల్ ఫోటో అప్‌డేట్ అయింది!');
+    } catch (e: any) {
+      console.error('[Dashboard] Photo upload failed:', e);
+      Alert.alert('Error', e?.message || 'ఫోటో అప్‌లోడ్ విఫలమైంది');
+    } finally {
+      setUploadingPhoto(false);
+    }
+  }, [reporter?.id, tenantId, loadReporter]);
+
+  /* ─────────────────────  Share as Image  ───────────────────── */
+
   const handleShareAsImage = useCallback(async (article: MyNewspaperArticle) => {
-    // Convert to ShareableArticleData
     const shareData: ShareableArticleData = {
       id: article.id,
       title: article.title,
@@ -502,845 +456,718 @@ export default function ReporterDashboard() {
       webArticleUrl: article.sportLink || article.webArticle?.url || article.webArticleUrl,
       reporter: {
         id: reporter?.id,
-        fullName: reporter?.fullName || session?.user?.name,
+        fullName: reporter?.fullName || undefined,
         profilePhotoUrl: reporter?.profilePhotoUrl || undefined,
-        designation: reporter?.designation ? { name: reporter.designation.name } : undefined,
-        level: reporter?.level ? { name: reporter.level } : undefined,
-        district: reporter?.district ? { name: reporter.district.name } : undefined,
-        mandal: reporter?.mandal ? { name: reporter.mandal.name } : undefined,
       },
     };
     setShareArticle(shareData);
-    
-    // Wait for component to render and images to load, then capture
-    // The ShareableArticleImage component handles waiting for images internally
+
     setTimeout(async () => {
       if (shareImageRef.current) {
         setIsSharing(true);
         try {
-          console.log('[Dashboard] Starting image capture...');
           await shareImageRef.current.captureAndShare();
-          console.log('[Dashboard] Image capture completed');
-        } catch (e) {
-          console.error('[Dashboard] Share image failed:', e);
-          Alert.alert('Share Failed', 'Unable to generate share image');
+        } catch {
+          Alert.alert('Error', 'షేర్ విఫలమైంది');
         } finally {
           setIsSharing(false);
           setShareArticle(null);
         }
-      } else {
-        console.error('[Dashboard] shareImageRef is null');
-        setIsSharing(false);
-        setShareArticle(null);
       }
-    }, 800); // Increased timeout for component mount
-  }, [reporter, session]);
+    }, 800);
+  }, [reporter]);
 
-  // Render article item
-  const renderArticle = useCallback(
-    ({ item }: { item: MyNewspaperArticle }) => (
-      <ArticleCard 
-        article={item} 
-        onPress={() => goToArticleDetail(item.id)} 
-        onShareAsImage={item.status === 'PUBLISHED' ? handleShareAsImage : undefined}
-      />
-    ),
-    [goToArticleDetail, handleShareAsImage]
-  );
+  /* ─────────────────────  Navigation  ───────────────────── */
 
-  const keyExtractor = useCallback((item: MyNewspaperArticle) => item.id, []);
+  const goToPostNews = useCallback(() => router.push('/post-news' as any), [router]);
+  const goToIdCard = useCallback(() => router.push('/reporter/id-card' as any), [router]);
+  const goToKyc = useCallback(() => router.push('/reporter/kyc' as any), [router]);
+  const goToProfile = useCallback(() => router.push('/reporter/profile' as any), [router]);
+  const goToArticle = useCallback((id: string) => router.push(`/reporter/article/${id}` as any), [router]);
 
-  // Empty list component
-  const ListEmptyComponent = useMemo(
-    () => (
-      <View style={styles.emptyContainer}>
-        <Ionicons name="newspaper-outline" size={64} color="#9CA3AF" />
-        <Text style={styles.emptyTitle}>No articles found</Text>
-        <Text style={styles.emptySubtitle}>
-          {activeTab === 'ALL'
-            ? 'Start by posting your first article'
-            : `No ${activeTab.toLowerCase()} articles`}
-        </Text>
-        {activeTab === 'ALL' && (
-          <TouchableOpacity style={styles.emptyButton} onPress={goToPostArticle}>
-            <Text style={styles.emptyButtonText}>Post Article</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-    ),
-    [activeTab, goToPostArticle]
-  );
+  // Navigate to payment screen
+  const goToPayment = useCallback(() => {
+    if (!reporter || !paymentInfo) return;
+    const outstanding = paymentInfo.outstanding?.[0];
+    router.push({
+      pathname: '/auth/payment',
+      params: {
+        reporterId: reporter.id,
+        tenantId: reporter.tenantId,
+        mobile: reporter.mobileNumber || '',
+        razorpayData: paymentInfo.razorpay ? JSON.stringify(paymentInfo.razorpay) : '',
+        breakdownData: outstanding ? JSON.stringify({
+          total: { amount: outstanding.amount, displayAmount: `₹${outstanding.amount}` },
+          type: outstanding.type,
+        }) : '',
+      },
+    });
+  }, [reporter, paymentInfo, router]);
 
-  // Footer loader
-  const ListFooterComponent = useMemo(
-    () =>
-      loadingMore ? (
-        <View style={styles.footerLoader}>
-          <ActivityIndicator size="small" color={PRIMARY_COLOR} />
-        </View>
-      ) : null,
-    [loadingMore]
-  );
+  // Call publisher
+  const callPublisher = useCallback(() => {
+    const phone = publisherContact?.phone;
+    if (phone) {
+      Linking.openURL(`tel:${phone}`);
+    }
+  }, [publisherContact]);
+
+  // WhatsApp publisher
+  const whatsappPublisher = useCallback(() => {
+    const phone = publisherContact?.phone?.replace(/\D/g, '');
+    if (phone) {
+      const message = encodeURIComponent('నమస్కారం, నా లాగిన్ గడువు ముగిసింది. దయచేసి నా అకౌంట్ రెన్యూ చేయండి.');
+      Linking.openURL(`https://wa.me/${phone}?text=${message}`);
+    }
+  }, [publisherContact]);
+
+  /* ─────────────────────  Render  ───────────────────── */
+
+  const renderArticle = useCallback(({ item }: { item: MyNewspaperArticle }) => (
+    <ArticleCard
+      article={item}
+      onPress={() => goToArticle(item.id)}
+      onShare={item.status === 'PUBLISHED' ? () => handleShareAsImage(item) : undefined}
+    />
+  ), [goToArticle, handleShareAsImage]);
+
+  const ListEmptyComponent = useMemo(() => (
+    <View style={styles.emptyBox}>
+      <Ionicons name="newspaper-outline" size={64} color="#9CA3AF" />
+      <Text style={styles.emptyTitle}>ఆర్టికల్స్ లేవు</Text>
+      <Text style={styles.emptySubtitle}>
+        {activeTab === 'ALL' ? 'మీ మొదటి న్యూస్ పోస్ట్ చేయండి' : `${activeTab} ఆర్టికల్స్ లేవు`}
+      </Text>
+      {activeTab === 'ALL' && (
+        <Pressable style={styles.emptyBtn} onPress={goToPostNews}>
+          <Ionicons name="add" size={20} color="#FFF" />
+          <Text style={styles.emptyBtnText}>న్యూస్ పోస్ట్</Text>
+        </Pressable>
+      )}
+    </View>
+  ), [activeTab, goToPostNews]);
+
+  const ListFooter = useMemo(() => loadingMore ? (
+    <View style={styles.footerLoader}>
+      <ActivityIndicator size="small" color={primaryColor} />
+    </View>
+  ) : null, [loadingMore]);
 
   return (
-    <View style={[styles.container, { backgroundColor: isDark ? '#111' : '#F3F4F6' }]}>
-      <StatusBar barStyle="light-content" backgroundColor={PRIMARY_COLOR} translucent={false} />
-      
-      {/* Share Image Component (hidden, used for capture) */}
+    <View style={[styles.container, { backgroundColor: c.background }]}>
+      <StatusBar barStyle="light-content" backgroundColor={primaryColor} />
+
+      {/* Share Image Component (hidden) */}
       {shareArticle && (
-        <ShareableArticleImage
-          ref={shareImageRef}
-          article={shareArticle}
-          tenantName={tenant?.name}
-          visible={true}
-        />
+        <ShareableArticleImage ref={shareImageRef} article={shareArticle} tenantName={tenantName} visible />
       )}
 
-      {/* Sharing overlay */}
+      {/* Sharing Overlay */}
       {isSharing && (
         <View style={styles.sharingOverlay}>
           <View style={styles.sharingBox}>
-            <ActivityIndicator size="large" color={PRIMARY_COLOR} />
-            <Text style={styles.sharingText}>Generating image...</Text>
+            <ActivityIndicator size="large" color={primaryColor} />
+            <Text style={styles.sharingText}>ఇమేజ్ తయారవుతుంది...</Text>
           </View>
         </View>
       )}
-      
-      {/* KYC Warning Banner - only show AFTER reporter data is loaded and KYC is not approved */}
-      {showKycBanner && (
-        <TouchableOpacity 
-          style={[styles.kycBanner, { paddingTop: insets.top + 8 }]} 
-          onPress={goToKyc}
-          activeOpacity={0.8}
-        >
-          <View style={styles.kycBannerContent}>
-            <Ionicons name="warning" size={20} color="#DC2626" />
-            <View style={styles.kycBannerText}>
-              <Text style={styles.kycBannerTitle}>
-                {kycStatus === 'REJECTED' ? 'KYC Rejected' : 'KYC Verification Required'}
-              </Text>
-              <Text style={styles.kycBannerSubtitle}>
-                {kycStatus === 'REJECTED' 
-                  ? 'Your KYC was rejected. Please resubmit.'
-                  : 'Complete your KYC to access all features'}
-              </Text>
+
+      {/* Profile Photo Modal */}
+      <Modal visible={showPhotoModal} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCard, { backgroundColor: c.card }]}>
+            <View style={styles.modalIconBox}>
+              <Ionicons name="camera" size={48} color={primaryColor} />
             </View>
-            <Ionicons name="chevron-forward" size={20} color="#DC2626" />
+            <Text style={[styles.modalTitle, { color: c.text }]}>ప్రొఫైల్ ఫోటో అవసరం</Text>
+            <Text style={[styles.modalSubtitle, { color: c.muted }]}>
+              ID కార్డ్ మరియు న్యూస్ షేరింగ్ కోసం మీ ఫోటో అప్‌లోడ్ చేయండి
+            </Text>
+            <Pressable style={styles.modalBtn} onPress={pickAndUploadPhoto}>
+              {uploadingPhoto ? (
+                <ActivityIndicator color="#FFF" />
+              ) : (
+                <>
+                  <Ionicons name="cloud-upload" size={20} color="#FFF" />
+                  <Text style={styles.modalBtnText}>ఫోటో ఎంచుకోండి</Text>
+                </>
+              )}
+            </Pressable>
+            <Pressable style={styles.modalSkip} onPress={() => setShowPhotoModal(false)}>
+              <Text style={[styles.modalSkipText, { color: c.muted }]}>తర్వాత చేస్తాను</Text>
+            </Pressable>
           </View>
-        </TouchableOpacity>
+        </View>
+      </Modal>
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          ACCESS CONTROL OVERLAYS - Payment Required / Login Expired
+          ══════════════════════════════════════════════════════════════════════ */}
+      
+      {/* Payment Required Overlay */}
+      {paymentRequired && (
+        <Modal visible={true} transparent animationType="fade">
+          <View style={styles.accessOverlay}>
+            <LinearGradient
+              colors={['#0f172a', '#1e293b']}
+              style={styles.accessCard}
+            >
+              {/* Icon */}
+              <View style={styles.accessIconBox}>
+                <LinearGradient colors={['#f59e0b', '#d97706']} style={styles.accessIconGradient}>
+                  <MaterialCommunityIcons name="credit-card-clock" size={40} color="#FFF" />
+                </LinearGradient>
+              </View>
+
+              {/* Content */}
+              <Text style={styles.accessTitle}>💳 పేమెంట్ పెండింగ్</Text>
+              <Text style={styles.accessSubtitle}>
+                మీ అకౌంట్ యాక్టివేట్ చేయడానికి పేమెంట్ చేయాలి
+              </Text>
+
+              {/* Amount Box */}
+              {paymentInfo?.outstanding?.[0] && (
+                <View style={styles.amountBox}>
+                  <Text style={styles.amountLabel}>
+                    {paymentInfo.outstanding[0].type === 'ONBOARDING' ? 'ఆన్‌బోర్డింగ్ ఫీజు' : 'సబ్‌స్క్రిప్షన్'}
+                  </Text>
+                  <Text style={styles.amountValue}>₹{paymentInfo.outstanding[0].amount}</Text>
+                </View>
+              )}
+
+              {/* Pay Button */}
+              <TouchableOpacity style={styles.payBtn} onPress={goToPayment} activeOpacity={0.8}>
+                <LinearGradient
+                  colors={['#10b981', '#059669']}
+                  style={styles.payBtnGradient}
+                >
+                  <MaterialCommunityIcons name="credit-card-check" size={22} color="#FFF" />
+                  <Text style={styles.payBtnText}>పేమెంట్ చేయండి</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+
+              {/* Contact Publisher */}
+              <TouchableOpacity style={styles.contactLink} onPress={whatsappPublisher}>
+                <Ionicons name="logo-whatsapp" size={16} color="#25D366" />
+                <Text style={styles.contactLinkText}>పబ్లిషర్‌ని సంప్రదించండి</Text>
+              </TouchableOpacity>
+            </LinearGradient>
+          </View>
+        </Modal>
       )}
 
-      {/* Header with gradient */}
-      <LinearGradient
-        colors={[PRIMARY_COLOR, '#0891b2']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={[styles.header, { paddingTop: insets.top + 12 }]}
-      >
-        {/* Back button */}
-        <TouchableOpacity
-          onPress={() => router.back()}
-          style={styles.backBtn}
-        >
-          <Ionicons name="arrow-back" size={22} color="#FFF" />
-        </TouchableOpacity>
+      {/* Login Expired Overlay */}
+      {accessExpired && !paymentRequired && (
+        <Modal visible={true} transparent animationType="fade">
+          <View style={styles.accessOverlay}>
+            <LinearGradient
+              colors={['#1e293b', '#0f172a']}
+              style={styles.accessCard}
+            >
+              {/* Icon */}
+              <View style={styles.accessIconBox}>
+                <LinearGradient colors={['#dc2626', '#b91c1c']} style={styles.accessIconGradient}>
+                  <MaterialCommunityIcons name="clock-alert" size={40} color="#FFF" />
+                </LinearGradient>
+              </View>
+
+              {/* Content */}
+              <Text style={styles.accessTitle}>⏰ లాగిన్ గడువు ముగిసింది</Text>
+              <Text style={styles.accessSubtitle}>
+                {publisherContact?.message || 'మీ యాక్సెస్ గడువు ముగిసింది. దయచేసి పబ్లిషర్‌ని సంప్రదించండి.'}
+              </Text>
+
+              {/* Publisher Info */}
+              {publisherContact && (
+                <View style={styles.publisherBox}>
+                  <View style={styles.publisherAvatar}>
+                    <MaterialCommunityIcons name="domain" size={24} color={primaryColor} />
+                  </View>
+                  <View style={styles.publisherInfo}>
+                    <Text style={styles.publisherName}>{publisherContact.name || tenantName || 'Publisher'}</Text>
+                    <Text style={styles.publisherPhone}>{publisherContact.phone || ''}</Text>
+                  </View>
+                </View>
+              )}
+
+              {/* Action Buttons */}
+              <View style={styles.accessActions}>
+                {/* Call Button */}
+                <TouchableOpacity style={styles.callBtn} onPress={callPublisher} activeOpacity={0.8}>
+                  <Ionicons name="call" size={20} color="#FFF" />
+                  <Text style={styles.callBtnText}>కాల్ చేయండి</Text>
+                </TouchableOpacity>
+
+                {/* WhatsApp Button */}
+                <TouchableOpacity style={styles.whatsappBtn} onPress={whatsappPublisher} activeOpacity={0.8}>
+                  <Ionicons name="logo-whatsapp" size={20} color="#FFF" />
+                  <Text style={styles.whatsappBtnText}>WhatsApp</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Help Text */}
+              <Text style={styles.helpText}>
+                పబ్లిషర్ మీ అకౌంట్ రెన్యూ చేసిన తర్వాత యాప్ రీఫ్రెష్ చేయండి
+              </Text>
+
+              {/* Refresh Button */}
+              <TouchableOpacity style={styles.refreshBtn} onPress={onRefresh}>
+                <Ionicons name="refresh" size={18} color={primaryColor} />
+                <Text style={styles.refreshBtnText}>రీఫ్రెష్</Text>
+              </TouchableOpacity>
+            </LinearGradient>
+          </View>
+        </Modal>
+      )}
+
+      {/* Header */}
+      <LinearGradient colors={[primaryColor, '#0891b2']} style={[styles.header, { paddingTop: insets.top + 12 }]}>
+        {/* Top row - back only */}
+        <View style={styles.headerTopRow}>
+          <Pressable style={styles.headerIconBtn} onPress={() => router.back()}>
+            <Ionicons name="arrow-back" size={22} color="#FFF" />
+          </Pressable>
+          <Text style={styles.headerTitle}>రిపోర్టర్ డాష్‌బోర్డ్</Text>
+          <View style={{ width: 40 }} />
+        </View>
 
         {/* Profile row */}
-        <View style={styles.headerTop}>
-          {/* Profile photo */}
-          <TouchableOpacity onPress={goToProfile} style={styles.profileImageContainer}>
+        <View style={styles.profileRow}>
+          <Pressable style={styles.profilePhotoBox} onPress={hasProfilePhoto ? goToProfile : pickAndUploadPhoto}>
             {reporter?.profilePhotoUrl ? (
-              <Image
-                source={{ uri: reporter.profilePhotoUrl }}
-                style={styles.profileImage}
-                contentFit="cover"
-              />
+              <Image source={{ uri: reporter.profilePhotoUrl }} style={styles.profilePhoto} contentFit="cover" />
             ) : (
-              <View style={[styles.profileImage, styles.profilePlaceholder]}>
-                <Ionicons name="person" size={28} color="#FFF" />
+              <View style={[styles.profilePhoto, styles.profilePlaceholder]}>
+                <Ionicons name="camera" size={24} color="#FFF" />
               </View>
             )}
-          </TouchableOpacity>
-
-          {/* Name, mobile, role info */}
-          <View style={styles.headerInfo}>
-            <Text style={styles.reporterName} numberOfLines={1}>
-              {reporter?.fullName || session?.user?.name || 'Reporter'}
-            </Text>
-            {/* Mobile number */}
-            {(reporter?.mobileNumber || session?.user?.mobileNumber) && (
-              <View style={styles.mobileRow}>
-                <Ionicons name="call-outline" size={12} color="rgba(255,255,255,0.8)" />
-                <Text style={styles.mobileText}>
-                  {reporter?.mobileNumber || session?.user?.mobileNumber}
-                </Text>
+            {!hasProfilePhoto && (
+              <View style={styles.addPhotoIndicator}>
+                <Ionicons name="add" size={14} color="#FFF" />
               </View>
             )}
-            {/* Role badge */}
-            <View style={styles.roleBadge}>
-              <Text style={styles.roleText}>
-                {session?.user?.role || 'REPORTER'}
-              </Text>
-            </View>
-          </View>
+          </Pressable>
 
-          {/* Home and Settings buttons */}
-          <View style={styles.headerButtons}>
-            <TouchableOpacity style={styles.headerBtn} onPress={goToSettings}>
-              <Ionicons name="settings-outline" size={22} color="#FFF" />
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* Designation and Level row */}
-        <View style={styles.designationLevelRow}>
-          {designationName && (
-            <View style={styles.designationBadge}>
-              <Ionicons name="briefcase-outline" size={12} color="#FFF" />
-              <Text style={styles.designationText}>{designationName}</Text>
-            </View>
-          )}
-          {reporterLevel && (
-            <View style={styles.levelBadge}>
-              <Text style={styles.levelText}>{reporterLevel}</Text>
-            </View>
-          )}
-        </View>
-
-        {/* State/Location row */}
-        <View style={styles.workAreaRow}>
-          <Ionicons name="location-outline" size={16} color="rgba(255,255,255,0.9)" />
-          <Text style={styles.workAreaText}>{workArea}</Text>
-        </View>
-
-        {/* Auto Publish & KYC Status row */}
-        <View style={styles.statusInfoRow}>
-          {/* Auto Publish Status */}
-          <View style={styles.autoPublishBadge}>
-            <Ionicons 
-              name={reporter?.autoPublish ? 'flash' : 'flash-off'} 
-              size={12} 
-              color={reporter?.autoPublish ? '#10B981' : '#F59E0B'} 
-            />
-            <Text style={[
-              styles.autoPublishText,
-              { color: reporter?.autoPublish ? '#10B981' : '#F59E0B' }
-            ]}>
-              Auto Publish: {reporter?.autoPublish ? 'ON' : 'OFF'}
+          <View style={styles.profileInfo}>
+            <Text style={styles.profileName} numberOfLines={1}>
+              {reporter?.fullName || 'Reporter'}
             </Text>
+            {reporter?.mobileNumber && (
+              <Text style={styles.profileMobile}>{reporter.mobileNumber}</Text>
+            )}
+            {reporter?.designation?.name && (
+              <View style={styles.designationBadge}>
+                <Text style={styles.designationText}>{reporter.designation.name}</Text>
+              </View>
+            )}
           </View>
-          
+
           {/* KYC Status */}
-          <View style={[styles.kycStatusBadge, { backgroundColor: kycMeta.bg }]}>
-            <Ionicons 
-              name={kycMeta.icon as any} 
-              size={12} 
-              color={kycMeta.color} 
+          <Pressable
+            style={[
+              styles.kycBadge,
+              { backgroundColor: isKycApproved ? '#D1FAE5' : '#FEF3C7' },
+            ]}
+            onPress={goToKyc}
+          >
+            <Ionicons
+              name={isKycApproved ? 'shield-checkmark' : 'alert-circle'}
+              size={16}
+              color={isKycApproved ? '#059669' : '#D97706'}
             />
-            <Text style={[styles.kycStatusText, { color: kycMeta.color }]}>
-              KYC: {kycMeta.label}
+            <Text style={[styles.kycText, { color: isKycApproved ? '#059669' : '#D97706' }]}>
+              {isKycApproved ? 'Verified' : 'KYC'}
             </Text>
-          </View>
+          </Pressable>
         </View>
-
-        {/* Tenant name */}
-        {tenant?.name && (
-          <Text style={styles.tenantName}>{tenant.name}</Text>
-        )}
       </LinearGradient>
 
-      {/* Stats row */}
-      <View style={styles.statsRow}>
-        <View style={styles.statItem}>
-          <Text style={styles.statValue}>{stats.total}</Text>
-          <Text style={styles.statLabel}>Total</Text>
-        </View>
-        <View style={styles.statDivider} />
-        <View style={styles.statItem}>
-          <Text style={[styles.statValue, { color: '#D97706' }]}>{stats.pending}</Text>
-          <Text style={styles.statLabel}>Pending</Text>
-        </View>
-        <View style={styles.statDivider} />
-        <View style={styles.statItem}>
-          <Text style={[styles.statValue, { color: '#059669' }]}>{stats.published}</Text>
-          <Text style={styles.statLabel}>Published</Text>
-        </View>
-        <View style={styles.statDivider} />
-        <View style={styles.statItem}>
-          <Text style={[styles.statValue, { color: '#DC2626' }]}>{stats.rejected}</Text>
-          <Text style={styles.statLabel}>Rejected</Text>
-        </View>
+      {/* Quick Actions */}
+      <View style={[styles.quickActions, { backgroundColor: c.card }]}>
+        <Pressable style={styles.quickAction} onPress={goToPostNews}>
+          <View style={[styles.quickActionIcon, { backgroundColor: '#EEF2FF' }]}>
+            <MaterialCommunityIcons name="pencil-plus" size={24} color="#4F46E5" />
+          </View>
+          <Text style={[styles.quickActionLabel, { color: c.text }]}>న్యూస్ పోస్ట్</Text>
+        </Pressable>
+
+        <Pressable style={styles.quickAction} onPress={goToIdCard}>
+          <View style={[styles.quickActionIcon, { backgroundColor: '#F0FDF4' }]}>
+            <Ionicons name="card" size={24} color="#22C55E" />
+          </View>
+          <Text style={[styles.quickActionLabel, { color: c.text }]}>ID కార్డ్</Text>
+        </Pressable>
+
+        <Pressable style={styles.quickAction} onPress={goToKyc}>
+          <View style={[styles.quickActionIcon, { backgroundColor: isKycApproved ? '#D1FAE5' : '#FEF3C7' }]}>
+            <Ionicons name="shield-checkmark" size={24} color={isKycApproved ? '#059669' : '#D97706'} />
+          </View>
+          <Text style={[styles.quickActionLabel, { color: c.text }]}>KYC</Text>
+        </Pressable>
+
+        <Pressable style={styles.quickAction} onPress={goToProfile}>
+          <View style={[styles.quickActionIcon, { backgroundColor: '#FDF4FF' }]}>
+            <Ionicons name="person" size={24} color="#A855F7" />
+          </View>
+          <Text style={[styles.quickActionLabel, { color: c.text }]}>ప్రొఫైల్</Text>
+        </Pressable>
       </View>
 
-      {/* Quick actions */}
-      <View style={styles.quickActions}>
-        <TouchableOpacity style={styles.actionButton} onPress={goToPostArticle}>
-          <View style={[styles.actionIcon, { backgroundColor: PRIMARY_COLOR }]}>
-            <Ionicons name="add" size={24} color="#FFF" />
+      {/* KYC Warning Banner */}
+      {reporter && !isKycApproved && (
+        <Pressable style={styles.kycBanner} onPress={goToKyc}>
+          <Ionicons name="warning" size={20} color="#D97706" />
+          <View style={styles.kycBannerText}>
+            <Text style={styles.kycBannerTitle}>
+              {kycStatus === 'REJECTED' ? 'KYC రిజెక్ట్ అయింది' : 'KYC వెరిఫికేషన్ పెండింగ్'}
+            </Text>
+            <Text style={styles.kycBannerSubtitle}>
+              {kycStatus === 'REJECTED' ? 'దయచేసి మళ్ళీ సబ్మిట్ చేయండి' : 'ID కార్డ్ పొందడానికి KYC పూర్తి చేయండి'}
+            </Text>
           </View>
-          <Text style={styles.actionLabel}>Post News</Text>
-        </TouchableOpacity>
+          <Ionicons name="chevron-forward" size={20} color="#D97706" />
+        </Pressable>
+      )}
 
-        <TouchableOpacity style={styles.actionButton} onPress={goToKyc}>
-          <View style={[styles.actionIcon, { backgroundColor: '#8B5CF6' }]}>
-            <MaterialCommunityIcons name="file-document-outline" size={22} color="#FFF" />
-          </View>
-          <Text style={styles.actionLabel}>KYC</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.actionButton} onPress={goToIdCard}>
-          <View style={[styles.actionIcon, { backgroundColor: '#F59E0B' }]}>
-            <Ionicons name="card-outline" size={22} color="#FFF" />
-          </View>
-          <Text style={styles.actionLabel}>ID Card</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.actionButton} onPress={goToProfile}>
-          <View style={[styles.actionIcon, { backgroundColor: '#10B981' }]}>
-            <Feather name="user" size={22} color="#FFF" />
-          </View>
-          <Text style={styles.actionLabel}>Profile</Text>
-        </TouchableOpacity>
+      {/* Status Tabs */}
+      <View style={[styles.tabsContainer, { backgroundColor: c.card }]}>
+        {TABS.map(tab => (
+          <Pressable
+            key={tab.key}
+            style={[styles.tab, activeTab === tab.key && { borderBottomColor: primaryColor, borderBottomWidth: 2 }]}
+            onPress={() => handleTabChange(tab.key)}
+          >
+            <Ionicons
+              name={tab.icon}
+              size={18}
+              color={activeTab === tab.key ? primaryColor : c.muted}
+            />
+            <Text style={[styles.tabLabel, { color: activeTab === tab.key ? primaryColor : c.muted }]}>
+              {tab.label}
+            </Text>
+          </Pressable>
+        ))}
       </View>
 
-      {/* Tabs */}
-      <View style={styles.tabsContainer}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          {TABS.map((tab) => (
-            <TouchableOpacity
-              key={tab.key}
-              style={[styles.tab, activeTab === tab.key && styles.activeTab]}
-              onPress={() => handleTabChange(tab.key)}
-            >
-              <Text
-                style={[styles.tabText, activeTab === tab.key && styles.activeTabText]}
-              >
-                {tab.label}
-              </Text>
-              {activeTab === tab.key && <View style={styles.tabIndicator} />}
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      </View>
-
-      {/* Articles list */}
-      {loading && page === 1 ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={PRIMARY_COLOR} />
-          <Text style={styles.loadingText}>Loading articles...</Text>
+      {/* Articles List */}
+      {loading && !refreshing ? (
+        <View style={styles.loadingBox}>
+          <ActivityIndicator size="large" color={primaryColor} />
+          <Text style={[styles.loadingText, { color: c.muted }]}>లోడ్ అవుతుంది...</Text>
         </View>
       ) : (
         <FlatList
           data={articles}
           renderItem={renderArticle}
-          keyExtractor={keyExtractor}
+          keyExtractor={item => item.id}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
           refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              colors={[PRIMARY_COLOR]}
-              tintColor={PRIMARY_COLOR}
-            />
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[primaryColor]} tintColor={primaryColor} />
           }
           onEndReached={onLoadMore}
           onEndReachedThreshold={0.3}
           ListEmptyComponent={ListEmptyComponent}
-          ListFooterComponent={ListFooterComponent}
+          ListFooterComponent={ListFooter}
         />
       )}
+
+      {/* Floating Post Button */}
+      <Pressable style={styles.fab} onPress={goToPostNews}>
+        <Ionicons name="add" size={28} color="#FFF" />
+      </Pressable>
     </View>
   );
 }
 
+/* ─────────────────────────────  Styles  ───────────────────────────── */
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
+  container: { flex: 1 },
 
   // Header
-  header: {
-    paddingBottom: 16,
-    paddingHorizontal: 16,
-  },
-  backBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    alignSelf: 'flex-start',
-    marginBottom: 12,
-  },
-  headerTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  profileImageContainer: {
-    marginRight: 12,
-  },
-  profileImage: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.5)',
-  },
-  profilePlaceholder: {
-    backgroundColor: 'rgba(255,255,255,0.3)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  headerInfo: {
-    flex: 1,
-  },
-  reporterName: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#FFF',
-    marginBottom: 2,
-  },
-  mobileRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginBottom: 4,
-  },
-  mobileText: {
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.85)',
-  },
-  roleBadge: {
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 8,
-    alignSelf: 'flex-start',
-  },
-  roleText: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: '#FFF',
-  },
-  designationLevelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 12,
-    gap: 8,
-    flexWrap: 'wrap',
-  },
-  designationBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(255,255,255,0.25)',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  designationText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#FFF',
-  },
-  levelBadge: {
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 10,
-  },
-  levelText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: 'rgba(255,255,255,0.95)',
-  },
-  headerButtons: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  headerBtn: {
-    padding: 8,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-  },
-  settingsBtn: {
-    padding: 8,
-  },
-  workAreaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 10,
-    gap: 6,
-  },
-  workAreaText: {
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.9)',
-    flex: 1,
-  },
-  statusInfoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 10,
-    gap: 10,
-    flexWrap: 'wrap',
-  },
-  autoPublishBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(255,255,255,0.9)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  autoPublishText: {
-    fontSize: 10,
-    fontWeight: '600',
-  },
-  kycStatusBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  kycStatusText: {
-    fontSize: 10,
-    fontWeight: '600',
-  },
-  tenantName: {
-    fontSize: 11,
-    color: 'rgba(255,255,255,0.7)',
-    marginTop: 8,
-  },
+  header: { paddingHorizontal: 16, paddingBottom: 16 },
+  headerTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
+  headerIconBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { fontSize: 18, fontWeight: '700', color: '#FFF' },
+
+  // Profile
+  profileRow: { flexDirection: 'row', alignItems: 'center' },
+  profilePhotoBox: { position: 'relative' },
+  profilePhoto: { width: 64, height: 64, borderRadius: 32, borderWidth: 2, borderColor: '#FFF' },
+  profilePlaceholder: { backgroundColor: 'rgba(255,255,255,0.3)', alignItems: 'center', justifyContent: 'center' },
+  addPhotoIndicator: { position: 'absolute', bottom: 0, right: 0, width: 22, height: 22, borderRadius: 11, backgroundColor: '#F59E0B', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#FFF' },
+  profileInfo: { flex: 1, marginLeft: 12 },
+  profileName: { fontSize: 18, fontWeight: '700', color: '#FFF' },
+  profileMobile: { fontSize: 13, color: 'rgba(255,255,255,0.8)', marginTop: 2 },
+  designationBadge: { marginTop: 4, backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10, alignSelf: 'flex-start' },
+  designationText: { fontSize: 11, color: '#FFF', fontWeight: '600' },
+  kycBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16 },
+  kycText: { fontSize: 12, fontWeight: '600' },
+
+  // Quick Actions
+  quickActions: { flexDirection: 'row', paddingVertical: 16, paddingHorizontal: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E5E7EB' },
+  quickAction: { flex: 1, alignItems: 'center' },
+  quickActionIcon: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', marginBottom: 6 },
+  quickActionLabel: { fontSize: 12, fontWeight: '500', textAlign: 'center' },
 
   // KYC Banner
-  kycBanner: {
-    backgroundColor: '#FEE2E2',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  kycBannerContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  kycBannerText: {
-    flex: 1,
-  },
-  kycBannerTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#DC2626',
-  },
-  kycBannerSubtitle: {
-    fontSize: 11,
-    color: '#B91C1C',
-    marginTop: 1,
-  },
+  kycBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFBEB', paddingHorizontal: 16, paddingVertical: 12, gap: 12 },
+  kycBannerText: { flex: 1 },
+  kycBannerTitle: { fontSize: 14, fontWeight: '600', color: '#B45309' },
+  kycBannerSubtitle: { fontSize: 12, color: '#D97706', marginTop: 2 },
 
-  // Stats
-  statsRow: {
-    flexDirection: 'row',
-    backgroundColor: '#FFF',
-    marginHorizontal: 16,
-    marginTop: -12,
-    borderRadius: 12,
-    paddingVertical: 16,
-    paddingHorizontal: 8,
+  // Tabs
+  tabsContainer: { flexDirection: 'row', paddingHorizontal: 8 },
+  tab: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingVertical: 12 },
+  tabLabel: { fontSize: 12, fontWeight: '600' },
+
+  // List
+  listContent: { padding: 12, paddingBottom: 100 },
+  loadingBox: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  loadingText: { marginTop: 8, fontSize: 14 },
+  footerLoader: { paddingVertical: 16 },
+
+  // Article Card
+  articleCard: { flexDirection: 'row', backgroundColor: '#FFF', borderRadius: 12, marginBottom: 12, overflow: 'hidden', elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 4 },
+  articleImageBox: { width: 100, height: 100 },
+  articleImage: { width: '100%', height: '100%' },
+  noImage: { backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
+  articleContent: { flex: 1, padding: 10 },
+  articleTitle: { fontSize: 14, fontWeight: '600', color: '#1F2937', lineHeight: 20 },
+  articleMeta: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
+  statusBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 },
+  statusText: { fontSize: 10, fontWeight: '600' },
+  articleDate: { fontSize: 11, color: '#6B7280' },
+  viewsBox: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  viewsText: { fontSize: 11, color: '#6B7280' },
+  shareBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: DEFAULT_PRIMARY, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14, alignSelf: 'flex-start', marginTop: 8 },
+  shareBtnText: { fontSize: 12, color: '#FFF', fontWeight: '600' },
+
+  // Empty
+  emptyBox: { alignItems: 'center', paddingTop: 60 },
+  emptyTitle: { fontSize: 18, fontWeight: '700', color: '#374151', marginTop: 16 },
+  emptySubtitle: { fontSize: 14, color: '#6B7280', marginTop: 4 },
+  emptyBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: DEFAULT_PRIMARY, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 24, marginTop: 20 },
+  emptyBtnText: { fontSize: 14, fontWeight: '600', color: '#FFF' },
+
+  // FAB
+  fab: { position: 'absolute', bottom: 24, right: 24, width: 56, height: 56, borderRadius: 28, backgroundColor: DEFAULT_PRIMARY, alignItems: 'center', justifyContent: 'center', elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.2, shadowRadius: 6 },
+
+  // Modal
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center' },
+  modalCard: { width: '85%', borderRadius: 20, padding: 24, alignItems: 'center' },
+  modalIconBox: { width: 80, height: 80, borderRadius: 40, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
+  modalTitle: { fontSize: 20, fontWeight: '700', textAlign: 'center' },
+  modalSubtitle: { fontSize: 14, textAlign: 'center', marginTop: 8, lineHeight: 20 },
+  modalBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: DEFAULT_PRIMARY, paddingHorizontal: 24, paddingVertical: 14, borderRadius: 24, marginTop: 24 },
+  modalBtnText: { fontSize: 16, fontWeight: '600', color: '#FFF' },
+  modalSkip: { marginTop: 16 },
+  modalSkipText: { fontSize: 14 },
+
+  // Sharing Overlay
+  sharingOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center', zIndex: 100 },
+  sharingBox: { backgroundColor: '#FFF', borderRadius: 16, padding: 32, alignItems: 'center' },
+  sharingText: { marginTop: 12, fontSize: 14, color: '#374151' },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ACCESS CONTROL OVERLAY STYLES
+  // ═══════════════════════════════════════════════════════════════════════════
+  accessOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  accessCard: {
+    width: '100%',
+    maxWidth: 360,
+    borderRadius: 24,
+    padding: 28,
+    alignItems: 'center',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 15,
   },
-  statItem: {
-    flex: 1,
+  accessIconBox: {
+    marginBottom: 20,
+  },
+  accessIconGradient: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
     alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
   },
-  statValue: {
+  accessTitle: {
     fontSize: 22,
-    fontWeight: '700',
-    color: '#111',
+    fontWeight: '800',
+    color: '#FFF',
+    textAlign: 'center',
+    marginBottom: 8,
   },
-  statLabel: {
-    fontSize: 11,
-    color: '#6B7280',
-    marginTop: 2,
-  },
-  statDivider: {
-    width: 1,
-    backgroundColor: '#E5E7EB',
+  accessSubtitle: {
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.7)',
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: 24,
   },
 
-  // Quick actions
-  quickActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
+  // Payment Amount Box
+  amountBox: {
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 16,
+    paddingHorizontal: 24,
     paddingVertical: 16,
-    paddingHorizontal: 16,
-  },
-  actionButton: {
     alignItems: 'center',
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.15)',
   },
-  actionIcon: {
+  amountLabel: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.6)',
+    marginBottom: 4,
+  },
+  amountValue: {
+    fontSize: 32,
+    fontWeight: '800',
+    color: '#10b981',
+  },
+
+  // Pay Button
+  payBtn: {
+    width: '100%',
+    borderRadius: 16,
+    overflow: 'hidden',
+    marginBottom: 16,
+  },
+  payBtnGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 16,
+  },
+  payBtnText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#FFF',
+  },
+
+  // Contact Link
+  contactLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 8,
+  },
+  contactLinkText: {
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.7)',
+  },
+
+  // Publisher Box
+  publisherBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 14,
+    padding: 14,
+    width: '100%',
+    gap: 12,
+    marginBottom: 24,
+  },
+  publisherAvatar: {
     width: 48,
     height: 48,
     borderRadius: 24,
+    backgroundColor: 'rgba(255,255,255,0.15)',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 6,
   },
-  actionLabel: {
-    fontSize: 11,
-    color: '#374151',
-    fontWeight: '500',
-  },
-
-  // Tabs
-  tabsContainer: {
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-    backgroundColor: '#FFF',
-  },
-  tab: {
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    position: 'relative',
-  },
-  activeTab: {},
-  tabText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#6B7280',
-  },
-  activeTabText: {
-    color: PRIMARY_COLOR,
-    fontWeight: '600',
-  },
-  tabIndicator: {
-    position: 'absolute',
-    bottom: 0,
-    left: 20,
-    right: 20,
-    height: 3,
-    backgroundColor: PRIMARY_COLOR,
-    borderTopLeftRadius: 3,
-    borderTopRightRadius: 3,
-  },
-
-  // Loading
-  loadingContainer: {
+  publisherInfo: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 40,
   },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 14,
-    color: '#6B7280',
-  },
-
-  // List
-  listContent: {
-    padding: 16,
-    paddingBottom: 100,
-  },
-
-  // Article card
-  articleCard: {
-    flexDirection: 'row',
-    backgroundColor: '#FFF',
-    borderRadius: 12,
-    marginBottom: 12,
-    padding: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  articleImageContainer: {
-    marginRight: 12,
-  },
-  articleImage: {
-    width: 90,
-    height: 90,
-    borderRadius: 8,
-  },
-  noImage: {
-    backgroundColor: '#F3F4F6',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  articleContent: {
-    flex: 1,
-    justifyContent: 'center',
-  },
-  articleTitle: {
+  publisherName: {
     fontSize: 15,
-    fontWeight: '600',
-    color: '#111',
-    marginBottom: 4,
-    lineHeight: 20,
+    fontWeight: '700',
+    color: '#FFF',
   },
-  articleSubtitle: {
+  publisherPhone: {
     fontSize: 13,
-    color: '#6B7280',
-    lineHeight: 18,
-    marginBottom: 8,
+    color: 'rgba(255,255,255,0.6)',
+    marginTop: 2,
   },
-  articleMeta: {
+
+  // Access Action Buttons
+  accessActions: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 6,
+    gap: 12,
+    width: '100%',
+    marginBottom: 20,
   },
-  statusBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-  statusText: {
-    fontSize: 10,
-    fontWeight: '600',
-  },
-  articleDate: {
-    fontSize: 11,
-    color: '#9CA3AF',
-  },
-  viewsContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-  },
-  viewsText: {
-    fontSize: 11,
-    color: '#6B7280',
-  },
-  webUrlRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  webUrlText: {
+  callBtn: {
     flex: 1,
-    fontSize: 11,
-    color: PRIMARY_COLOR,
-  },
-  webViewCount: {
-    fontSize: 10,
-    color: '#9CA3AF',
-  },
-  shareOverlay: {
-    position: 'absolute',
-    bottom: 6,
-    right: 6,
-    width: 28,
-    height: 28,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: DEFAULT_PRIMARY,
+    paddingVertical: 14,
     borderRadius: 14,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
-  sportLinkRow: {
+  callBtnText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFF',
+  },
+  whatsappBtn: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 8,
-    marginTop: 4,
+    backgroundColor: '#25D366',
+    paddingVertical: 14,
+    borderRadius: 14,
   },
-  sportLinkBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#E0F2FE',
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderRadius: 6,
-  },
-  sportLinkText: {
-    flex: 1,
-    fontSize: 11,
-    color: PRIMARY_COLOR,
-    fontWeight: '500',
-  },
-  shareBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#10B981',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 6,
-  },
-  shareBtnText: {
-    fontSize: 11,
-    color: '#FFF',
+  whatsappBtnText: {
+    fontSize: 14,
     fontWeight: '600',
+    color: '#FFF',
   },
 
-  // Empty
-  emptyContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 60,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#374151',
-    marginTop: 16,
-  },
-  emptySubtitle: {
-    fontSize: 14,
-    color: '#6B7280',
-    marginTop: 8,
+  // Help Text
+  helpText: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.5)',
     textAlign: 'center',
-  },
-  emptyButton: {
-    marginTop: 24,
-    backgroundColor: PRIMARY_COLOR,
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 8,
-  },
-  emptyButtonText: {
-    color: '#FFF',
-    fontSize: 14,
-    fontWeight: '600',
+    marginBottom: 16,
   },
 
-  // Footer
-  footerLoader: {
-    paddingVertical: 20,
+  // Refresh Button
+  refreshBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
   },
-
-  // Sharing overlay
-  sharingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 1000,
-  },
-  sharingBox: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 32,
-    alignItems: 'center',
-    gap: 16,
-  },
-  sharingText: {
+  refreshBtnText: {
     fontSize: 14,
-    color: '#374151',
     fontWeight: '500',
+    color: DEFAULT_PRIMARY,
   },
 });
-

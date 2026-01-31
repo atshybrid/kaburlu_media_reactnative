@@ -9,7 +9,7 @@ import { usePostNewsDraftStore } from '@/state/postNewsDraftStore';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Audio } from 'expo-av';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import LottieView from 'lottie-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -348,7 +348,137 @@ export default function PostNewsScreen() {
   const [rawText, setRawText] = useState<string>(() => String(draft.body || ''));
   const [aiBusy, setAiBusy] = useState(false);
   const [aiAudioMuted, setAiAudioMuted] = useState(false);
+  const [introAudioMuted, setIntroAudioMuted] = useState(false);
+  const [introAudioPlaying, setIntroAudioPlaying] = useState(false);
   const aiSoundRef = useRef<Audio.Sound | null>(null);
+  const introSoundRef = useRef<Audio.Sound | null>(null);
+
+  // Load intro mute preference from AsyncStorage
+  useEffect(() => {
+    const INTRO_MUTE_KEY = 'post_news_intro_muted';
+    AsyncStorage.getItem(INTRO_MUTE_KEY).then((val) => {
+      if (val === 'true') setIntroAudioMuted(true);
+    }).catch(() => {});
+  }, []);
+
+  // Toggle intro mute and persist
+  const toggleIntroMute = useCallback(async () => {
+    const INTRO_MUTE_KEY = 'post_news_intro_muted';
+    const newVal = !introAudioMuted;
+    setIntroAudioMuted(newVal);
+    try {
+      await AsyncStorage.setItem(INTRO_MUTE_KEY, newVal ? 'true' : 'false');
+      // If muting and audio is playing, stop it
+      if (newVal && introSoundRef.current) {
+        await introSoundRef.current.stopAsync();
+        await introSoundRef.current.unloadAsync();
+        introSoundRef.current = null;
+        setIntroAudioPlaying(false);
+      }
+    } catch {}
+  }, [introAudioMuted]);
+
+  // Play intro audio on each page visit (max 3 times per day)
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true;
+      const INTRO_AUDIO_KEY = 'post_news_intro_audio_plays';
+      const MAX_PLAYS_PER_DAY = 3;
+
+      const playIntroAudio = async () => {
+        try {
+          // Check if muted
+          const INTRO_MUTE_KEY = 'post_news_intro_muted';
+          const mutedVal = await AsyncStorage.getItem(INTRO_MUTE_KEY);
+          if (mutedVal === 'true') {
+            console.log('[PostNews] Intro audio muted by user');
+            return;
+          }
+
+          // Check if AI audio is already playing - don't interrupt
+          if (aiSoundRef.current) {
+            try {
+              const status = await aiSoundRef.current.getStatusAsync();
+              if (status.isLoaded && status.isPlaying) {
+                console.log('[PostNews] AI audio is playing, skipping intro');
+                return;
+              }
+            } catch {}
+          }
+
+          // Check how many times played today
+          const stored = await AsyncStorage.getItem(INTRO_AUDIO_KEY);
+          const today = new Date().toDateString();
+          let playData = { date: today, count: 0 };
+          
+          if (stored) {
+            try {
+              const parsed = JSON.parse(stored);
+              if (parsed.date === today) {
+                playData = parsed;
+              }
+              // Different day - reset count
+            } catch {}
+          }
+
+          // Check if limit reached
+          if (playData.count >= MAX_PLAYS_PER_DAY) {
+            console.log('[PostNews] Intro audio limit reached for today:', playData.count);
+            return;
+          }
+
+          // Set up audio mode
+          await Audio.setAudioModeAsync({
+            playsInSilentModeIOS: true,
+            staysActiveInBackground: false,
+            shouldDuckAndroid: true,
+          });
+
+          // Play intro audio
+          const { sound } = await Audio.Sound.createAsync(
+            require('../assets/audio/postnews_intro_te.mp3'),
+            { shouldPlay: true, volume: 0.8 }
+          );
+          
+          if (!alive) {
+            await sound.unloadAsync();
+            return;
+          }
+
+          introSoundRef.current = sound;
+          setIntroAudioPlaying(true);
+
+          // Update play count
+          playData.count += 1;
+          await AsyncStorage.setItem(INTRO_AUDIO_KEY, JSON.stringify(playData));
+          console.log('[PostNews] Intro audio played, count today:', playData.count);
+
+          // Auto-cleanup when done
+          sound.setOnPlaybackStatusUpdate((status) => {
+            if (status.isLoaded && status.didJustFinish) {
+              sound.unloadAsync().catch(() => {});
+              if (introSoundRef.current === sound) {
+                introSoundRef.current = null;
+              }
+              setIntroAudioPlaying(false);
+            }
+          });
+        } catch (err) {
+          console.log('[PostNews] Intro audio error:', err);
+        }
+      };
+
+      playIntroAudio();
+
+      return () => {
+        alive = false;
+        if (introSoundRef.current) {
+          introSoundRef.current.unloadAsync().catch(() => {});
+          introSoundRef.current = null;
+        }
+      };
+    }, [])
+  );
 
   // Clear justPosted flag after a longer delay to allow category modal skip logic in details.tsx to run first.
   // The delay must exceed category API load time (~1-2s) to prevent category modal from auto-opening.
@@ -380,7 +510,7 @@ export default function PostNewsScreen() {
 
   const aiAnim = useMemo(() => require('../assets/lotti/Artificial Intelligence.json'), []);
 
-  const MAX_AI_REWRITE_WORDS = 300;
+  const MAX_AI_REWRITE_WORDS = 1500;
   const rawWordCount = useMemo(() => {
     const t = String(rawText || '').trim();
     if (!t) return 0;
@@ -392,7 +522,7 @@ export default function PostNewsScreen() {
   useEffect(() => {
     // Show toast when user crosses the limit (typed or pasted).
     if (aiTooLong && !wasTooLongRef.current) {
-      showToast('AI not allowed long article to rewrite');
+      showToast('1500 words కంటే ఎక్కువ AI rewrite చేయదు');
     }
     wasTooLongRef.current = aiTooLong;
   }, [aiTooLong]);
@@ -476,7 +606,7 @@ export default function PostNewsScreen() {
 
     const wc = text.split(/\s+/g).map((x) => x.trim()).filter(Boolean).length;
     if (wc > MAX_AI_REWRITE_WORDS) {
-      showToast('AI not allowed long article to rewrite');
+      showToast('1500 words కంటే ఎక్కువ AI rewrite చేయదు');
       return;
     }
 
@@ -484,13 +614,39 @@ export default function PostNewsScreen() {
 
     setAiBusy(true);
     
-    // Start playing AI rewrite audio (looping) - respect mute preference
+    // Stop intro audio if playing before starting AI audio
+    if (introSoundRef.current) {
+      try {
+        await introSoundRef.current.stopAsync();
+        await introSoundRef.current.unloadAsync();
+        introSoundRef.current = null;
+        setIntroAudioPlaying(false);
+      } catch {}
+    }
+    
+    // Start playing AI rewrite audio (looping) - respect global and local mute preference
     try {
-      const { sound: audioSound } = await Audio.Sound.createAsync(
-        require('../assets/audio/newsai.mp3'),
-        { isLooping: true, shouldPlay: !aiAudioMuted, volume: 0.7 }
-      );
-      aiSoundRef.current = audioSound;
+      // Check global mute setting
+      const globalMuted = await AsyncStorage.getItem('app_sound_muted');
+      const shouldMute = globalMuted === 'true' || aiAudioMuted;
+      
+      if (!shouldMute) {
+        // Configure audio mode for playback
+        await Audio.setAudioModeAsync({
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: false,
+          shouldDuckAndroid: true,
+        });
+        
+        const { sound: audioSound } = await Audio.Sound.createAsync(
+          require('../assets/audio/newsai_te.mp3'),
+          { isLooping: true, shouldPlay: true, volume: 0.7 }
+        );
+        aiSoundRef.current = audioSound;
+        
+        // Ensure audio starts playing
+        await audioSound.playAsync();
+      }
     } catch (audioErr) {
       console.log('Audio playback failed:', audioErr);
     }
@@ -606,6 +762,27 @@ export default function PostNewsScreen() {
         <View style={styles.appBarCenter} pointerEvents="none">
           <ThemedText type="defaultSemiBold" style={[styles.title, { color: c.text }]}>Post News</ThemedText>
         </View>
+
+        {/* Spacer to push mute button to right */}
+        <View style={{ flex: 1 }} />
+
+        {/* Intro Audio Mute Control - Right Corner */}
+        <Pressable
+          onPress={toggleIntroMute}
+          style={({ pressed }) => [
+            styles.iconBtn,
+            { borderColor: c.border, backgroundColor: introAudioMuted ? '#FEE2E2' : (introAudioPlaying ? '#D1FAE5' : c.card) },
+            pressed && styles.pressed,
+          ]}
+          hitSlop={10}
+          accessibilityLabel={introAudioMuted ? 'Unmute intro audio' : 'Mute intro audio'}
+        >
+          <MaterialIcons 
+            name={introAudioMuted ? 'volume-off' : (introAudioPlaying ? 'volume-up' : 'volume-down')} 
+            size={20} 
+            color={introAudioMuted ? '#DC2626' : (introAudioPlaying ? '#059669' : c.text)} 
+          />
+        </Pressable>
       </View>
 
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.select({ ios: 'padding', android: undefined })}>
@@ -684,34 +861,28 @@ export default function PostNewsScreen() {
 
       <Modal visible={aiBusy} transparent animationType="fade">
         <View style={styles.aiModalOverlay}>
-          <View style={[styles.aiModalContent, { backgroundColor: c.background }]}>
-            <LottieView source={aiAnim} autoPlay loop style={{ width: 220, height: 220 }} />
-            <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 20, marginTop: 16, textAlign: 'center' }}>
-              AI is writing your article...
+          {/* Mute/Unmute button - Top Right */}
+          <Pressable
+            onPress={toggleAiAudioMute}
+            style={({ pressed }) => [
+              styles.muteButtonTopRight,
+              { backgroundColor: aiAudioMuted ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.25)' },
+              pressed && { opacity: 0.7 },
+            ]}
+          >
+            <MaterialIcons 
+              name={aiAudioMuted ? 'volume-off' : 'volume-up'} 
+              size={26} 
+              color="#fff" 
+            />
+          </Pressable>
+          
+          <View style={[styles.aiModalContent, { backgroundColor: 'transparent' }]}>
+            <LottieView source={aiAnim} autoPlay loop style={{ width: 280, height: 280 }} />
+            <ThemedText type="defaultSemiBold" style={{ color: '#fff', fontSize: 18, marginTop: 20, textAlign: 'center' }}>
+              AI మీ వార్త రాస్తోంది...
             </ThemedText>
-            <ThemedText style={{ color: c.muted, fontSize: 14, marginTop: 8, textAlign: 'center', paddingHorizontal: 20 }}>
-              Please wait while AI rewrites your news in professional format. This may take 10-20 seconds.
-            </ThemedText>
-            <ActivityIndicator style={{ marginTop: 20 }} size="large" color={c.tint} />
-            
-            {/* Mute/Unmute button */}
-            <Pressable
-              onPress={toggleAiAudioMute}
-              style={({ pressed }) => [
-                styles.muteButton,
-                { backgroundColor: aiAudioMuted ? c.muted + '30' : c.tint + '20' },
-                pressed && { opacity: 0.7 },
-              ]}
-            >
-              <MaterialIcons 
-                name={aiAudioMuted ? 'volume-off' : 'volume-up'} 
-                size={22} 
-                color={aiAudioMuted ? c.muted : c.tint} 
-              />
-              <ThemedText style={{ color: aiAudioMuted ? c.muted : c.tint, marginLeft: 8, fontWeight: '600' }}>
-                {aiAudioMuted ? 'Sound Off' : 'Sound On'}
-              </ThemedText>
-            </Pressable>
+            <ActivityIndicator style={{ marginTop: 24 }} size="large" color="#fff" />
           </View>
         </View>
       </Modal>
@@ -743,6 +914,17 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 24,
     marginTop: 24,
+  },
+  muteButtonTopRight: {
+    position: 'absolute',
+    top: 60,
+    right: 20,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
   },
   appBar: {
     flexDirection: 'row',

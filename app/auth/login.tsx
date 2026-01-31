@@ -107,9 +107,9 @@ const StepProgress: React.FC<{ step: number; total: number }> = ({ step, total }
 );
 
 // ============================================================================
-// MPIN INPUT
+// MPIN INPUT - Single hidden input for fast typing
 // ============================================================================
-const MpinInput: React.FC<{
+type MpinInputProps = {
   digits: string[];
   onChange: (idx: number, val: string) => void;
   onKeyPress: (idx: number, key: string) => void;
@@ -117,36 +117,85 @@ const MpinInput: React.FC<{
   shake?: Animated.Value;
   error?: boolean;
   isDark: boolean;
-}> = ({ digits, onChange, onKeyPress, refs, shake, error, isDark }) => {
-  const shakeStyle = shake ? {
-    transform: [{ translateX: shake.interpolate({ inputRange: [-1, 1], outputRange: [-12, 12] }) }],
-  } : {};
-  
-  return (
-    <Animated.View style={[styles.mpinRow, shakeStyle]}>
-      {refs.map((ref, i) => (
-        <View key={i} style={[styles.mpinContainer, error && styles.mpinError]}>
-          <TextInput
-            ref={ref}
-            value={digits[i]}
-            onChangeText={(v) => onChange(i, v)}
-            onKeyPress={({ nativeEvent }) => onKeyPress(i, nativeEvent.key)}
-            keyboardType="number-pad"
-            maxLength={1}
-            secureTextEntry
-            style={[
-              styles.mpinInput,
-              { color: isDark ? '#fff' : PRIMARY },
-              digits[i] && styles.mpinInputFilled,
-            ]}
-            placeholderTextColor={isDark ? '#4a5568' : '#cbd5e0'}
-          />
-          <View style={[styles.mpinUnderline, digits[i] && styles.mpinUnderlineActive]} />
-        </View>
-      ))}
-    </Animated.View>
-  );
+  onComplete?: (code: string) => void;
+  value: string;
+  onValueChange: (val: string) => void;
 };
+
+type MpinInputHandle = {
+  focus: () => void;
+  blur: () => void;
+};
+
+const MpinInput = React.forwardRef<MpinInputHandle, MpinInputProps>(
+  ({ digits, shake, error, isDark, value, onValueChange }, ref) => {
+    const hiddenInputRef = React.useRef<TextInput>(null);
+    const shakeStyle = shake ? {
+      transform: [{ translateX: shake.interpolate({ inputRange: [-1, 1], outputRange: [-12, 12] }) }],
+    } : {};
+    
+    // Expose focus/blur to parent
+    React.useImperativeHandle(ref, () => ({
+      focus: () => hiddenInputRef.current?.focus(),
+      blur: () => hiddenInputRef.current?.blur(),
+    }));
+    
+    const handlePress = () => {
+      hiddenInputRef.current?.focus();
+    };
+
+    const handleChange = (text: string) => {
+      // Only allow digits, max 4
+      const cleaned = text.replace(/\D/g, '').slice(0, 4);
+      onValueChange(cleaned);
+      
+      // Auto-dismiss keyboard after 4 digits
+      if (cleaned.length === 4) {
+        setTimeout(() => {
+          Keyboard.dismiss();
+        }, 100);
+      }
+    };
+    
+    return (
+      <Pressable onPress={handlePress}>
+        <Animated.View style={[styles.mpinRow, shakeStyle]}>
+          {/* Hidden input that handles all typing */}
+          <TextInput
+            ref={hiddenInputRef}
+            value={value}
+            onChangeText={handleChange}
+            keyboardType="number-pad"
+            maxLength={4}
+            autoFocus={false}
+            style={styles.hiddenInput}
+            caretHidden
+          />
+          
+          {/* Visual boxes */}
+          {[0, 1, 2, 3].map((i) => (
+            <View key={i} style={[styles.mpinContainer, error && styles.mpinError]}>
+              <View style={[
+                styles.mpinInput,
+                { justifyContent: 'center', alignItems: 'center' },
+                value[i] && styles.mpinInputFilled,
+              ]}>
+                <Text style={{ 
+                  color: isDark ? '#fff' : PRIMARY, 
+                  fontSize: 24, 
+                  fontWeight: '700',
+                }}>
+                  {value[i] ? '•' : ''}
+                </Text>
+              </View>
+              <View style={[styles.mpinUnderline, value[i] && styles.mpinUnderlineActive]} />
+            </View>
+          ))}
+        </Animated.View>
+      </Pressable>
+    );
+  }
+);
 
 // ============================================================================
 // MAIN LOGIN SCREEN
@@ -163,6 +212,7 @@ export default function LoginScreen() {
   const [status, setStatus] = useState<{ mpinStatus: boolean; isRegistered: boolean; roleName: string | null } | null>(null);
   const [checking, setChecking] = useState(false);
   const [mpinDigits, setMpinDigits] = useState(['', '', '', '']);
+  const [mpinValue, setMpinValue] = useState(''); // Single string for fast MPIN input
   const [fullName, setFullName] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [loadingContext, setLoadingContext] = useState(false);
@@ -185,6 +235,7 @@ export default function LoginScreen() {
   
   // Refs
   const mobileRef = useRef<TextInput>(null);
+  const mpinInputRef = useRef<MpinInputHandle>(null);
   const mpinRefs = [useRef<TextInput>(null), useRef<TextInput>(null), useRef<TextInput>(null), useRef<TextInput>(null)];
   const fullNameRef = useRef<TextInput>(null);
   const otpRefs = [useRef<TextInput>(null), useRef<TextInput>(null), useRef<TextInput>(null), useRef<TextInput>(null)];
@@ -200,7 +251,7 @@ export default function LoginScreen() {
   const glowAnim = useRef(new Animated.Value(0)).current;
   
   // Derived
-  const mpin = mpinDigits.join('');
+  const mpin = mpinValue; // Direct string instead of joining array
   const isExisting = status?.isRegistered === true;
   const isNew = status?.isRegistered === false;
   
@@ -269,13 +320,40 @@ export default function LoginScreen() {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         }
       } catch (e: any) {
+        // Handle 402 Payment Required - navigate to payment screen directly
+        if (e instanceof PaymentRequiredError) {
+          if (!cancelled) {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+            
+            // Extract tenant data for branding
+            const tenantData = (e.data as any)?.tenant;
+            
+            router.push({
+              pathname: '/auth/payment',
+              params: {
+                reporterId: e.data?.reporter?.id || '',
+                tenantId: e.data?.reporter?.tenantId || '',
+                mobile: mobile,
+                mpin: '', // No MPIN yet - user will set after payment
+                razorpayData: e.data?.razorpay ? JSON.stringify(e.data.razorpay) : '',
+                breakdownData: e.data?.breakdown ? JSON.stringify(e.data.breakdown) : '',
+                tenantName: tenantData?.name || '',
+                tenantNativeName: tenantData?.nativeName || '',
+                tenantLogo: tenantData?.logoUrl || '',
+                tenantPrimaryColor: tenantData?.primaryColor || '',
+                isNewReporter: 'true', // Flag to indicate MPIN change needed after payment
+              },
+            });
+          }
+          return;
+        }
         if (!cancelled) setError(e?.message || 'Failed to verify number');
       } finally {
         if (!cancelled) setChecking(false);
       }
     })();
     return () => { cancelled = true; };
-  }, [mobile]);
+  }, [mobile, router]);
   
   // Auto-focus logic
   useEffect(() => {
@@ -372,6 +450,28 @@ export default function LoginScreen() {
       const res = await loginWithMpin({ mobileNumber: mobile, mpin: effectiveMpin });
       await persistAuth(res);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      
+      // Check if MPIN is insecure (matches last 4 digits of phone)
+      const last4 = mobile.slice(-4);
+      if (effectiveMpin === last4) {
+        // MPIN is insecure - redirect to change MPIN screen
+        setSuccess('Login successful! Please change your MPIN for security.');
+        setShowCongrats(true);
+        setTimeout(() => {
+          setShowCongrats(false);
+          router.push({
+            pathname: '/auth/change-mpin',
+            params: {
+              mobile: mobile,
+              oldMpin: effectiveMpin,
+              forceChange: 'true',
+              from: params.from || '',
+            },
+          });
+        }, 1500);
+        return;
+      }
+      
       setSuccess('Welcome back!');
       setShowCongrats(true);
       setTimeout(() => {
@@ -409,11 +509,17 @@ export default function LoginScreen() {
         const remaining = attemptsLeft - 1;
         setAttemptsLeft(remaining);
         setMpinDigits(['', '', '', '']);
-        setError(remaining > 0 ? `Incorrect MPIN. ${remaining} attempt${remaining === 1 ? '' : 's'} left.` : 'Too many attempts. Try again later.');
+        setMpinValue('');
+        if (remaining > 0) {
+          setError(`తప్పు MPIN. ${remaining} ప్రయత్నాలు మిగిలి ఉన్నాయి.`);
+        } else {
+          // 5 attempts failed - show reset option, don't navigate away
+          setError('5 సార్లు తప్పు. దయచేసి MPIN రీసెట్ చేయండి.');
+          setShowReset(true);
+          setResetStage('request');
+        }
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         shakeError();
-        if (remaining > 0) setTimeout(() => mpinRefs[0].current?.focus(), 100);
-        if (remaining <= 0) setTimeout(() => router.replace('/news'), 1500);
       } else {
         setError(e?.message || 'Login failed. Please try again.');
       }
@@ -491,39 +597,41 @@ export default function LoginScreen() {
      
   }, [mobile, fullName, mpin, persistAuth, navigateAfterAuth]);
   
-  // MPIN handlers
+  // MPIN value change handler - single string approach for fast input
+  const handleMpinValueChange = useCallback((val: string) => {
+    setMpinValue(val);
+    setMpinDigits(val.padEnd(4, '').split('').slice(0, 4)); // Keep sync for compatibility
+    setError(null);
+    
+    // Auto submit when 4 digits entered
+    if (val.length === 4 && /^\d{4}$/.test(val)) {
+      setSubmitting(true);
+      Keyboard.dismiss();
+      setTimeout(() => {
+        if (isExisting) {
+          handleLogin(val);
+        } else if (isNew && fullName.trim()) {
+          handleRegister();
+        } else {
+          setSubmitting(false);
+        }
+      }, 50);
+    }
+  }, [isExisting, isNew, fullName, handleLogin, handleRegister]);
+
+  // Legacy handlers for compatibility - not used in new approach
   const handleMpinChange = useCallback((idx: number, val: string) => {
     const c = val.replace(/\D/g, '').slice(-1);
     const next = [...mpinDigits];
     next[idx] = c;
     setMpinDigits(next);
+    setMpinValue(next.join(''));
     setError(null);
-    
-    if (c && idx < 3) {
-      setTimeout(() => mpinRefs[idx + 1].current?.focus(), 30);
-    }
-    if (idx === 3 && c) {
-      const code = next.join('');
-      if (/^\d{4}$/.test(code)) {
-        setTimeout(() => {
-          Keyboard.dismiss();
-          if (isExisting) {
-            handleLogin(code);
-          } else if (isNew && fullName.trim()) {
-            handleRegister();
-          }
-        }, 80);
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mpinDigits, isExisting, isNew, fullName, handleLogin, handleRegister]);
+  }, [mpinDigits]);
   
   const handleMpinKeyPress = useCallback((idx: number, key: string) => {
-    if (key === 'Backspace' && !mpinDigits[idx] && idx > 0) {
-      setTimeout(() => mpinRefs[idx - 1].current?.focus(), 30);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mpinDigits]);
+    // Not needed in new approach
+  }, []);
 
   const openReset = useCallback(() => {
     setResetStage('request');
@@ -708,8 +816,16 @@ export default function LoginScreen() {
                       setMobile(clean);
                       setStatus(null);
                       setMpinDigits(['', '', '', '']);
+                      setMpinValue('');
                       setAttemptsLeft(3);
                       setError(null);
+                      
+                      // Auto-focus MPIN after 10 digits entered
+                      if (clean.length === 10) {
+                        setTimeout(() => {
+                          mpinInputRef.current?.focus();
+                        }, 500);
+                      }
                     }}
                     placeholder="10-digit number"
                     placeholderTextColor={mutedColor}
@@ -737,13 +853,14 @@ export default function LoginScreen() {
                   <Text style={[styles.maskedText, { color: textColor }]}>
                     +91 {mobile.replace(/^(\d{3})\d{4}(\d{3})$/, '$1 •••• $2')}
                   </Text>
-                  <TouchableOpacity onPress={() => { setStatus(null); setMpinDigits(['', '', '', '']); setAttemptsLeft(3); }}>
+                  <TouchableOpacity onPress={() => { setStatus(null); setMpinDigits(['', '', '', '']); setMpinValue(''); setAttemptsLeft(3); }}>
                     <Text style={[styles.changeText, { color: SECONDARY }]}>Change</Text>
                   </TouchableOpacity>
                 </View>
                 
                 <Text style={[styles.inputLabel, { color: textColor, marginTop: 24 }]}>Enter MPIN</Text>
                 <MpinInput
+                  ref={mpinInputRef}
                   digits={mpinDigits}
                   onChange={handleMpinChange}
                   onKeyPress={handleMpinKeyPress}
@@ -751,6 +868,8 @@ export default function LoginScreen() {
                   shake={mpinShake}
                   error={!!error}
                   isDark={isDark}
+                  value={mpinValue}
+                  onValueChange={handleMpinValueChange}
                 />
                 
                 <TouchableOpacity onPress={openReset} style={styles.forgotBtn}>
@@ -806,11 +925,14 @@ export default function LoginScreen() {
                 <View style={styles.inputGroup}>
                   <Text style={[styles.inputLabel, { color: textColor }]}>Create MPIN</Text>
                   <MpinInput
+                    ref={mpinInputRef}
                     digits={mpinDigits}
                     onChange={handleMpinChange}
                     onKeyPress={handleMpinKeyPress}
                     refs={mpinRefs}
                     isDark={isDark}
+                    value={mpinValue}
+                    onValueChange={handleMpinValueChange}
                   />
                   <Text style={[styles.hint, { color: mutedColor }]}>
                     This 4-digit PIN will be your secure login key
@@ -1211,6 +1333,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 16,
     marginVertical: 8,
+    position: 'relative',
+  },
+  hiddenInput: {
+    position: 'absolute',
+    width: 1,
+    height: 1,
+    opacity: 0,
   },
   mpinContainer: {
     width: 60,

@@ -16,14 +16,14 @@ export default function CongratsScreen() {
           loop={false}
           style={{ width: 260, height: 260 }}
         />
-        <Text style={styles.title}>Congratulations!</Text>
-        <Text style={styles.subtitle}>Your article has been published successfully.</Text>
+        <Text style={styles.title}>అభినందనలు! 🎉</Text>
+        <Text style={styles.subtitle}>మీ ఆర్టికల్ విజయవంతంగా సబ్మిట్ చేయబడింది.</Text>
         <View style={styles.actions}>
-          <TouchableOpacity style={styles.primaryBtn} onPress={() => router.replace('/(tabs)/news')}>
-            <Text style={styles.primaryBtnText}>View News Feed</Text>
+          <TouchableOpacity style={styles.primaryBtn} onPress={() => router.replace('/(tabs)/explore')}>
+            <Text style={styles.primaryBtnText}>📝 మరో న్యూస్ పోస్ట్ చేయండి</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.secondaryBtn} onPress={() => router.replace('/(tabs)/explore')}>
-            <Text style={styles.secondaryBtnText}>Post Another</Text>
+          <TouchableOpacity style={styles.secondaryBtn} onPress={() => router.push('/reporter/dashboard')}>
+            <Text style={styles.secondaryBtnText}>📊 డ్యాష్‌బోర్డ్ చూడండి</Text>
           </TouchableOpacity>
         </View>
       </View>

@@ -1,53 +1,42 @@
-import { ThemedText } from '@/components/ThemedText';
-import { Skeleton } from '@/components/ui/Skeleton';
+/**
+ * Simplified Create Reporter Screen
+ * Telugu UI - Easy for newspaper publishers
+ *
+ * Step 1: హోదా (Designation) - Select reporter role
+ * Step 2: ప్రాంతం (Location) - Select area based on designation level
+ * Step 3: వివరాలు (Details) - Name and Phone number
+ */
+
 import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { loadTokens } from '@/services/auth';
 import { searchCombinedLocations, type CombinedLocationItem } from '@/services/locations';
 import {
-    checkPublicReporterAvailability,
-    createTenantReporter,
-    getReporterDesignations,
-    type CreateTenantReporterInput,
-    type ReporterDesignation,
-    type ReporterLevel,
+  checkPublicReporterAvailability,
+  createTenantReporter,
+  getReporterDesignations,
+  type CreateTenantReporterInput,
+  type ReporterDesignation,
+  type ReporterLevel,
 } from '@/services/reporters';
-import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-    ActivityIndicator,
-    KeyboardAvoidingView,
-    Platform,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Switch,
-    TextInput,
-    View,
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-function isValidHexColor(v?: string | null) {
-  if (!v) return false;
-  return /^#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})$/.test(String(v).trim());
-}
-
-function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
-  const h = hex.trim();
-  if (!isValidHexColor(h)) return null;
-  const raw = h.slice(1);
-  const full = raw.length === 3 ? raw.split('').map((c) => c + c).join('') : raw;
-  const n = parseInt(full, 16);
-  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
-}
-
-function pickReadableTextColor(bgHex?: string | null) {
-  const rgb = bgHex ? hexToRgb(bgHex) : null;
-  if (!rgb) return null;
-  const lum = (0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b) / 255;
-  return lum < 0.55 ? Colors.light.background : Colors.light.text;
-}
+/* ─────────────────────────────  Helpers  ───────────────────────────── */
 
 function digitsOnly(s: string) {
   return s.replace(/\D+/g, '');
@@ -72,129 +61,81 @@ function isAllowedLocationForLevel(level: string, item: CombinedLocationItem) {
   return false;
 }
 
-function locationLabel(item: CombinedLocationItem) {
-  const main = item.match?.name || 'Unknown';
-  const parts = [item.state?.name, item.district?.name, item.mandal?.name].filter(Boolean);
-  return { main, sub: parts.join(' • ') };
-}
-
 const LEVEL_ORDER = ['STATE', 'DISTRICT', 'ASSEMBLY', 'MANDAL'] as const;
+const LEVEL_LABELS: Record<string, string> = {
+  STATE: 'రాష్ట్రం',
+  DISTRICT: 'జిల్లా',
+  ASSEMBLY: 'నియోజకవర్గం',
+  MANDAL: 'మండలం',
+};
+
+// Level-specific colors and icons for visual hierarchy
+const LEVEL_CONFIG: Record<string, { color: string; bgColor: string; icon: string; emoji: string; avatar: string }> = {
+  STATE: { color: '#7C3AED', bgColor: '#7C3AED15', icon: 'flag', emoji: '🏛️', avatar: '🎤' },
+  DISTRICT: { color: '#2563EB', bgColor: '#2563EB15', icon: 'location-city', emoji: '🏢', avatar: '📰' },
+  ASSEMBLY: { color: '#059669', bgColor: '#05966915', icon: 'how-to-vote', emoji: '🗳️', avatar: '📝' },
+  MANDAL: { color: '#D97706', bgColor: '#D9770615', icon: 'home-work', emoji: '🏘️', avatar: '✍️' },
+};
+
+const PRIMARY_COLOR = '#DC2626';
+const SUCCESS_COLOR = '#10B981';
+
+/* ─────────────────────────────  Main Screen  ───────────────────────────── */
 
 export default function CreateReporterScreen() {
   const scheme = useColorScheme() ?? 'light';
   const c = Colors[scheme];
   const router = useRouter();
+  const secondaryText = c.muted;
 
   const [step, setStep] = useState<1 | 2 | 3>(1);
 
   const [tenantId, setTenantId] = useState<string | null>(null);
-  const [role, setRole] = useState<string>('');
-  const [brandPrimary, setBrandPrimary] = useState<string | null>(null);
-
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Step 1: Designation
   const [designations, setDesignations] = useState<ReporterDesignation[]>([]);
   const [selectedDesig, setSelectedDesig] = useState<ReporterDesignation | null>(null);
   const [desigQuery, setDesigQuery] = useState('');
 
+  // Step 2: Location
   const [locQuery, setLocQuery] = useState('');
   const [locLoading, setLocLoading] = useState(false);
   const [locItems, setLocItems] = useState<CombinedLocationItem[]>([]);
   const [selectedLoc, setSelectedLoc] = useState<CombinedLocationItem | null>(null);
-
   const [checkingAvailability, setCheckingAvailability] = useState(false);
-  const [availabilityResult, setAvailabilityResult] = useState<{ id: string; available: boolean } | null>(null);
+  const [isAvailable, setIsAvailable] = useState<boolean | null>(null);
 
+  // Step 3: Name & Phone
   const [fullName, setFullName] = useState('');
   const [mobileNumber, setMobileNumber] = useState('');
-
-  const [subscriptionActive, setSubscriptionActive] = useState<boolean | null>(null);
-  const [monthlyAmount, setMonthlyAmount] = useState('');
-  const [idCardCharge, setIdCardCharge] = useState('');
-
-  const [manualLoginEnabled, setManualLoginEnabled] = useState(false);
-  const [manualLoginDays, setManualLoginDays] = useState('');
-  const [autoPublish, setAutoPublish] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  const scrollRef = useRef<ScrollView | null>(null);
-  const locSearchRef = useRef<any>(null);
+  const selectedLevel = String(selectedDesig?.level || '').toUpperCase();
 
-  const accent = brandPrimary || c.tint;
-  const accentText = pickReadableTextColor(accent) || Colors.light.background;
-
-  const isReporterRole = role === 'REPORTER' || role === 'TENANT_REPORTER';
-  const isAllowedRole = role === 'SUPER_ADMIN' || role === 'TENANT_ADMIN' || isReporterRole;
-  const canEditPricing = role === 'SUPER_ADMIN' || role === 'TENANT_ADMIN';
-
-  const scrollPadBottom = useMemo(() => {
-    if (step !== 3) return 18;
-    if (subscriptionActive || manualLoginEnabled) return 320;
-    return 220;
-  }, [step, subscriptionActive, manualLoginEnabled]);
-
-  const scrollToBottomSoon = useCallback(() => {
-    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
-  }, []);
-
-  const focusLocSearch = useCallback(() => {
-    setTimeout(() => locSearchRef.current?.focus?.(), 50);
-  }, []);
-
+  /* ── Load session and designations ── */
   useEffect(() => {
     (async () => {
-      const t = await loadTokens();
-      const session: any = (t as any)?.session;
-      const tid = session?.tenantId || session?.tenant?.id;
-      setTenantId(typeof tid === 'string' ? tid : null);
-      setRole(String(t?.user?.role || ''));
+      try {
+        const t = await loadTokens();
+        const session: any = (t as any)?.session;
+        const tid = session?.tenantId || session?.tenant?.id;
+        setTenantId(typeof tid === 'string' ? tid : null);
 
-      const ds = session?.domainSettings;
-      const colors = ds?.data?.theme?.colors;
-      const primary = colors?.primary || colors?.accent;
-      setBrandPrimary(isValidHexColor(primary) ? String(primary) : null);
+        const list = await getReporterDesignations();
+        setDesignations(Array.isArray(list) ? list : []);
+      } catch (e: any) {
+        setError(e?.message || 'లోడ్ కాలేదు');
+      } finally {
+        setLoading(false);
+      }
     })();
   }, []);
 
-  const loadDesignations = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const list = await getReporterDesignations();
-      setDesignations(Array.isArray(list) ? list : []);
-    } catch (e: any) {
-      setError(e?.message || 'Failed to load designations');
-      setDesignations([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadDesignations();
-  }, [loadDesignations]);
-
-  useEffect(() => {
-    // Auto-enforce subscriptionActive=true for REPORTER creators
-    if (isReporterRole) {
-      setSubscriptionActive(true);
-    } else if (subscriptionActive === null) {
-      setSubscriptionActive(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isReporterRole]);
-
-  useEffect(() => {
-    // Backend rule: manualLoginEnabled requires subscriptionActive=false.
-    if (subscriptionActive) {
-      setManualLoginEnabled(false);
-      setManualLoginDays('');
-    }
-  }, [subscriptionActive]);
-
+  /* ── Designation grouped by level ── */
   const designationsByLevel = useMemo(() => {
     const q = desigQuery.trim().toLowerCase();
     const filtered = q
@@ -205,101 +146,13 @@ export default function CreateReporterScreen() {
       const lvl = String(d.level || '').toUpperCase();
       if (buckets[lvl]) buckets[lvl].push(d);
     }
-    for (const k of Object.keys(buckets)) {
-      buckets[k].sort((a, b) => String(a.name).localeCompare(String(b.name)));
-    }
     return buckets;
   }, [designations, desigQuery]);
 
-  const selectedLevel = String(selectedDesig?.level || '').toUpperCase();
-
+  /* ── Location search ── */
   useEffect(() => {
-    // Reset dependent selections when designation changes
-    setSelectedLoc(null);
-    setAvailabilityResult(null);
-    setLocQuery('');
-    setLocItems([]);
-  }, [selectedDesig?.id]);
-
-  const buildAvailabilityPayload = useCallback((locId: string) => {
-    if (!selectedDesig?.id) return null;
-    const level = selectedLevel as Exclude<ReporterLevel, null>;
-    const base: any = {
-      designationId: selectedDesig.id,
-      level,
-    };
-    if (selectedLevel === 'STATE') base.stateId = locId;
-    if (selectedLevel === 'DISTRICT') base.districtId = locId;
-    if (selectedLevel === 'ASSEMBLY') base.assemblyConstituencyId = locId;
-    if (selectedLevel === 'MANDAL') base.mandalId = locId;
-    return base;
-  }, [selectedDesig?.id, selectedLevel]);
-
-  const checkAvailabilityAndMaybeAdvance = useCallback(async (it: CombinedLocationItem) => {
-    setFormError(null);
-    if (!tenantId) {
-      setFormError('Missing tenantId');
-      return;
-    }
-    if (!selectedDesig) {
-      setFormError('Select designation first');
-      return;
-    }
-    if (!isAllowedLocationForLevel(selectedLevel, it)) {
-      setFormError(`Not allowed: select a ${selectedLevel.toLowerCase()} location`);
-      return;
-    }
-    const locId = it.match?.id;
-    if (!locId) {
-      setFormError('Invalid location');
-      return;
-    }
-
-    const payload = buildAvailabilityPayload(locId);
-    if (!payload) {
-      setFormError('Select a designation');
-      return;
-    }
-
-    setSelectedLoc(it);
-    setCheckingAvailability(true);
-    setAvailabilityResult(null);
-    try {
-      const res = await checkPublicReporterAvailability(tenantId, payload);
-      const available = !!res?.available;
-      setAvailabilityResult({ id: locId, available });
-
-      if (!available) {
-        setFormError('Area not available, try another location');
-        return;
-      }
-
-      const pricing = res?.pricing;
-      const subscriptionEnabled = !!pricing?.subscriptionEnabled;
-      if (pricing?.monthlySubscriptionAmount !== undefined && pricing?.monthlySubscriptionAmount !== null) {
-        setMonthlyAmount(String(pricing.monthlySubscriptionAmount));
-      }
-      if (pricing?.idCardCharge !== undefined && pricing?.idCardCharge !== null) {
-        setIdCardCharge(String(pricing.idCardCharge));
-      }
-
-      if (isReporterRole) {
-        setSubscriptionActive(true);
-      } else {
-        setSubscriptionActive(subscriptionEnabled);
-      }
-
-      setStep(3);
-    } catch (e: any) {
-      setFormError(e?.message || 'Failed to check availability');
-    } finally {
-      setCheckingAvailability(false);
-    }
-  }, [tenantId, selectedDesig, selectedLevel, buildAvailabilityPayload, isReporterRole]);
-
-  useEffect(() => {
-    const q = locQuery.trim();
     if (step !== 2) return;
+    const q = locQuery.trim();
     if (q.length < 2) {
       setLocItems([]);
       return;
@@ -310,910 +163,792 @@ export default function CreateReporterScreen() {
         setLocLoading(true);
         const res = await searchCombinedLocations(q, 20);
         const items = Array.isArray(res?.items) ? res.items : [];
-        if (!cancelled) setLocItems(items);
+        if (!cancelled) {
+          const filtered = items.filter((it) => isAllowedLocationForLevel(selectedLevel, it));
+          setLocItems(filtered);
+        }
       } catch {
         if (!cancelled) setLocItems([]);
       } finally {
         if (!cancelled) setLocLoading(false);
       }
-    }, 250);
+    }, 300);
     return () => {
       cancelled = true;
       clearTimeout(id);
     };
-  }, [locQuery, step]);
+  }, [locQuery, selectedLevel, step]);
 
-  const onPickLocation = useCallback((it: CombinedLocationItem) => {
-    void checkAvailabilityAndMaybeAdvance(it);
-  }, [checkAvailabilityAndMaybeAdvance]);
+  /* ── Check availability when location selected ── */
+  const checkAvailability = useCallback(
+    async (loc: CombinedLocationItem) => {
+      if (!tenantId || !selectedDesig?.id) return;
+      const locId = loc.match?.id;
+      if (!locId) return;
 
-  const goToStep3 = useCallback(async () => {
-    setFormError(null);
-    const locId = selectedLoc?.match?.id;
-    if (!locId || !selectedLoc) {
-      setFormError('Select a location');
-      return;
-    }
-    if (availabilityResult?.id === locId) {
-      if (availabilityResult.available) setStep(3);
-      else setFormError('Area not available, try another location');
-      return;
-    }
-    await checkAvailabilityAndMaybeAdvance(selectedLoc);
-  }, [availabilityResult, checkAvailabilityAndMaybeAdvance, selectedLoc]);
+      setCheckingAvailability(true);
+      setIsAvailable(null);
 
-  const onBack = useCallback(() => {
-    setFormError(null);
-    if (step === 1) {
-      router.back();
-      return;
-    }
-    setStep((s) => (s > 1 ? ((s - 1) as 1 | 2 | 3) : s));
-  }, [router, step]);
+      try {
+        const level = selectedLevel as Exclude<ReporterLevel, null>;
+        const payload: any = { designationId: selectedDesig.id, level };
+        if (selectedLevel === 'STATE') payload.stateId = locId;
+        if (selectedLevel === 'DISTRICT') payload.districtId = locId;
+        if (selectedLevel === 'ASSEMBLY') payload.assemblyConstituencyId = locId;
+        if (selectedLevel === 'MANDAL') payload.mandalId = locId;
 
-  const selectDesignation = useCallback((d: ReporterDesignation) => {
-    setFormError(null);
-    setSelectedDesig(d);
-    setDesigQuery('');
-    setStep(2);
-  }, []);
+        const res = await checkPublicReporterAvailability(tenantId, payload);
+        setIsAvailable(!!res?.available);
+        if (!res?.available) {
+          setFormError('ఈ ప్రాంతంలో ఇప్పటికే రిపోర్టర్ ఉన్నారు');
+        } else {
+          setFormError(null);
+        }
+      } catch (e: any) {
+        setFormError(e?.message || 'చెక్ చేయలేకపోయాము');
+        setIsAvailable(false);
+      } finally {
+        setCheckingAvailability(false);
+      }
+    },
+    [tenantId, selectedDesig?.id, selectedLevel]
+  );
 
-  const clearDesignation = useCallback(() => {
-    setFormError(null);
-    setSelectedDesig(null);
-    setSelectedLoc(null);
-    setLocQuery('');
-    setLocItems([]);
-    setStep(1);
-  }, []);
-
-  const canSubmit = useMemo(() => {
-    if (!tenantId) return false;
-    if (!isAllowedRole) return false;
-    if (!selectedDesig?.id) return false;
-    if (!selectedLoc?.match?.id) return false;
-    if (!fullName.trim()) return false;
-    if (digitsOnly(mobileNumber).length !== 10) return false;
-    if (subscriptionActive === null) return false;
-
-    if (manualLoginEnabled) {
-      if (subscriptionActive) return false;
-      const days = Number(digitsOnly(manualLoginDays) || '0');
-      if (!Number.isFinite(days) || days < 1 || days > 31) return false;
-    }
-
-    if (subscriptionActive) {
-      if (!digitsOnly(monthlyAmount).length) return false;
-      if (!digitsOnly(idCardCharge).length) return false;
-    }
-    return true;
-  }, [tenantId, isAllowedRole, selectedDesig?.id, selectedLoc?.match?.id, fullName, mobileNumber, subscriptionActive, monthlyAmount, idCardCharge, manualLoginEnabled, manualLoginDays]);
-
+  /* ── Submit ── */
   const submit = useCallback(async () => {
     setFormError(null);
     if (!tenantId) {
-      setFormError('Missing tenantId');
+      setFormError('Tenant ID లేదు');
       return;
     }
-    if (!isAllowedRole) {
-      setFormError('Not allowed for your role');
+    if (!selectedDesig?.id || !selectedLoc?.match?.id) {
+      setFormError('అన్ని ఫీల్డ్‌లు పూర్తి చేయండి');
       return;
-    }
-    if (!selectedDesig?.id || !selectedLevel) {
-      setFormError('Select a designation');
-      return;
-    }
-    if (!selectedLoc?.match?.id) {
-      setFormError('Select a location');
-      return;
-    }
-
-    const mobile = digitsOnly(mobileNumber);
-    if (mobile.length !== 10) {
-      setFormError('Enter a valid 10-digit mobile number');
-      return;
-    }
-
-    if (manualLoginEnabled) {
-      if (subscriptionActive) {
-        setFormError('Manual login requires subscription inactive');
-        return;
-      }
-      const days = Number(digitsOnly(manualLoginDays) || '0');
-      if (!Number.isFinite(days) || days < 1 || days > 31) {
-        setFormError('Manual login days must be between 1 and 31');
-        return;
-      }
-    }
-
-    const payload: CreateTenantReporterInput = {
-      designationId: selectedDesig.id,
-      level: selectedLevel as Exclude<ReporterLevel, null>,
-      fullName: fullName.trim(),
-      mobileNumber: mobile,
-      subscriptionActive: manualLoginEnabled ? false : !!subscriptionActive,
-      autoPublish,
-    };
-
-    if (selectedLevel === 'STATE') payload.stateId = selectedLoc.match.id;
-    if (selectedLevel === 'DISTRICT') payload.districtId = selectedLoc.match.id;
-    if (selectedLevel === 'ASSEMBLY') payload.assemblyConstituencyId = selectedLoc.match.id;
-    if (selectedLevel === 'MANDAL') payload.mandalId = selectedLoc.match.id;
-
-    if (manualLoginEnabled) {
-      payload.manualLoginEnabled = true;
-      payload.manualLoginDays = Number(digitsOnly(manualLoginDays) || '0');
-    }
-
-    if (!manualLoginEnabled && subscriptionActive) {
-      payload.monthlySubscriptionAmount = Number(digitsOnly(monthlyAmount) || '0');
-      payload.idCardCharge = Number(digitsOnly(idCardCharge) || '0');
     }
 
     setSubmitting(true);
     try {
-      await createTenantReporter(tenantId, payload);
-      router.replace('/tenant/reporters');
+      const level = selectedLevel as Exclude<ReporterLevel, null>;
+      const input: CreateTenantReporterInput = {
+        fullName: fullName.trim(),
+        mobileNumber: digitsOnly(mobileNumber),
+        designationId: selectedDesig.id,
+        level,
+        subscriptionActive: false,
+        manualLoginEnabled: true,
+        manualLoginDays: 365,
+        autoPublish: false,
+      };
+
+      if (selectedLevel === 'STATE') input.stateId = selectedLoc.match.id;
+      if (selectedLevel === 'DISTRICT') input.districtId = selectedLoc.match.id;
+      if (selectedLevel === 'ASSEMBLY') input.assemblyConstituencyId = selectedLoc.match.id;
+      if (selectedLevel === 'MANDAL') input.mandalId = selectedLoc.match.id;
+
+      const created = await createTenantReporter(tenantId, input);
+
+      Alert.alert(
+        '✅ రిపోర్టర్ క్రియేట్ అయింది',
+        `${created.fullName} విజయవంతంగా జోడించబడ్డారు.\n\nఇప్పుడు వారి ID కార్డ్ జెనరేట్ చేయండి.`,
+        [
+          {
+            text: 'రిపోర్టర్ చూడండి',
+            onPress: () => router.replace(`/tenant/reporter/${created.id}` as any),
+          },
+          {
+            text: 'జాబితాకు వెళ్ళండి',
+            onPress: () => router.replace('/tenant/reporters'),
+          },
+        ]
+      );
     } catch (e: any) {
-      setFormError(e?.message || 'Failed to create reporter');
+      setFormError(e?.message || 'క్రియేట్ కాలేదు');
     } finally {
       setSubmitting(false);
     }
-  }, [tenantId, isAllowedRole, selectedDesig, selectedLevel, selectedLoc, fullName, mobileNumber, subscriptionActive, monthlyAmount, idCardCharge, router, manualLoginEnabled, manualLoginDays, autoPublish]);
+  }, [tenantId, selectedDesig, selectedLoc, selectedLevel, fullName, mobileNumber, router]);
 
-  const renderStepContent = () => {
+  /* ── Navigation ── */
+  const goBack = useCallback(() => {
+    setFormError(null);
     if (step === 1) {
-      return (
-        <View style={[styles.card, { borderColor: c.border, backgroundColor: c.card }]}>
-          <View style={styles.cardHeaderRow}>
-            <MaterialIcons name="badge" size={18} color={c.text} />
-            <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Designation</ThemedText>
-          </View>
+      router.back();
+    } else if (step === 2) {
+      setStep(1);
+      setSelectedLoc(null);
+      setIsAvailable(null);
+      setLocQuery('');
+    } else {
+      setStep(2);
+    }
+  }, [step, router]);
 
-          <View style={{ gap: 10 }}>
-            {LEVEL_ORDER.map((lvl) => {
-              const list = designationsByLevel[lvl] || [];
-              if (!list.length) return null;
-              return (
-                <View key={lvl} style={{ gap: 8 }}>
-                  <ThemedText style={{ color: c.muted, fontSize: 12 }}>{lvl}</ThemedText>
-                  {list.map((d) => (
+  const canGoToStep3 = useMemo(() => {
+    return selectedLoc?.match?.id && isAvailable === true;
+  }, [selectedLoc?.match?.id, isAvailable]);
+
+  const canSubmit = useMemo(() => {
+    return fullName.trim().length >= 2 && digitsOnly(mobileNumber).length === 10;
+  }, [fullName, mobileNumber]);
+
+  /* ─────────────────────────────  Render  ───────────────────────────── */
+
+  if (loading) {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: c.background }]} edges={['top', 'bottom']}>
+        <View style={styles.loadingCenter}>
+          <ActivityIndicator size="large" color={PRIMARY_COLOR} />
+          <Text style={[styles.loadingText, { color: c.text }]}>లోడ్ అవుతోంది...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (error) {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: c.background }]} edges={['top', 'bottom']}>
+        <View style={styles.loadingCenter}>
+          <MaterialIcons name="error-outline" size={48} color="#EF4444" />
+          <Text style={[styles.errorText, { color: '#EF4444' }]}>{error}</Text>
+          <Pressable style={styles.retryBtn} onPress={() => router.back()}>
+            <Text style={styles.retryBtnText}>వెనక్కి వెళ్ళండి</Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={[styles.container, { backgroundColor: c.background }]} edges={['top', 'bottom']}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        {/* Header */}
+        <View style={[styles.header, { borderBottomColor: c.border }]}>
+          <Pressable onPress={goBack} hitSlop={12} style={styles.backBtn}>
+            <Ionicons name="arrow-back" size={24} color={c.text} />
+          </Pressable>
+          
+          {step === 1 && desigQuery !== null ? (
+            <>
+              <View style={[styles.headerSearchBox, { backgroundColor: c.card, borderColor: c.border }]}>
+                <Ionicons name="search" size={18} color={secondaryText} />
+                <TextInput
+                  style={[styles.headerSearchInput, { color: c.text }]}
+                  placeholder="హోదా వెతకండి..."
+                  placeholderTextColor={secondaryText}
+                  value={desigQuery}
+                  onChangeText={setDesigQuery}
+                />
+                {desigQuery.length > 0 && (
+                  <Pressable onPress={() => setDesigQuery('')}>
+                    <Ionicons name="close-circle" size={18} color={secondaryText} />
+                  </Pressable>
+                )}
+              </View>
+            </>
+          ) : (
+            <View style={styles.headerCenter}>
+              <Text style={[styles.headerTitle, { color: c.text }]}>రిపోర్టర్ జోడించండి</Text>
+              <Text style={[styles.headerStep, { color: secondaryText }]}>
+                స్టెప్ {step}/3
+              </Text>
+            </View>
+          )}
+          <View style={{ width: 40 }} />
+        </View>
+
+        {/* Progress Bar */}
+        <View style={styles.progressBar}>
+          <View style={[styles.progressFill, { width: step === 1 ? '33%' : step === 2 ? '66%' : '100%' }]} />
+        </View>
+
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          {/* ══════════════════════════════════════════════════════════════════
+              STEP 1: హోదా (Designation)
+              ══════════════════════════════════════════════════════════════════ */}
+          {step === 1 && (
+            <View style={styles.stepContainer}>
+              <View style={styles.stepHeader}>
+                <View style={[styles.stepIconCircle, { backgroundColor: '#6366F1' }]}>
+                  <MaterialIcons name="badge" size={32} color="#fff" />
+                </View>
+                <Text style={[styles.stepTitle, { color: c.text }]}>హోదా ఎంచుకోండి</Text>
+                <Text style={[styles.stepSubtitle, { color: secondaryText }]}>
+                  స్థాయి ఎంచుకుని హోదా సెలెక్ట్ చేయండి
+                </Text>
+              </View>
+
+              {/* Level Selection - 2x2 Grid */}
+              <View style={styles.levelGrid}>
+                {LEVEL_ORDER.map((lvl) => {
+                  const cfg = LEVEL_CONFIG[lvl] || LEVEL_CONFIG.DISTRICT;
+                  const items = designationsByLevel[lvl] || [];
+                  const isExpanded = selectedLevel === lvl;
+                  
+                  return (
                     <Pressable
-                      key={d.id}
-                      onPress={() => selectDesignation(d)}
-                      style={({ pressed }) => [
-                        styles.pickRow,
-                        { borderColor: c.border, backgroundColor: c.background },
-                        pressed && { opacity: 0.95 },
+                      key={lvl}
+                      style={[
+                        styles.levelSquare,
+                        { backgroundColor: cfg.bgColor, borderColor: c.border },
+                        isExpanded && { borderColor: cfg.color, borderWidth: 3 },
                       ]}
+                      onPress={() => {
+                        if (items.length === 1) {
+                          // Auto-select if only one option
+                          setSelectedDesig(items[0]);
+                          setTimeout(() => setStep(2), 200);
+                        } else if (items.length > 0) {
+                          // Set a temporary selection to show this level's items
+                          if (selectedLevel === lvl) {
+                            setSelectedDesig(null); // Toggle off
+                          } else {
+                            // Create a dummy to set the level
+                            setSelectedDesig({ id: '', name: '', level: lvl as any });
+                          }
+                        }
+                      }}
                     >
-                      <ThemedText type="defaultSemiBold" style={{ color: c.text, flex: 1 }} numberOfLines={1}>
-                        {d.name}
-                      </ThemedText>
-                      <MaterialIcons name="chevron-right" size={22} color={c.muted} />
+                      {/* Avatar Circle with Mic */}
+                      <View style={[styles.levelAvatarCircle, { backgroundColor: cfg.color }]}>
+                        <Text style={styles.levelAvatarEmoji}>{cfg.avatar}</Text>
+                        <View style={[styles.micBadge, { backgroundColor: '#fff' }]}>
+                          <MaterialIcons name="mic" size={12} color={cfg.color} />
+                        </View>
+                      </View>
+                      
+                      {/* Level Info */}
+                      <Text style={[styles.levelSquareTitle, { color: cfg.color }]}>
+                        {LEVEL_LABELS[lvl]}
+                      </Text>
+                      <Text style={[styles.levelSquareCount, { color: secondaryText }]}>
+                        {items.length} హోదాలు
+                      </Text>
+                      
+                      {/* Check if selected */}
+                      {isExpanded && selectedDesig?.id && (
+                        <View style={[styles.levelSelectedBadge, { backgroundColor: SUCCESS_COLOR }]}>
+                          <Ionicons name="checkmark" size={14} color="#fff" />
+                        </View>
+                      )}
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              {/* Show designations only for selected level */}
+              {selectedLevel && (designationsByLevel[selectedLevel] || []).length > 0 && (
+                <View style={styles.levelGroup}>
+                  <Text style={[styles.levelGroupTitle, { color: LEVEL_CONFIG[selectedLevel]?.color || c.text }]}>
+                    {LEVEL_CONFIG[selectedLevel]?.emoji} {LEVEL_LABELS[selectedLevel]} హోదాలు
+                  </Text>
+                  <View style={styles.designationGrid}>
+                    {(designationsByLevel[selectedLevel] || []).map((d) => {
+                      const isSelected = selectedDesig?.id === d.id;
+                      const cfg = LEVEL_CONFIG[selectedLevel] || LEVEL_CONFIG.DISTRICT;
+                      return (
+                        <Pressable
+                          key={d.id}
+                          style={[
+                            styles.designationCard,
+                            { backgroundColor: c.card, borderColor: c.border },
+                            isSelected && { borderColor: cfg.color, borderWidth: 2, backgroundColor: cfg.bgColor },
+                          ]}
+                          onPress={() => {
+                            setSelectedDesig(d);
+                            setFormError(null);
+                            // Auto advance to step 2
+                            setTimeout(() => setStep(2), 200);
+                          }}
+                        >
+                          <View style={[styles.desigIcon, { backgroundColor: cfg.bgColor }]}>
+                            <Text style={{ fontSize: 20 }}>{cfg.avatar}</Text>
+                          </View>
+                          <Text
+                            style={[
+                              styles.designationName,
+                              { color: c.text },
+                              isSelected && { color: cfg.color, fontWeight: '700' },
+                            ]}
+                            numberOfLines={2}
+                          >
+                            {d.name}
+                          </Text>
+                          {isSelected && (
+                            <View style={styles.selectedCheck}>
+                              <Ionicons name="checkmark-circle" size={20} color={SUCCESS_COLOR} />
+                            </View>
+                          )}
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+              )}
+
+              {/* Show all if searching */}
+              {desigQuery.trim() && !selectedLevel && (
+                <View style={styles.levelGroup}>
+                  <Text style={[styles.levelGroupTitle, { color: c.text }]}>
+                    🔍 &quot;{desigQuery}&quot; కోసం ఫలితాలు
+                  </Text>
+                  <View style={styles.designationGrid}>
+                    {designations
+                      .filter((d) => d.name.toLowerCase().includes(desigQuery.toLowerCase()))
+                      .map((d) => {
+                        const isSelected = selectedDesig?.id === d.id;
+                        const lvl = String(d.level || '').toUpperCase();
+                        const cfg = LEVEL_CONFIG[lvl] || LEVEL_CONFIG.DISTRICT;
+                        return (
+                          <Pressable
+                            key={d.id}
+                            style={[
+                              styles.designationCard,
+                              { backgroundColor: c.card, borderColor: c.border },
+                              isSelected && { borderColor: cfg.color, borderWidth: 2, backgroundColor: cfg.bgColor },
+                            ]}
+                            onPress={() => {
+                              setSelectedDesig(d);
+                              setFormError(null);
+                              setTimeout(() => setStep(2), 200);
+                            }}
+                          >
+                            <View style={[styles.desigIcon, { backgroundColor: cfg.bgColor }]}>
+                              <Text style={{ fontSize: 20 }}>{cfg.avatar}</Text>
+                            </View>
+                            <Text
+                              style={[
+                                styles.designationName,
+                                { color: c.text },
+                                isSelected && { color: cfg.color, fontWeight: '700' },
+                              ]}
+                              numberOfLines={2}
+                            >
+                              {d.name}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                  </View>
+                </View>
+              )}
+            </View>
+          )}
+
+          {/* ══════════════════════════════════════════════════════════════════
+              STEP 2: ప్రాంతం (Location)
+              ══════════════════════════════════════════════════════════════════ */}
+          {step === 2 && (
+            <View style={styles.stepContainer}>
+              <View style={styles.stepHeader}>
+                <View style={[styles.stepIconCircle, { backgroundColor: '#F59E0B' }]}>
+                  <MaterialIcons name="location-on" size={32} color="#fff" />
+                </View>
+                <Text style={[styles.stepTitle, { color: c.text }]}>
+                  {LEVEL_LABELS[selectedLevel] || 'ప్రాంతం'} ఎంచుకోండి
+                </Text>
+                <Text style={[styles.stepSubtitle, { color: secondaryText }]}>
+                  {selectedDesig?.name} కోసం పని ప్రాంతం
+                </Text>
+              </View>
+
+              {/* Selected Designation Chip */}
+              <View style={[styles.selectedChip, { backgroundColor: c.card, borderColor: c.border }]}>
+                <MaterialIcons name="badge" size={18} color={PRIMARY_COLOR} />
+                <Text style={[styles.selectedChipText, { color: c.text }]}>{selectedDesig?.name}</Text>
+                <Pressable onPress={() => setStep(1)} style={styles.changeBtn}>
+                  <Text style={styles.changeBtnText}>మార్చు</Text>
+                </Pressable>
+              </View>
+
+              {/* Location Search */}
+              <View style={[styles.searchBox, { backgroundColor: c.card, borderColor: c.border }]}>
+                <Ionicons name="search" size={20} color={secondaryText} />
+                <TextInput
+                  style={[styles.searchInput, { color: c.text }]}
+                  placeholder={`🔍 ${LEVEL_LABELS[selectedLevel] || 'ప్రాంతం'} పేరు టైప్ చేయండి...`}
+                  placeholderTextColor={secondaryText}
+                  value={locQuery}
+                  onChangeText={setLocQuery}
+                  autoFocus
+                />
+                {locQuery.length > 0 && (
+                  <Pressable onPress={() => setLocQuery('')}>
+                    <Ionicons name="close-circle" size={20} color={secondaryText} />
+                  </Pressable>
+                )}
+              </View>
+
+              {/* Location Results */}
+              {locLoading ? (
+                <ActivityIndicator size="small" color={PRIMARY_COLOR} style={{ padding: 30 }} />
+              ) : locItems.length > 0 ? (
+                <View style={styles.locationList}>
+                  {locItems.map((item, idx) => (
+                    <Pressable
+                      key={item.match?.id || idx}
+                      style={[
+                        styles.locationItem,
+                        { backgroundColor: c.card, borderColor: c.border },
+                        selectedLoc?.match?.id === item.match?.id && styles.locationItemSelected,
+                      ]}
+                      onPress={() => {
+                        setSelectedLoc(item);
+                        setFormError(null);
+                        checkAvailability(item);
+                      }}
+                    >
+                      <View style={[styles.locIcon, { backgroundColor: '#F59E0B20' }]}>
+                        <MaterialIcons name="location-on" size={20} color="#F59E0B" />
+                      </View>
+                      <View style={styles.locInfo}>
+                        <Text style={[styles.locName, { color: c.text }]}>{item.match?.name || 'Unknown'}</Text>
+                        {item.district?.name && (
+                          <Text style={[styles.locSub, { color: secondaryText }]}>
+                            {[item.district?.name, item.state?.name].filter(Boolean).join(', ')}
+                          </Text>
+                        )}
+                      </View>
+                      {selectedLoc?.match?.id === item.match?.id && (
+                        <>
+                          {checkingAvailability ? (
+                            <ActivityIndicator size="small" color={PRIMARY_COLOR} />
+                          ) : isAvailable === true ? (
+                            <Ionicons name="checkmark-circle" size={22} color={SUCCESS_COLOR} />
+                          ) : isAvailable === false ? (
+                            <Ionicons name="close-circle" size={22} color="#EF4444" />
+                          ) : null}
+                        </>
+                      )}
                     </Pressable>
                   ))}
                 </View>
-              );
-            })}
+              ) : locQuery.length >= 2 ? (
+                <Text style={[styles.noResults, { color: secondaryText }]}>ఫలితాలు లేవు</Text>
+              ) : (
+                <View style={styles.hintBox}>
+                  <MaterialIcons name="info-outline" size={20} color={secondaryText} />
+                  <Text style={[styles.hintText, { color: secondaryText }]}>
+                    {LEVEL_LABELS[selectedLevel] || 'ప్రాంతం'} పేరు టైప్ చేయండి (2+ అక్షరాలు)
+                  </Text>
+                </View>
+              )}
 
-            {desigQuery.trim().length ? (
-              LEVEL_ORDER.every((lvl) => (designationsByLevel[lvl] || []).length === 0) ? (
-                <ThemedText style={{ color: c.muted, textAlign: 'center', marginTop: 4 }}>
-                  No designations found
-                </ThemedText>
-              ) : null
-            ) : null}
-          </View>
-        </View>
-      );
-    }
+              {/* Error */}
+              {formError && (
+                <View style={styles.errorBox}>
+                  <MaterialIcons name="error" size={18} color="#EF4444" />
+                  <Text style={styles.errorBoxText}>{formError}</Text>
+                </View>
+              )}
 
-    if (step === 2) {
-      return (
-        <>
-          <View style={[styles.card, { borderColor: c.border, backgroundColor: c.card }]}>
-            <View style={styles.cardHeaderRow}>
-              <MaterialIcons name="badge" size={18} color={c.text} />
-              <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Designation</ThemedText>
-            </View>
-
-            <View style={styles.selectedRow}>
-              <View style={{ flex: 1 }}>
-                <ThemedText type="defaultSemiBold" style={{ color: c.text }} numberOfLines={1}>
-                  {selectedDesig?.name}
-                </ThemedText>
-                <ThemedText style={{ color: c.muted, fontSize: 12 }}>
-                  Level: {selectedLevel}
-                </ThemedText>
-              </View>
-              <Pressable onPress={clearDesignation} style={[styles.ghostBtn, { borderColor: c.border }]}>
-                <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Change</ThemedText>
+              {/* Next Button */}
+              <Pressable
+                style={[styles.primaryBtn, !canGoToStep3 && styles.btnDisabled]}
+                onPress={() => setStep(3)}
+                disabled={!canGoToStep3}
+              >
+                <Text style={styles.primaryBtnText}>తదుపరి</Text>
+                <Ionicons name="arrow-forward" size={20} color="#fff" />
               </Pressable>
             </View>
-          </View>
+          )}
 
-          <View style={[styles.card, { borderColor: c.border, backgroundColor: c.card }]}>
-            <View style={styles.cardHeaderRow}>
-              <MaterialIcons name="place" size={18} color={c.text} />
-              <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Location</ThemedText>
-            </View>
-
-            <ThemedText style={{ color: c.muted, fontSize: 12 }}>Allowed: {selectedLevel}</ThemedText>
-
-            <Pressable
-              onPress={focusLocSearch}
-              style={({ pressed }) => [
-                styles.searchHintBtn,
-                { borderColor: c.border, backgroundColor: c.background },
-                pressed && { opacity: 0.95 },
-              ]}
-            >
-              <MaterialIcons name="search" size={18} color={c.muted} />
-              <ThemedText type="defaultSemiBold" style={{ color: c.text }}>
-                Search location
-              </ThemedText>
-            </Pressable>
-
-            {selectedLoc ? (
-              <View style={[styles.selectedBox, { borderColor: c.border, backgroundColor: c.background }]}>
-                <MaterialIcons name="check-circle" size={18} color={accent} />
-                <View style={{ flex: 1 }}>
-                  <ThemedText type="defaultSemiBold" style={{ color: c.text }} numberOfLines={1}>
-                    {locationLabel(selectedLoc).main}
-                  </ThemedText>
-                  <ThemedText style={{ color: c.muted, fontSize: 12 }} numberOfLines={1}>
-                    {normalizeLocationType(selectedLoc.type)}{locationLabel(selectedLoc).sub ? ` • ${locationLabel(selectedLoc).sub}` : ''}
-                  </ThemedText>
+          {/* ══════════════════════════════════════════════════════════════════
+              STEP 3: వివరాలు (Name & Phone)
+              ══════════════════════════════════════════════════════════════════ */}
+          {step === 3 && (
+            <View style={styles.stepContainer}>
+              <View style={styles.stepHeader}>
+                <View style={[styles.stepIconCircle, { backgroundColor: SUCCESS_COLOR }]}>
+                  <MaterialIcons name="person-add" size={32} color="#fff" />
                 </View>
-                {checkingAvailability ? <ActivityIndicator size="small" /> : null}
+                <Text style={[styles.stepTitle, { color: c.text }]}>వివరాలు నమోదు చేయండి</Text>
+                <Text style={[styles.stepSubtitle, { color: secondaryText }]}>
+                  రిపోర్టర్ పేరు మరియు ఫోన్ నంబర్
+                </Text>
               </View>
-            ) : null}
 
-            {locQuery.trim().length < 2 ? (
-              <ThemedText style={{ color: c.muted, textAlign: 'center', marginTop: 10 }}>
-                Type minimum 2 letters to search
-              </ThemedText>
-            ) : null}
-
-            {locLoading && locQuery.trim().length >= 2 && locItems.length === 0 ? (
-              <View style={{ marginTop: 12, gap: 10 }}>
-                {Array.from({ length: 6 }).map((_, i) => (
-                  <View
-                    key={`loc-skel-${i}`}
-                    style={[styles.locItem, { borderColor: c.border, backgroundColor: c.background }]}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <Skeleton width={'70%'} height={14} borderRadius={7} />
-                      <View style={{ height: 6 }} />
-                      <Skeleton width={'55%'} height={12} borderRadius={6} />
-                    </View>
-                    <Skeleton width={18} height={18} borderRadius={9} />
-                  </View>
-                ))}
-              </View>
-            ) : null}
-
-            {locItems.map((it) => {
-              const { main, sub } = locationLabel(it);
-              const type = normalizeLocationType(it.type);
-              const allowed = selectedDesig ? isAllowedLocationForLevel(selectedLevel, it) : true;
-              return (
-                <Pressable
-                  key={`${type}:${it.match?.id}`}
-                  onPress={() => onPickLocation(it)}
-                  disabled={checkingAvailability}
-                  style={({ pressed }) => [
-                    styles.locItem,
-                    { borderColor: c.border, backgroundColor: c.background },
-                    !allowed && { opacity: 0.45 },
-                    checkingAvailability && { opacity: 0.7 },
-                    pressed && { opacity: 0.92 },
-                  ]}
-                >
-                  <View style={{ flex: 1 }}>
-                    <ThemedText type="defaultSemiBold" style={{ color: c.text }} numberOfLines={1}>
-                      {main}
-                    </ThemedText>
-                    <ThemedText style={{ color: c.muted, fontSize: 12 }} numberOfLines={1}>
-                      {type}{sub ? ` • ${sub}` : ''}
-                    </ThemedText>
-                  </View>
-                  <MaterialIcons name="chevron-right" size={22} color={c.muted} />
-                </Pressable>
-              );
-            })}
-
-            {!locLoading && locQuery.trim().length >= 2 && locItems.length === 0 ? (
-              <ThemedText style={{ color: c.muted, textAlign: 'center', marginTop: 10 }}>
-                No results
-              </ThemedText>
-            ) : null}
-
-            {formError ? (
-              <View style={[styles.errorBox, { borderColor: c.border, backgroundColor: c.background, marginTop: 10 }]}>
-                <MaterialIcons name="error-outline" size={18} color={c.warning} />
-                <ThemedText style={{ color: c.text, flex: 1 }}>{formError}</ThemedText>
-              </View>
-            ) : null}
-
-            <Pressable
-              disabled={!selectedLoc?.match?.id || checkingAvailability}
-              onPress={goToStep3}
-              style={({ pressed }) => [
-                styles.primaryBtn,
-                { backgroundColor: selectedLoc?.match?.id && !checkingAvailability ? accent : c.border, marginTop: 12 },
-                pressed && selectedLoc?.match?.id && !checkingAvailability && { opacity: 0.92 },
-              ]}
-            >
-              <ThemedText type="defaultSemiBold" style={{ color: selectedLoc?.match?.id ? accentText : c.muted }}>
-                {checkingAvailability ? 'Checking...' : 'Next'}
-              </ThemedText>
-              <MaterialIcons name="chevron-right" size={20} color={selectedLoc?.match?.id ? accentText : c.muted} />
-            </Pressable>
-          </View>
-        </>
-      );
-    }
-
-    return (
-      <>
-        <View style={[styles.card, { borderColor: c.border, backgroundColor: c.card }]}>
-          <View style={styles.cardHeaderRow}>
-            <MaterialIcons name="assignment" size={18} color={c.text} />
-            <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Summary</ThemedText>
-          </View>
-
-          <View style={{ gap: 10 }}>
-            <View style={[styles.summaryRow, { borderColor: c.border, backgroundColor: c.background }]}>
-              <MaterialIcons name="badge" size={18} color={c.muted} />
-              <View style={{ flex: 1 }}>
-                <ThemedText type="defaultSemiBold" style={{ color: c.text }} numberOfLines={1}>
-                  {selectedDesig?.name || '—'}
-                </ThemedText>
-                <ThemedText style={{ color: c.muted, fontSize: 12 }} numberOfLines={1}>
-                  Level: {selectedLevel || '—'}
-                </ThemedText>
-              </View>
-              <Pressable onPress={clearDesignation} hitSlop={10}>
-                <MaterialIcons name="edit" size={18} color={c.muted} />
-              </Pressable>
-            </View>
-
-            <View style={[styles.summaryRow, { borderColor: c.border, backgroundColor: c.background }]}>
-              <MaterialIcons name="place" size={18} color={c.muted} />
-              <View style={{ flex: 1 }}>
-                <ThemedText type="defaultSemiBold" style={{ color: c.text }} numberOfLines={1}>
-                  {selectedLoc ? locationLabel(selectedLoc).main : '—'}
-                </ThemedText>
-                {selectedLoc ? (
-                  <ThemedText style={{ color: c.muted, fontSize: 12 }} numberOfLines={1}>
-                    {normalizeLocationType(selectedLoc.type)}{locationLabel(selectedLoc).sub ? ` • ${locationLabel(selectedLoc).sub}` : ''}
-                  </ThemedText>
-                ) : (
-                  <ThemedText style={{ color: c.muted, fontSize: 12 }} numberOfLines={1}>
-                    Tap edit to select
-                  </ThemedText>
-                )}
-              </View>
-              <Pressable onPress={() => setStep(2)} hitSlop={10}>
-                <MaterialIcons name="edit" size={18} color={c.muted} />
-              </Pressable>
-            </View>
-          </View>
-        </View>
-
-        <View style={[styles.card, { borderColor: c.border, backgroundColor: c.card }]}>
-          <View style={styles.cardHeaderRow}>
-            <MaterialIcons name="person" size={18} color={c.text} />
-            <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Personal</ThemedText>
-          </View>
-          <ThemedText style={{ color: c.muted, fontSize: 12, marginBottom: 10 }}>
-            Enter name and 10-digit mobile number
-          </ThemedText>
-
-          <ThemedText style={{ color: c.muted, fontSize: 12, marginBottom: 6 }}>Full name</ThemedText>
-          <View style={[styles.inputRow, { borderColor: c.border, backgroundColor: c.background }]}>
-            <MaterialIcons name="person" size={18} color={c.muted} />
-            <TextInput
-              value={fullName}
-              onChangeText={setFullName}
-              placeholder="Full name"
-              placeholderTextColor={c.muted}
-              style={[styles.input, { color: c.text }]}
-            />
-          </View>
-
-          <ThemedText style={{ color: c.muted, fontSize: 12, marginTop: 10, marginBottom: 6 }}>Mobile number</ThemedText>
-          <View style={[styles.inputRow, { borderColor: c.border, backgroundColor: c.background }]}>
-            <MaterialIcons name="call" size={18} color={c.muted} />
-            <TextInput
-              value={mobileNumber}
-              onChangeText={(v) => setMobileNumber(digitsOnly(v).slice(0, 10))}
-              placeholder="Mobile number (10 digits)"
-              placeholderTextColor={c.muted}
-              keyboardType="number-pad"
-              style={[styles.input, { color: c.text }]}
-              maxLength={10}
-            />
-          </View>
-        </View>
-
-        {!manualLoginEnabled ? (
-          <View style={[styles.card, { borderColor: c.border, backgroundColor: c.card }]}>
-            <View style={styles.cardHeaderRow}>
-              <MaterialIcons name="credit-card" size={18} color={c.text} />
-              <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Subscription</ThemedText>
-            </View>
-
-            <View style={[styles.subSwitchRow, { borderColor: c.border, backgroundColor: c.background }]}>
-              <View style={{ flex: 1 }}>
-                <ThemedText type="defaultSemiBold" style={{ color: c.text }}>
-                  Active
-                </ThemedText>
-                <ThemedText style={{ color: c.muted, fontSize: 12 }}>
-                  Turn on to enter monthly amount and ID card charge
-                </ThemedText>
-              </View>
-              <Switch
-                value={!!subscriptionActive}
-                onValueChange={(v) => {
-                  setSubscriptionActive(v);
-                  if (v) {
-                    // Only one allowed
-                    setManualLoginEnabled(false);
-                    setManualLoginDays('');
-                  }
-                }}
-                disabled={isReporterRole}
-                trackColor={{ false: c.border, true: accent }}
-                thumbColor={c.card}
-              />
-            </View>
-
-            {isReporterRole ? (
-              <ThemedText style={{ color: c.muted, fontSize: 12, marginTop: 8 }}>
-                Reporter role requires subscriptionActive=true
-              </ThemedText>
-            ) : null}
-
-            {subscriptionActive ? (
-              <View style={{ gap: 10, marginTop: 10 }}>
-                <ThemedText style={{ color: c.muted, fontSize: 12, marginBottom: 2 }}>Monthly amount</ThemedText>
-                <View style={[styles.inputRow, { borderColor: c.border, backgroundColor: c.background }]}>
-                  <MaterialIcons name="payments" size={18} color={c.muted} />
-                  <TextInput
-                    value={monthlyAmount}
-                    onChangeText={(v) => setMonthlyAmount(digitsOnly(v))}
-                    placeholder="Monthly amount"
-                    placeholderTextColor={c.muted}
-                    keyboardType="number-pad"
-                    onFocus={scrollToBottomSoon}
-                    editable={canEditPricing}
-                    style={[styles.input, { color: c.text }]}
-                  />
+              {/* Summary Chips */}
+              <View style={styles.summaryChips}>
+                <View style={[styles.summaryChip, { backgroundColor: c.card, borderColor: c.border }]}>
+                  <MaterialIcons name="badge" size={16} color={PRIMARY_COLOR} />
+                  <Text style={[styles.summaryChipText, { color: c.text }]} numberOfLines={1}>
+                    {selectedDesig?.name}
+                  </Text>
                 </View>
-
-                <ThemedText style={{ color: c.muted, fontSize: 12, marginTop: 4, marginBottom: 2 }}>ID card charge</ThemedText>
-                <View style={[styles.inputRow, { borderColor: c.border, backgroundColor: c.background }]}>
-                  <MaterialIcons name="badge" size={18} color={c.muted} />
-                  <TextInput
-                    value={idCardCharge}
-                    onChangeText={(v) => setIdCardCharge(digitsOnly(v))}
-                    placeholder="ID card charge"
-                    placeholderTextColor={c.muted}
-                    keyboardType="number-pad"
-                    onFocus={scrollToBottomSoon}
-                    editable={canEditPricing}
-                    style={[styles.input, { color: c.text }]}
-                  />
+                <View style={[styles.summaryChip, { backgroundColor: c.card, borderColor: c.border }]}>
+                  <MaterialIcons name="location-on" size={16} color="#F59E0B" />
+                  <Text style={[styles.summaryChipText, { color: c.text }]} numberOfLines={1}>
+                    {selectedLoc?.match?.name}
+                  </Text>
                 </View>
               </View>
-            ) : null}
-          </View>
-        ) : null}
 
-        <View style={[styles.card, { borderColor: c.border, backgroundColor: c.card }]}>
-          <View style={styles.cardHeaderRow}>
-            <MaterialIcons name="settings" size={18} color={c.text} />
-            <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Settings</ThemedText>
-          </View>
-
-          {!subscriptionActive && !isReporterRole ? (
-            <>
-              <View style={[styles.subSwitchRow, { borderColor: c.border, backgroundColor: c.background }]}>
-                <View style={{ flex: 1 }}>
-                  <ThemedText type="defaultSemiBold" style={{ color: c.text }}>
-                    Manual login
-                  </ThemedText>
-                  <ThemedText style={{ color: c.muted, fontSize: 12 }}>
-                    If enabled, subscription must be inactive (max 31 days)
-                  </ThemedText>
-                </View>
-                <Switch
-                  value={manualLoginEnabled}
-                  onValueChange={(v) => {
-                    if (v) {
-                      // Only one allowed
-                      setSubscriptionActive(false);
-                      setManualLoginEnabled(true);
-                      scrollToBottomSoon();
-                    } else {
-                      setManualLoginEnabled(false);
-                      setManualLoginDays('');
-                    }
-                  }}
-                  trackColor={{ false: c.border, true: accent }}
-                  thumbColor={c.card}
+              {/* Full Name */}
+              <View style={styles.inputGroup}>
+                <Text style={[styles.inputLabel, { color: c.text }]}>పూర్తి పేరు *</Text>
+                <TextInput
+                  style={[styles.input, { color: c.text, borderColor: c.border, backgroundColor: c.card }]}
+                  placeholder="ఉదా: రాజేష్ కుమార్"
+                  placeholderTextColor={secondaryText}
+                  value={fullName}
+                  onChangeText={setFullName}
+                  autoCapitalize="words"
+                  autoFocus
                 />
               </View>
 
-              {manualLoginEnabled ? (
-                <View style={{ gap: 10, marginTop: 10 }}>
-                  <ThemedText style={{ color: c.muted, fontSize: 12, marginBottom: 2 }}>Days (1 to 31)</ThemedText>
-                  <View style={[styles.inputRow, { borderColor: c.border, backgroundColor: c.background }]}>
-                    <MaterialIcons name="schedule" size={18} color={c.muted} />
-                    <TextInput
-                      value={manualLoginDays}
-                      onChangeText={(v) => {
-                        const raw = digitsOnly(v).slice(0, 2);
-                        const n = Number(raw || '0');
-                        if (!raw) {
-                          setManualLoginDays('');
-                          return;
-                        }
-                        setManualLoginDays(String(Math.min(31, Math.max(0, n))));
-                      }}
-                      placeholder="Days"
-                      placeholderTextColor={c.muted}
-                      keyboardType="number-pad"
-                      onFocus={scrollToBottomSoon}
-                      style={[styles.input, { color: c.text }]}
-                      maxLength={2}
-                    />
-                  </View>
+              {/* Mobile Number */}
+              <View style={styles.inputGroup}>
+                <Text style={[styles.inputLabel, { color: c.text }]}>మొబైల్ నంబర్ *</Text>
+                <View style={[styles.phoneInputRow, { borderColor: c.border, backgroundColor: c.card }]}>
+                  <Text style={[styles.phonePrefix, { color: secondaryText }]}>+91</Text>
+                  <TextInput
+                    style={[styles.phoneInput, { color: c.text }]}
+                    placeholder="9876543210"
+                    placeholderTextColor={secondaryText}
+                    value={mobileNumber}
+                    onChangeText={(t) => setMobileNumber(digitsOnly(t))}
+                    keyboardType="phone-pad"
+                    maxLength={10}
+                  />
+                  {digitsOnly(mobileNumber).length === 10 && (
+                    <Ionicons name="checkmark-circle" size={22} color={SUCCESS_COLOR} />
+                  )}
                 </View>
-              ) : null}
-            </>
-          ) : null}
+              </View>
 
-          <View style={[styles.subSwitchRow, { borderColor: c.border, backgroundColor: c.background, marginTop: 12 }]}>
-            <View style={{ flex: 1 }}>
-              <ThemedText type="defaultSemiBold" style={{ color: c.text }}>
-                Auto publish articles
-              </ThemedText>
-              <ThemedText style={{ color: c.muted, fontSize: 12 }}>
-                Allow reporter articles to be auto published
-              </ThemedText>
-            </View>
-            <Switch
-              value={autoPublish}
-              onValueChange={setAutoPublish}
-              trackColor={{ false: c.border, true: accent }}
-              thumbColor={c.card}
-            />
-          </View>
-        </View>
-
-        {formError ? (
-          <View style={[styles.errorBox, { borderColor: c.border, backgroundColor: c.card }]}>
-            <MaterialIcons name="error-outline" size={18} color={c.warning} />
-            <ThemedText style={{ color: c.text, flex: 1 }}>{formError}</ThemedText>
-          </View>
-        ) : null}
-
-        <Pressable
-          disabled={!canSubmit || submitting}
-          onPress={submit}
-          style={({ pressed }) => [
-            styles.primaryBtn,
-            { backgroundColor: canSubmit ? accent : c.border },
-            pressed && canSubmit && { opacity: 0.92 },
-            submitting && { opacity: 0.7 },
-          ]}
-        >
-          {submitting ? <ActivityIndicator color={accentText} /> : <MaterialIcons name="check" size={18} color={accentText} />}
-          <ThemedText type="defaultSemiBold" style={{ color: canSubmit ? accentText : c.muted }}>
-            Create Reporter
-          </ThemedText>
-        </Pressable>
-      </>
-    );
-  };
-
-  const renderLoadingSkeleton = () => {
-    if (step === 2) {
-      return (
-        <View style={{ padding: 12, gap: 12 }}>
-          <View style={[styles.card, { borderColor: c.border, backgroundColor: c.card }]}>
-            <View style={styles.cardHeaderRow}>
-              <Skeleton width={18} height={18} borderRadius={9} />
-              <Skeleton width={110} height={14} borderRadius={7} />
-            </View>
-            <Skeleton width={'75%'} height={14} borderRadius={7} />
-            <View style={{ height: 8 }} />
-            <Skeleton width={'55%'} height={12} borderRadius={6} />
-          </View>
-
-          <View style={[styles.card, { borderColor: c.border, backgroundColor: c.card }]}>
-            <View style={styles.cardHeaderRow}>
-              <Skeleton width={18} height={18} borderRadius={9} />
-              <Skeleton width={90} height={14} borderRadius={7} />
-            </View>
-            <Skeleton width={'40%'} height={12} borderRadius={6} />
-            <View style={{ height: 12 }} />
-            {Array.from({ length: 6 }).map((_, i) => (
-              <View key={`step2-skel-${i}`} style={[styles.locItem, { borderColor: c.border, backgroundColor: c.background }]}>
-                <View style={{ flex: 1 }}>
-                  <Skeleton width={'70%'} height={14} borderRadius={7} />
-                  <View style={{ height: 6 }} />
-                  <Skeleton width={'55%'} height={12} borderRadius={6} />
+              {/* Error */}
+              {formError && (
+                <View style={styles.errorBox}>
+                  <MaterialIcons name="error" size={18} color="#EF4444" />
+                  <Text style={styles.errorBoxText}>{formError}</Text>
                 </View>
-                <Skeleton width={18} height={18} borderRadius={9} />
+              )}
+
+              {/* Info Box */}
+              <View style={styles.infoBox}>
+                <Ionicons name="information-circle" size={18} color="#6366F1" />
+                <Text style={styles.infoText}>
+                  రిపోర్టర్ 365 రోజుల ఫ్రీ యాక్సెస్‌తో క్రియేట్ అవుతారు. తర్వాత సెట్టింగ్‌లు మార్చవచ్చు.
+                </Text>
               </View>
-            ))}
-          </View>
-        </View>
-      );
-    }
 
-    return (
-      <View style={{ padding: 12, gap: 12 }}>
-        <View style={[styles.card, { borderColor: c.border, backgroundColor: c.card }]}>
-          <View style={styles.cardHeaderRow}>
-            <Skeleton width={18} height={18} borderRadius={9} />
-            <Skeleton width={110} height={14} borderRadius={7} />
-          </View>
-          {Array.from({ length: 8 }).map((_, i) => (
-            <View key={`desig-skel-${i}`} style={[styles.pickRow, { borderColor: c.border, backgroundColor: c.background }]}>
-              <View style={{ flex: 1 }}>
-                <Skeleton width={'80%'} height={14} borderRadius={7} />
-              </View>
-              <Skeleton width={18} height={18} borderRadius={9} />
-            </View>
-          ))}
-        </View>
-      </View>
-    );
-  };
-
-  return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['top', 'bottom']}>
-      <View style={[styles.appBar, { borderBottomColor: c.border, backgroundColor: c.background }]}>
-        <Pressable onPress={onBack} style={[styles.iconBtn, { borderColor: c.border, backgroundColor: c.card }]} hitSlop={10}>
-          <MaterialIcons name="arrow-back" size={22} color={c.text} />
-        </Pressable>
-        {step === 1 ? (
-          <View style={[styles.appBarSearch, { borderColor: c.border, backgroundColor: c.card }]}>
-            <MaterialIcons name="search" size={18} color={c.muted} />
-            <TextInput
-              value={desigQuery}
-              onChangeText={setDesigQuery}
-              placeholder="Search designation"
-              placeholderTextColor={c.muted}
-              style={[styles.input, { color: c.text }]}
-              returnKeyType="search"
-            />
-            {desigQuery.trim().length ? (
-              <Pressable onPress={() => setDesigQuery('')} hitSlop={10}>
-                <MaterialIcons name="close" size={18} color={c.muted} />
-              </Pressable>
-            ) : null}
-          </View>
-        ) : step === 2 ? (
-          <View style={[styles.appBarSearch, { borderColor: c.border, backgroundColor: c.card }]}>
-            <MaterialIcons name="search" size={18} color={c.muted} />
-            <TextInput
-              ref={locSearchRef}
-              value={locQuery}
-              onChangeText={setLocQuery}
-              placeholder="Search location"
-              placeholderTextColor={c.muted}
-              style={[styles.input, { color: c.text }]}
-              returnKeyType="search"
-            />
-            {locLoading ? <ActivityIndicator size="small" /> : null}
-            {locQuery.trim().length ? (
-              <Pressable onPress={() => setLocQuery('')} hitSlop={10}>
-                <MaterialIcons name="close" size={18} color={c.muted} />
-              </Pressable>
-            ) : null}
-          </View>
-        ) : (
-          <View style={{ flex: 1 }} />
-        )}
-      </View>
-
-      {loading ? (
-        <View style={{ flex: 1 }}>
-          <ScrollView
-            style={{ flex: 1 }}
-            contentContainerStyle={{ paddingBottom: 16 }}
-            keyboardShouldPersistTaps="handled"
-            keyboardDismissMode="on-drag"
-          >
-            {renderLoadingSkeleton()}
-          </ScrollView>
-        </View>
-      ) : error ? (
-        <View style={styles.center}>
-          <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Couldn’t load</ThemedText>
-          <ThemedText style={{ color: c.muted }}>{error}</ThemedText>
-          <Pressable onPress={loadDesignations} style={[styles.primaryBtn, { backgroundColor: accent }]}>
-            <ThemedText type="defaultSemiBold" style={{ color: accentText }}>Retry</ThemedText>
-          </Pressable>
-        </View>
-      ) : !isAllowedRole ? (
-        <View style={styles.center}>
-          <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Not allowed</ThemedText>
-          <ThemedText style={{ color: c.muted }}>Your role can’t create reporters.</ThemedText>
-        </View>
-      ) : (
-        <View style={{ flex: 1 }}>
-          {Platform.OS === 'ios' ? (
-            <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding" keyboardVerticalOffset={80}>
-              <ScrollView
-                ref={scrollRef}
-                style={{ flex: 1 }}
-                contentContainerStyle={{ padding: 12, gap: 12, paddingBottom: scrollPadBottom, flexGrow: 1 }}
-                keyboardShouldPersistTaps="handled"
-                keyboardDismissMode="on-drag"
+              {/* Submit Button */}
+              <Pressable
+                style={[styles.submitBtn, !canSubmit && styles.btnDisabled]}
+                onPress={submit}
+                disabled={!canSubmit || submitting}
               >
-                {renderStepContent()}
-              </ScrollView>
-            </KeyboardAvoidingView>
-          ) : (
-            <ScrollView
-              ref={scrollRef}
-              style={{ flex: 1 }}
-              contentContainerStyle={{ padding: 12, gap: 12, paddingBottom: scrollPadBottom, flexGrow: 1 }}
-              keyboardShouldPersistTaps="handled"
-              keyboardDismissMode="on-drag"
-            >
-              {renderStepContent()}
-            </ScrollView>
+                {submitting ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <>
+                    <Ionicons name="person-add" size={20} color="#fff" />
+                    <Text style={styles.submitBtnText}>రిపోర్టర్ క్రియేట్ చేయండి</Text>
+                  </>
+                )}
+              </Pressable>
+            </View>
           )}
-        </View>
-      )}
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
+/* ─────────────────────────────  Styles  ───────────────────────────── */
+
 const styles = StyleSheet.create({
-  safe: { flex: 1 },
-  appBar: {
-    height: 54,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    gap: 12,
-    borderBottomWidth: 1,
-  },
-  appBarSearch: {
+  container: { flex: 1 },
+  loadingCenter: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
+  loadingText: { marginTop: 12, fontSize: 16 },
+  errorText: { marginTop: 12, fontSize: 16, textAlign: 'center' },
+  retryBtn: { marginTop: 20, paddingHorizontal: 24, paddingVertical: 12, backgroundColor: PRIMARY_COLOR, borderRadius: 8 },
+  retryBtnText: { color: '#fff', fontWeight: '600' },
+
+  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1 },
+  backBtn: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
+  headerCenter: { flex: 1, alignItems: 'center' },
+  headerTitle: { fontSize: 18, fontWeight: '700' },
+  headerStep: { fontSize: 13, marginTop: 2 },
+  headerSearchBox: {
     flex: 1,
-    height: 44,
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 12,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-  },
-  iconBtn: {
-    width: 40,
     height: 40,
-    borderRadius: 12,
+    borderRadius: 10,
     borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 16 },
-
-  card: { borderWidth: 1, borderRadius: 16, padding: 14 },
-  cardHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
-
-  selectedRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-
-  pickRow: {
-    borderWidth: 1,
-    borderRadius: 12,
     paddingHorizontal: 12,
-    paddingVertical: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-
-  inputRow: {
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    height: 44,
-    flexDirection: 'row',
-    alignItems: 'center',
     gap: 8,
+    marginRight: 8,
   },
-  input: { flex: 1, fontSize: 14, padding: 0, margin: 0 },
-
-  toggleRow: { flexDirection: 'row', gap: 10 },
-  toggleBtn: { flex: 1, paddingVertical: 12, borderRadius: 12, alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
-
-  subSwitchRow: {
-    borderWidth: 1,
-    borderRadius: 12,
-    padding: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-
-  subToggleWrap: {
-    flexDirection: 'row',
-    borderWidth: 1,
-    borderRadius: 14,
-    padding: 4,
-    gap: 6,
-  },
-  subToggleBtn: {
+  headerSearchInput: {
     flex: 1,
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  subToggleInner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
+    fontSize: 15,
+    padding: 0,
+    margin: 0,
   },
 
-  primaryBtn: { flexDirection: 'row', gap: 8, alignItems: 'center', justifyContent: 'center', paddingVertical: 12, borderRadius: 12 },
-  ghostBtn: { paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, borderWidth: 1 },
+  progressBar: { height: 4, backgroundColor: '#E5E7EB' },
+  progressFill: { height: '100%', backgroundColor: PRIMARY_COLOR },
 
-  errorBox: { flexDirection: 'row', gap: 8, alignItems: 'center', padding: 12, borderRadius: 12, borderWidth: 1 },
+  scrollView: { flex: 1 },
+  scrollContent: { padding: 16, paddingBottom: 40 },
 
-  selectedBox: {
-    marginTop: 12,
-    borderWidth: 1,
-    borderRadius: 12,
-    padding: 12,
+  stepContainer: { gap: 16 },
+  stepHeader: { alignItems: 'center', marginBottom: 8 },
+  stepIconCircle: { width: 64, height: 64, borderRadius: 32, justifyContent: 'center', alignItems: 'center', marginBottom: 12 },
+  stepTitle: { fontSize: 22, fontWeight: '700' },
+  stepSubtitle: { fontSize: 14, marginTop: 4, textAlign: 'center' },
+
+  // 2x2 Level Grid
+  levelGrid: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
+    flexWrap: 'wrap',
+    gap: 12,
+    marginBottom: 16,
   },
-
-  summaryRow: {
-    borderWidth: 1,
-    borderRadius: 12,
-    padding: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-
-  searchHintBtn: {
-    marginTop: 10,
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    flexDirection: 'row',
+  levelSquare: {
+    width: '47%',
+    aspectRatio: 1,
+    borderWidth: 2,
+    borderRadius: 20,
+    padding: 16,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
   },
+  levelAvatarCircle: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  levelAvatarEmoji: {
+    fontSize: 28,
+  },
+  micBadge: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  levelSquareTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  levelSquareCount: {
+    fontSize: 12,
+  },
+  levelSelectedBadge: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
 
-  locItem: {
+  searchBox: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, gap: 10 },
+  searchInput: { flex: 1, fontSize: 16 },
+
+  levelGroup: { marginTop: 16, marginBottom: 8 },
+  levelHeader: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    gap: 10, 
+    paddingHorizontal: 12, 
+    paddingVertical: 10, 
+    borderRadius: 10, 
+    marginBottom: 12 
+  },
+  levelIconBadge: { 
+    width: 32, 
+    height: 32, 
+    borderRadius: 8, 
+    justifyContent: 'center', 
+    alignItems: 'center' 
+  },
+  levelGroupTitle: { fontSize: 14, fontWeight: '700', flex: 1 },
+  levelCount: { 
+    paddingHorizontal: 10, 
+    paddingVertical: 4, 
+    borderRadius: 12 
+  },
+  levelCountText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+  designationGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  designationCard: {
+    width: '47%',
+    borderWidth: 1.5,
+    borderRadius: 14,
+    padding: 14,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    borderWidth: 1,
-    borderRadius: 12,
+    gap: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
   },
+  desigIcon: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+  designationName: { fontSize: 13, flex: 1, fontWeight: '500' },
+  selectedCheck: { position: 'absolute', top: 6, right: 6 },
+
+  selectedChip: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10 },
+  selectedChipText: { flex: 1, fontSize: 14, fontWeight: '600' },
+  changeBtn: { paddingHorizontal: 10, paddingVertical: 4, backgroundColor: PRIMARY_COLOR + '15', borderRadius: 6 },
+  changeBtnText: { fontSize: 12, color: PRIMARY_COLOR, fontWeight: '600' },
+
+  locationList: { gap: 10 },
+  locationItem: { flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderRadius: 12, padding: 14 },
+  locationItemSelected: { borderColor: SUCCESS_COLOR, borderWidth: 2, backgroundColor: SUCCESS_COLOR + '08' },
+  locIcon: { width: 40, height: 40, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+  locInfo: { flex: 1 },
+  locName: { fontSize: 15, fontWeight: '600' },
+  locSub: { fontSize: 12, marginTop: 2 },
+  noResults: { padding: 30, textAlign: 'center', fontSize: 14 },
+
+  hintBox: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 20, justifyContent: 'center' },
+  hintText: { fontSize: 14 },
+
+  summaryChips: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
+  summaryChip: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8, maxWidth: '48%' },
+  summaryChipText: { fontSize: 13, fontWeight: '500' },
+
+  inputGroup: { gap: 8 },
+  inputLabel: { fontSize: 14, fontWeight: '600' },
+  input: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 14, fontSize: 16 },
+  phoneInputRow: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 10, paddingHorizontal: 14 },
+  phonePrefix: { fontSize: 16, fontWeight: '600', marginRight: 8 },
+  phoneInput: { flex: 1, fontSize: 16, paddingVertical: 14 },
+
+  errorBox: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#FEE2E2', padding: 12, borderRadius: 8 },
+  errorBoxText: { color: '#DC2626', fontSize: 14, flex: 1 },
+
+  infoBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, backgroundColor: '#EEF2FF', padding: 12, borderRadius: 8 },
+  infoText: { color: '#4338CA', fontSize: 13, flex: 1, lineHeight: 18 },
+
+  primaryBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: PRIMARY_COLOR, paddingVertical: 16, borderRadius: 12, marginTop: 8 },
+  primaryBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  submitBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: SUCCESS_COLOR, paddingVertical: 16, borderRadius: 12, marginTop: 8 },
+  submitBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  btnDisabled: { opacity: 0.5 },
 });

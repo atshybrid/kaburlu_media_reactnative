@@ -1,56 +1,46 @@
-import { ThemedText } from '@/components/ThemedText';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { loadTokens } from '@/services/auth';
 import { getTenantReporters, type TenantReporter } from '@/services/reporters';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
-    Animated,
-    Easing,
     FlatList,
     Image,
     Pressable,
     RefreshControl,
     StyleSheet,
+    Text,
     TextInput,
     View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const PAGE_SIZE = 20;
-const SEARCH_HINTS = ['name', 'mobile', 'location'] as const;
+const PRIMARY_COLOR = '#DC2626';
+
+const LEVEL_TELUGU: Record<string, string> = {
+  STATE: 'రాష్ట్రం',
+  DISTRICT: 'జిల్లా',
+  ASSEMBLY: 'నియోజకవర్గం',
+  MANDAL: 'మండలం',
+  OTHER: 'ఇతరులు',
+};
 
 /* ─────────────────────────────  Helpers  ───────────────────────────── */
 
-function isValidHexColor(v?: string | null) {
-  if (!v) return false;
-  return /^#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})$/.test(String(v).trim());
-}
-
-function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+function alphaBg(hex: string, alpha: number, fallback: string) {
   const h = hex.trim();
-  if (!isValidHexColor(h)) return null;
+  if (!/^#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})$/.test(h)) return fallback;
   const raw = h.slice(1);
   const full = raw.length === 3 ? raw.split('').map((c) => c + c).join('') : raw;
   const n = parseInt(full, 16);
-  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
-}
-
-function alphaBg(hex: string, alpha: number, fallback: string) {
-  const rgb = hexToRgb(hex);
-  if (!rgb) return fallback;
-  return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${Math.max(0, Math.min(1, alpha))})`;
-}
-
-function pickReadableTextColor(bgHex?: string | null) {
-  const rgb = bgHex ? hexToRgb(bgHex) : null;
-  if (!rgb) return null;
-  const lum = (0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b) / 255;
-  return lum < 0.55 ? Colors.light.background : Colors.light.text;
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  return `rgba(${r}, ${g}, ${b}, ${Math.max(0, Math.min(1, alpha))})`;
 }
 
 function initials(name?: string | null) {
@@ -74,12 +64,12 @@ function normalizeLevel(level: TenantReporter['level']) {
   return 'OTHER';
 }
 
-const LEVEL_META: Record<string, { label: string; icon: keyof typeof MaterialIcons.glyphMap; color: string }> = {
-  STATE: { label: 'State', icon: 'public', color: '#6366f1' },
-  DISTRICT: { label: 'District', icon: 'location-city', color: '#f59e0b' },
-  MANDAL: { label: 'Mandal', icon: 'apartment', color: '#10b981' },
-  ASSEMBLY: { label: 'Assembly', icon: 'how-to-vote', color: '#ec4899' },
-  OTHER: { label: 'Other', icon: 'person-pin', color: '#8b5cf6' },
+const LEVEL_META: Record<string, { label: string; icon: keyof typeof MaterialIcons.glyphMap; color: string; emoji: string }> = {
+  STATE: { label: 'State', icon: 'public', color: '#7C3AED', emoji: '🏛️' },
+  DISTRICT: { label: 'District', icon: 'location-city', color: '#2563EB', emoji: '🏢' },
+  MANDAL: { label: 'Mandal', icon: 'apartment', color: '#D97706', emoji: '🏘️' },
+  ASSEMBLY: { label: 'Assembly', icon: 'how-to-vote', color: '#059669', emoji: '🗳️' },
+  OTHER: { label: 'Other', icon: 'person-pin', color: '#6B7280', emoji: '👤' },
 };
 
 /* ─────────────────────────────  Main Screen  ───────────────────────────── */
@@ -91,7 +81,6 @@ export default function TenantReportersScreen() {
   const params = useLocalSearchParams<{ kycFilter?: string }>();
 
   const [tenantId, setTenantId] = useState<string | null>(null);
-  const [brandPrimary, setBrandPrimary] = useState<string | null>(null);
   const [role, setRole] = useState<string>('');
 
   const [loading, setLoading] = useState(true);
@@ -100,18 +89,11 @@ export default function TenantReportersScreen() {
   const [reporters, setReporters] = useState<TenantReporter[]>([]);
 
   const [search, setSearch] = useState('');
+  const [searchActive, setSearchActive] = useState(false);
   const searchRef = useRef<TextInput>(null);
-  const [searchFocused, setSearchFocused] = useState(false);
-  const [hintIndex, setHintIndex] = useState(0);
-  const hintOpacity = useRef(new Animated.Value(1)).current;
-  const hintY = useRef(new Animated.Value(0)).current;
 
-  const [levelFilter, setLevelFilter] = useState<string | null>(null);
   const [kycFilter, setKycFilter] = useState<string | null>(() => params.kycFilter || null);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-
-  const primary = brandPrimary || c.tint;
-  const primaryText = pickReadableTextColor(primary) || Colors.light.background;
 
   /* ── Load data ── */
   const load = useCallback(async (isRefresh = false) => {
@@ -126,18 +108,13 @@ export default function TenantReportersScreen() {
       setTenantId(typeof tid === 'string' ? tid : null);
       setRole(String(t?.user?.role || ''));
 
-      const ds = session?.domainSettings;
-      const colors = ds?.data?.theme?.colors;
-      const pColor = colors?.primary || colors?.accent;
-      setBrandPrimary(isValidHexColor(pColor) ? String(pColor) : null);
-
       if (tid) {
         const list = await getTenantReporters(tid, { active: true });
         setReporters(Array.isArray(list) ? list : []);
         setVisibleCount(PAGE_SIZE);
       }
     } catch (e: any) {
-      setError(e?.message || 'Failed to load reporters');
+      setError(e?.message || 'లోడ్ కాలేదు');
       setReporters([]);
     } finally {
       setLoading(false);
@@ -149,32 +126,6 @@ export default function TenantReportersScreen() {
     useCallback(() => {
       load();
     }, [load]),
-  );
-
-  /* ── Search hint animation ── */
-  const animateHint = useCallback(() => {
-    if (searchFocused || search.trim().length) return;
-    Animated.sequence([
-      Animated.parallel([
-        Animated.timing(hintOpacity, { toValue: 0, duration: 120, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-        Animated.timing(hintY, { toValue: -8, duration: 120, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-      ]),
-      Animated.delay(40),
-    ]).start(() => {
-      hintY.setValue(8);
-      setHintIndex((i) => (i + 1) % SEARCH_HINTS.length);
-      Animated.parallel([
-        Animated.timing(hintOpacity, { toValue: 1, duration: 150, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-        Animated.timing(hintY, { toValue: 0, duration: 150, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-      ]).start();
-    });
-  }, [searchFocused, search, hintOpacity, hintY]);
-
-  useFocusEffect(
-    useCallback(() => {
-      const id = setInterval(animateHint, 2000);
-      return () => clearInterval(id);
-    }, [animateHint]),
   );
 
   const canCreate = useMemo(() => {
@@ -190,21 +141,23 @@ export default function TenantReportersScreen() {
   );
 
   /* ── Filtering ── */
-  const levelCounts = useMemo(() => {
-    const counts: Record<string, number> = { STATE: 0, DISTRICT: 0, MANDAL: 0, ASSEMBLY: 0, OTHER: 0 };
+  const designationCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
     for (const r of reporters) {
-      const k = normalizeLevel(r.level);
-      counts[k] = (counts[k] || 0) + 1;
+      const desig = r.designation?.name || 'ఇతరులు';
+      counts[desig] = (counts[desig] || 0) + 1;
     }
-    return (Object.keys(counts) as (keyof typeof counts)[])
-      .filter((k) => counts[k] > 0)
-      .map((k) => ({ key: k, ...LEVEL_META[k], count: counts[k] }));
+    return Object.entries(counts)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count); // Sort by count descending
   }, [reporters]);
+
+  const [desigFilter, setDesigFilter] = useState<string | null>(null);
 
   const baseFiltered = useMemo(() => {
     let list = reporters;
-    if (levelFilter) {
-      list = list.filter((r) => normalizeLevel(r.level) === levelFilter);
+    if (desigFilter) {
+      list = list.filter((r) => (r.designation?.name || 'ఇతరులు') === desigFilter);
     }
     if (kycFilter) {
       list = list.filter((r) => {
@@ -222,7 +175,7 @@ export default function TenantReportersScreen() {
       });
     }
     return list;
-  }, [reporters, levelFilter, kycFilter]);
+  }, [reporters, desigFilter, kycFilter]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -241,152 +194,111 @@ export default function TenantReportersScreen() {
 
   const renderHeader = () => (
     <View style={styles.headerWrap}>
-      {/* Gradient Hero */}
-      <LinearGradient
-        colors={[primary, alphaBg(primary, 0.85, primary)]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.hero}
-      >
-        <Pressable
-          onPress={() => router.back()}
-          style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.8 }]}
-          hitSlop={12}
-        >
-          <MaterialIcons name="arrow-back" size={22} color={primaryText} />
-        </Pressable>
-
-        <View style={styles.heroContent}>
-          <ThemedText type="title" style={[styles.heroTitle, { color: primaryText }]}>
-            Reporters
-          </ThemedText>
-          <ThemedText style={[styles.heroSubtitle, { color: alphaBg(primaryText, 0.8, primaryText) }]}>
-            {reporters.length} total • Manage your team
-          </ThemedText>
-        </View>
-
-        {/* Stats Pills */}
-        <View style={styles.statsPillRow}>
-          {levelCounts.slice(0, 4).map((item) => (
-            <View key={item.key} style={[styles.statsPill, { backgroundColor: alphaBg('#fff', 0.2, '#fff') }]}>
-              <MaterialIcons name={item.icon} size={14} color={primaryText} />
-              <ThemedText style={[styles.statsPillText, { color: primaryText }]}>
-                {item.count} {item.label}
-              </ThemedText>
-            </View>
-          ))}
-        </View>
-      </LinearGradient>
-
-      {/* Search Bar - overlapping hero */}
-      <View style={styles.searchContainer}>
-        <View style={[styles.searchBar, { backgroundColor: c.card, borderColor: c.border }]}>
-          <MaterialIcons name="search" size={20} color={c.muted} />
-          <View style={styles.searchInputWrap}>
-            {!searchFocused && !search.trim() ? (
-              <Animated.View
-                style={[styles.searchHintWrap, { opacity: hintOpacity, transform: [{ translateY: hintY }] }]}
-                pointerEvents="none"
-              >
-                <ThemedText style={[styles.searchHint, { color: c.muted }]}>
-                  Search by {SEARCH_HINTS[hintIndex]}...
-                </ThemedText>
-              </Animated.View>
-            ) : null}
+      {/* Header with Search */}
+      <View style={[styles.simpleHeader, { backgroundColor: c.background, borderBottomColor: c.border }]}>
+        <View style={styles.headerRow}>
+          <Pressable
+            onPress={() => {
+              if (searchActive) {
+                setSearchActive(false);
+                setSearch('');
+              } else {
+                router.back();
+              }
+            }}
+            style={({ pressed }) => [styles.backBtnSimple, pressed && { opacity: 0.7 }]}
+            hitSlop={12}
+          >
+            <MaterialIcons name="arrow-back" size={24} color={c.text} />
+          </Pressable>
+          
+          {searchActive ? (
             <TextInput
               ref={searchRef}
+              style={[styles.headerSearchInput, { color: c.text, backgroundColor: c.card, borderColor: c.border }]}
+              placeholder="పేరు, ఫోన్ లేదా ప్రాంతం..."
+              placeholderTextColor={c.muted}
               value={search}
               onChangeText={setSearch}
-              onFocus={() => setSearchFocused(true)}
-              onBlur={() => setSearchFocused(false)}
-              placeholder={searchFocused ? 'Search name, mobile, location...' : ''}
-              placeholderTextColor={c.muted}
-              style={[styles.searchInput, { color: c.text }]}
+              autoFocus
               returnKeyType="search"
             />
-          </View>
-          {!!search && (
-            <Pressable onPress={() => setSearch('')} hitSlop={10}>
-              <MaterialIcons name="close" size={18} color={c.muted} />
-            </Pressable>
+          ) : (
+            <View style={styles.headerTitleSection}>
+              <Text style={[styles.simpleTitle, { color: c.text }]}>మై రిపోర్టర్స్</Text>
+              <Text style={[styles.simpleCount, { color: c.muted }]}>{reporters.length} మంది</Text>
+            </View>
           )}
+          
+          <Pressable
+            onPress={() => {
+              if (searchActive) {
+                setSearch('');
+              } else {
+                setSearchActive(true);
+              }
+            }}
+            style={({ pressed }) => [styles.headerSearchBtn, pressed && { opacity: 0.7 }]}
+            hitSlop={12}
+          >
+            <MaterialIcons name={searchActive && search ? 'close' : 'search'} size={24} color={c.text} />
+          </Pressable>
         </View>
       </View>
 
-      {/* Level Filter Chips */}
-      {levelCounts.length > 0 && (
+      {/* Designation Filter */}
+      {designationCounts.length > 1 && (
         <View style={styles.filterRow}>
           <Pressable
-            onPress={() => setLevelFilter(null)}
+            onPress={() => setDesigFilter(null)}
             style={[
-              styles.filterChip,
-              {
-                backgroundColor: !levelFilter ? primary : c.card,
-                borderColor: !levelFilter ? primary : c.border,
-              },
+              styles.simpleChip,
+              { backgroundColor: !desigFilter ? PRIMARY_COLOR : c.card, borderColor: !desigFilter ? PRIMARY_COLOR : c.border },
             ]}
           >
-            <ThemedText style={{ color: !levelFilter ? primaryText : c.text, fontSize: 13, fontWeight: '600' }}>
-              All
-            </ThemedText>
+            <Text style={{ color: !desigFilter ? '#fff' : c.text, fontSize: 14, fontWeight: '600' }}>
+              అందరూ ({reporters.length})
+            </Text>
           </Pressable>
-          {levelCounts.map((item) => {
-            const isActive = levelFilter === item.key;
+          {designationCounts.map((item) => {
+            const isActive = desigFilter === item.name;
             return (
               <Pressable
-                key={item.key}
-                onPress={() => setLevelFilter(isActive ? null : item.key)}
+                key={item.name}
+                onPress={() => setDesigFilter(isActive ? null : item.name)}
                 style={[
-                  styles.filterChip,
-                  {
-                    backgroundColor: isActive ? item.color : c.card,
-                    borderColor: isActive ? item.color : c.border,
-                  },
+                  styles.simpleChip,
+                  { backgroundColor: isActive ? PRIMARY_COLOR : c.card, borderColor: isActive ? PRIMARY_COLOR : c.border },
                 ]}
               >
-                <MaterialIcons name={item.icon} size={14} color={isActive ? '#fff' : item.color} />
-                <ThemedText style={{ color: isActive ? '#fff' : c.text, fontSize: 13, fontWeight: '500' }}>
-                  {item.label}
-                </ThemedText>
-                <View style={[styles.filterBadge, { backgroundColor: isActive ? alphaBg('#fff', 0.3, '#fff') : alphaBg(item.color, 0.15, c.background) }]}>
-                  <ThemedText style={{ color: isActive ? '#fff' : item.color, fontSize: 11, fontWeight: '700' }}>
-                    {item.count}
-                  </ThemedText>
-                </View>
+                <Text style={{ color: isActive ? '#fff' : c.text, fontSize: 14, fontWeight: '500' }}>
+                  {item.name} ({item.count})
+                </Text>
               </Pressable>
             );
           })}
         </View>
       )}
 
-      {/* KYC Filter Chips */}
+      {/* KYC Filter Banner */}
       {kycFilter && (
-        <View style={[styles.filterRow, { paddingTop: 0 }]}>
-          <View style={[styles.kycFilterBanner, { backgroundColor: alphaBg('#f59e0b', 0.1, c.background), borderColor: alphaBg('#f59e0b', 0.3, c.border) }]}>
-            <MaterialIcons name="verified-user" size={16} color="#f59e0b" />
-            <ThemedText style={{ color: '#f59e0b', fontSize: 13, fontWeight: '600', flex: 1 }}>
-              Showing: {kycFilter === 'PENDING' ? 'Pending KYC' : kycFilter === 'APPROVED' ? 'KYC Approved' : 'KYC Rejected'}
-            </ThemedText>
+        <View style={styles.kycBanner}>
+          <View style={[styles.kycBannerContent, { backgroundColor: '#FEF3C7', borderColor: '#F59E0B' }]}>
+            <MaterialIcons name="info" size={18} color="#D97706" />
+            <Text style={{ color: '#92400E', fontSize: 13, flex: 1 }}>
+              {kycFilter === 'PENDING' ? 'KYC పెండింగ్' : kycFilter === 'APPROVED' ? 'KYC అప్రూవ్డ్' : 'KYC రిజెక్ట్'} వాళ్ళు మాత్రమే
+            </Text>
             <Pressable onPress={() => setKycFilter(null)} hitSlop={8}>
-              <MaterialIcons name="close" size={18} color="#f59e0b" />
+              <MaterialIcons name="close" size={18} color="#D97706" />
             </Pressable>
           </View>
-        </View>
-      )}
-
-      {/* Results count */}
-      {!loading && filtered.length > 0 && (
-        <View style={styles.resultsRow}>
-          <ThemedText style={{ color: c.muted, fontSize: 13 }}>
-            Showing {visible.length} of {filtered.length} reporters
-          </ThemedText>
         </View>
       )}
     </View>
   );
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['bottom']}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['top', 'bottom']}>
       {loading ? (
         <View style={{ flex: 1 }}>
           {renderHeader()}
@@ -398,19 +310,17 @@ export default function TenantReportersScreen() {
         </View>
       ) : error ? (
         <View style={styles.centerError}>
-          <View style={[styles.errorIcon, { backgroundColor: alphaBg('#ef4444', 0.1, c.background) }]}>
-            <MaterialIcons name="error-outline" size={48} color="#ef4444" />
+          <View style={[styles.errorIcon, { backgroundColor: '#FEE2E2' }]}>
+            <MaterialIcons name="error-outline" size={48} color="#DC2626" />
           </View>
-          <ThemedText type="defaultSemiBold" style={[styles.errorTitle, { color: c.text }]}>
-            Failed to load
-          </ThemedText>
-          <ThemedText style={[styles.errorText, { color: c.muted }]}>{error}</ThemedText>
+          <Text style={[styles.errorTitle, { color: c.text }]}>లోడ్ కాలేదు</Text>
+          <Text style={[styles.errorText, { color: c.muted }]}>{error}</Text>
           <Pressable
             onPress={() => load()}
-            style={({ pressed }) => [styles.retryBtn, { backgroundColor: primary }, pressed && { opacity: 0.9 }]}
+            style={({ pressed }) => [styles.retryBtn, { backgroundColor: PRIMARY_COLOR }, pressed && { opacity: 0.9 }]}
           >
-            <MaterialIcons name="refresh" size={18} color={primaryText} />
-            <ThemedText style={{ color: primaryText, fontWeight: '600' }}>Try Again</ThemedText>
+            <MaterialIcons name="refresh" size={18} color="#fff" />
+            <Text style={{ color: '#fff', fontWeight: '600' }}>మళ్ళీ ప్రయత్నించండి</Text>
           </Pressable>
         </View>
       ) : (
@@ -424,15 +334,14 @@ export default function TenantReportersScreen() {
             <RefreshControl
               refreshing={refreshing}
               onRefresh={() => load(true)}
-              colors={[primary]}
-              tintColor={primary}
+              colors={[PRIMARY_COLOR]}
+              tintColor={PRIMARY_COLOR}
             />
           }
           renderItem={({ item }) => (
             <ReporterCard
               item={item}
               scheme={scheme}
-              accent={primary}
               onOpen={() => openReporter(item.id)}
             />
           )}
@@ -443,15 +352,15 @@ export default function TenantReportersScreen() {
           }}
           ListEmptyComponent={
             <View style={styles.emptyState}>
-              <View style={[styles.emptyIcon, { backgroundColor: alphaBg(primary, 0.1, c.background) }]}>
-                <MaterialIcons name="person-search" size={48} color={primary} />
+              <View style={[styles.emptyIcon, { backgroundColor: '#FEE2E2' }]}>
+                <MaterialIcons name="people-outline" size={48} color={PRIMARY_COLOR} />
               </View>
-              <ThemedText type="defaultSemiBold" style={{ color: c.text, marginTop: 16 }}>
-                No reporters found
-              </ThemedText>
-              <ThemedText style={{ color: c.muted, textAlign: 'center', marginTop: 6 }}>
-                {search ? 'Try a different search term' : 'Add your first reporter to get started'}
-              </ThemedText>
+              <Text style={{ color: c.text, marginTop: 16, fontSize: 16, fontWeight: '600' }}>
+                {search ? 'ఎవరూ కనుగొనబడలేదు' : 'రిపోర్టర్లు లేరు'}
+              </Text>
+              <Text style={{ color: c.muted, textAlign: 'center', marginTop: 6 }}>
+                {search ? 'వేరే పేరుతో వెతకండి' : 'మొదటి రిపోర్టర్ ని యాడ్ చేయండి'}
+              </Text>
             </View>
           }
         />
@@ -461,9 +370,9 @@ export default function TenantReportersScreen() {
       {canCreate && !loading && !error && (
         <Pressable
           onPress={() => router.push('/tenant/create-reporter')}
-          style={({ pressed }) => [styles.fab, { backgroundColor: primary }, pressed && { transform: [{ scale: 0.95 }] }]}
+          style={({ pressed }) => [styles.fab, { backgroundColor: PRIMARY_COLOR }, pressed && { transform: [{ scale: 0.95 }] }]}
         >
-          <MaterialIcons name="person-add" size={24} color={primaryText} />
+          <MaterialIcons name="person-add" size={24} color="#fff" />
         </Pressable>
       )}
     </SafeAreaView>
@@ -475,12 +384,10 @@ export default function TenantReportersScreen() {
 function ReporterCard({
   item,
   scheme,
-  accent,
   onOpen,
 }: {
   item: TenantReporter;
   scheme: 'light' | 'dark';
-  accent: string;
   onOpen: () => void;
 }) {
   const c = Colors[scheme];
@@ -497,7 +404,6 @@ function ReporterCard({
   const kycPending = ['PENDING', 'IN_PROGRESS', 'SUBMITTED', 'REVIEW'].some((t) => kyc.includes(t));
 
   const subActive = !!item.subscriptionActive;
-  const autoPublish = item.autoPublish === true;
 
   return (
     <Pressable
@@ -509,96 +415,32 @@ function ReporterCard({
         pressed && styles.cardPressed,
       ]}
     >
-      {/* Left accent bar */}
-      <View style={[styles.cardAccent, { backgroundColor: levelMeta.color }]} />
-
       {/* Avatar */}
-      <View style={[styles.avatar, { backgroundColor: alphaBg(levelMeta.color, 0.12, c.background), borderColor: alphaBg(levelMeta.color, 0.25, c.border) }]}>
+      <View style={[styles.avatar, { backgroundColor: levelMeta.color + '20', borderColor: levelMeta.color }]}>
         {item.profilePhotoUrl ? (
           <Image source={{ uri: item.profilePhotoUrl }} style={styles.avatarImg} resizeMode="cover" />
         ) : (
-          <ThemedText type="defaultSemiBold" style={{ color: levelMeta.color, fontSize: 18 }}>
+          <Text style={{ color: levelMeta.color, fontSize: 20, fontWeight: '700' }}>
             {initials(name)}
-          </ThemedText>
+          </Text>
         )}
       </View>
 
       {/* Content */}
       <View style={styles.cardContent}>
-        <View style={styles.cardTopRow}>
-          <ThemedText type="defaultSemiBold" style={[styles.cardName, { color: c.text }]} numberOfLines={1}>
-            {name}
-          </ThemedText>
-          <View style={[styles.levelTag, { backgroundColor: alphaBg(levelMeta.color, 0.12, c.background) }]}>
-            <MaterialIcons name={levelMeta.icon} size={12} color={levelMeta.color} />
-            <ThemedText style={{ color: levelMeta.color, fontSize: 11, fontWeight: '600' }}>
-              {levelMeta.label}
-            </ThemedText>
-          </View>
-        </View>
-
-        <ThemedText style={[styles.cardDesignation, { color: c.muted }]} numberOfLines={1}>
-          {designation}
-        </ThemedText>
-
-        <View style={styles.cardMetaRow}>
-          <View style={styles.cardMeta}>
-            <MaterialIcons name="phone" size={13} color={c.muted} />
-            <ThemedText style={{ color: c.text, fontSize: 12 }}>{mobile}</ThemedText>
-          </View>
-          <View style={styles.cardMeta}>
-            <MaterialIcons name="place" size={13} color={c.muted} />
-            <ThemedText style={{ color: c.text, fontSize: 12 }} numberOfLines={1}>{location}</ThemedText>
-          </View>
-        </View>
-
-        {/* Status badges */}
-        <View style={styles.statusRow}>
-          <View
-            style={[
-              styles.statusBadge,
-              {
-                backgroundColor: kycOk ? alphaBg('#10b981', 0.12, c.background) : kycPending ? alphaBg('#f59e0b', 0.12, c.background) : alphaBg(c.muted, 0.1, c.background),
-              },
-            ]}
-          >
-            <MaterialIcons
-              name={kycOk ? 'verified' : kycPending ? 'pending' : 'help-outline'}
-              size={12}
-              color={kycOk ? '#10b981' : kycPending ? '#f59e0b' : c.muted}
-            />
-            <ThemedText style={{ color: kycOk ? '#10b981' : kycPending ? '#f59e0b' : c.muted, fontSize: 11 }}>
-              KYC
-            </ThemedText>
-          </View>
-
-          <View
-            style={[
-              styles.statusBadge,
-              { backgroundColor: subActive ? alphaBg('#10b981', 0.12, c.background) : alphaBg(c.muted, 0.1, c.background) },
-            ]}
-          >
-            <MaterialIcons
-              name={subActive ? 'check-circle' : 'cancel'}
-              size={12}
-              color={subActive ? '#10b981' : c.muted}
-            />
-            <ThemedText style={{ color: subActive ? '#10b981' : c.muted, fontSize: 11 }}>
-              {subActive ? 'Active' : 'Inactive'}
-            </ThemedText>
-          </View>
-
-          {autoPublish && (
-            <View style={[styles.statusBadge, { backgroundColor: alphaBg(accent, 0.12, c.background) }]}>
-              <MaterialIcons name="flash-on" size={12} color={accent} />
-              <ThemedText style={{ color: accent, fontSize: 11 }}>Auto</ThemedText>
-            </View>
-          )}
-        </View>
+        <Text style={[styles.cardName, { color: c.text }]} numberOfLines={1}>
+          {name}
+        </Text>
+        <Text style={[styles.cardSub, { color: c.muted }]} numberOfLines={1}>
+          {designation} • {location}
+        </Text>
+        <Text style={[styles.cardPhone, { color: c.text }]}>📞 {mobile}</Text>
       </View>
 
-      {/* Chevron */}
-      <MaterialIcons name="chevron-right" size={22} color={c.muted} style={styles.chevron} />
+      {/* Status indicator */}
+      <View style={[styles.statusDot, { backgroundColor: subActive ? '#10B981' : '#EF4444' }]} />
+      
+      <MaterialIcons name="chevron-right" size={24} color={c.muted} />
     </Pressable>
   );
 }
@@ -609,22 +451,11 @@ function ReporterCardSkeleton({ scheme }: { scheme: 'light' | 'dark' }) {
   const c = Colors[scheme];
   return (
     <View style={[styles.card, { backgroundColor: c.card, borderColor: c.border }]}>
-      <View style={[styles.cardAccent, { backgroundColor: c.border }]} />
-      <Skeleton width={52} height={52} borderRadius={26} />
+      <Skeleton width={56} height={56} borderRadius={28} />
       <View style={[styles.cardContent, { gap: 8 }]}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-          <Skeleton width="60%" height={16} borderRadius={8} />
-          <Skeleton width={60} height={20} borderRadius={10} />
-        </View>
-        <Skeleton width="40%" height={12} borderRadius={6} />
-        <View style={{ flexDirection: 'row', gap: 16 }}>
-          <Skeleton width={80} height={12} borderRadius={6} />
-          <Skeleton width={90} height={12} borderRadius={6} />
-        </View>
-        <View style={{ flexDirection: 'row', gap: 8 }}>
-          <Skeleton width={50} height={22} borderRadius={11} />
-          <Skeleton width={55} height={22} borderRadius={11} />
-        </View>
+        <Skeleton width="70%" height={18} borderRadius={8} />
+        <Skeleton width="50%" height={14} borderRadius={6} />
+        <Skeleton width={100} height={14} borderRadius={6} />
       </View>
     </View>
   );
@@ -635,68 +466,84 @@ function ReporterCardSkeleton({ scheme }: { scheme: 'light' | 'dark' }) {
 const styles = StyleSheet.create({
   safe: { flex: 1 },
 
-  /* Header / Hero */
+  /* Header */
   headerWrap: { marginBottom: 8 },
-  hero: {
-    paddingTop: 52,
-    paddingBottom: 50,
-    paddingHorizontal: 20,
-    borderBottomLeftRadius: 28,
-    borderBottomRightRadius: 28,
+
+  /* Simple Header */
+  simpleHeader: {
+    paddingTop: 12,
+    paddingBottom: 16,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
   },
-  backBtn: {
-    position: 'absolute',
-    top: 12,
-    left: 16,
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  backBtnSimple: {
     width: 40,
     height: 40,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  heroContent: { marginTop: 8 },
-  heroTitle: { fontSize: 28, fontWeight: '700' },
-  heroSubtitle: { fontSize: 14, marginTop: 4 },
-  statsPillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 16 },
-  statsPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 20 },
-  statsPillText: { fontSize: 12, fontWeight: '500' },
-
-  /* Search */
-  searchContainer: { marginTop: -24, marginHorizontal: 16 },
-  searchBar: {
-    flexDirection: 'row',
+  headerTitleSection: {
+    flex: 1,
+  },
+  simpleTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+  },
+  simpleCount: {
+    fontSize: 13,
+    marginTop: 2,
+  },
+  headerSearchBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: 'center',
-    height: 50,
-    borderRadius: 14,
+    justifyContent: 'center',
+  },
+  headerSearchInput: {
+    flex: 1,
+    height: 42,
+    borderRadius: 10,
     borderWidth: 1,
     paddingHorizontal: 14,
-    gap: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
+    fontSize: 15,
   },
-  searchInputWrap: { flex: 1, height: '100%', justifyContent: 'center' },
-  searchHintWrap: { position: 'absolute', left: 0, right: 0 },
-  searchHint: { fontSize: 14 },
-  searchInput: { fontSize: 15, padding: 0, margin: 0, flex: 1 },
 
   /* Filter chips */
-  filterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 16, paddingHorizontal: 16 },
-  filterChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 20,
+  filterRow: { 
+    flexDirection: 'row', 
+    flexWrap: 'wrap', 
+    gap: 10, 
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+  },
+  simpleChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
     borderWidth: 1,
   },
-  filterBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8, marginLeft: 2 },
 
-  resultsRow: { paddingHorizontal: 16, marginTop: 16 },
+  /* KYC Banner */
+  kycBanner: {
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+  },
+  kycBannerContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
 
   /* List */
   listContent: { paddingHorizontal: 16, paddingBottom: 100 },
@@ -707,33 +554,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 14,
     marginBottom: 12,
-    borderRadius: 16,
+    borderRadius: 14,
     borderWidth: 1,
-    overflow: 'hidden',
-    gap: 12,
+    gap: 14,
   },
-  cardPressed: { opacity: 0.95, transform: [{ scale: 0.995 }] },
-  cardAccent: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 4 },
+  cardPressed: { opacity: 0.9 },
   avatar: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
   },
   avatarImg: { width: '100%', height: '100%' },
-  cardContent: { flex: 1, minWidth: 0 },
-  cardTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  cardName: { fontSize: 16, flex: 1, minWidth: 0 },
-  levelTag: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
-  cardDesignation: { fontSize: 13, marginTop: 2 },
-  cardMetaRow: { flexDirection: 'row', gap: 14, marginTop: 6 },
-  cardMeta: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  statusRow: { flexDirection: 'row', gap: 6, marginTop: 8 },
-  statusBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 10 },
-  chevron: { marginLeft: 4 },
+  cardContent: { flex: 1, gap: 3 },
+  cardName: { fontSize: 16, fontWeight: '600' },
+  cardSub: { fontSize: 13 },
+  cardPhone: { fontSize: 13, marginTop: 2 },
+  statusDot: { width: 10, height: 10, borderRadius: 5 },
 
   /* Empty / Error */
   emptyState: { alignItems: 'center', paddingVertical: 48, paddingHorizontal: 24 },
@@ -759,17 +599,5 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 8,
     elevation: 6,
-  },
-
-  /* KYC Filter Banner */
-  kycFilterBanner: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 12,
-    borderWidth: 1,
   },
 });

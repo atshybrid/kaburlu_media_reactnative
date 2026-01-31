@@ -17,15 +17,13 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useSta
 import {
     ActivityIndicator,
     Dimensions,
-    Modal,
     Platform,
-    ScrollView,
     StyleSheet,
     Text,
     View
 } from 'react-native';
 import RNShare from 'react-native-share';
-import { captureRef } from 'react-native-view-shot';
+import ViewShot from 'react-native-view-shot';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const IMAGE_WIDTH = Math.min(SCREEN_WIDTH - 32, 400); // Max width for shareable image
@@ -114,11 +112,11 @@ function getLocationString(reporter: ShareableArticleData['reporter']): string {
 
 const ShareableArticleImage = forwardRef<ShareableArticleImageRef, Props>(
   ({ article, tenantName: propTenantName, tenantLogoUrl: propTenantLogoUrl, tenantPrimaryColor, onCaptureStart, onCaptureEnd, visible = true }, ref) => {
-    const viewShotRef = useRef<View>(null);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const viewShotRef = useRef<any>(null);
     const [tenantName, setTenantName] = useState(propTenantName || '');
     const [tenantLogoUrl, setTenantLogoUrl] = useState(propTenantLogoUrl || '');
     const [primaryColor, setPrimaryColor] = useState(tenantPrimaryColor || PRIMARY_COLOR);
-    const [showModal, setShowModal] = useState(false);
     const [capturing, setCapturing] = useState(false);
     const [imagesLoaded, setImagesLoaded] = useState(0);
     const totalImages = useRef(0);
@@ -169,25 +167,28 @@ const ShareableArticleImage = forwardRef<ShareableArticleImageRef, Props>(
       await new Promise(resolve => setTimeout(resolve, 500));
     }, [imagesLoaded]);
 
-    // Capture image using captureRef
+    // Capture image using ViewShot component
     const capture = useCallback(async (): Promise<string | null> => {
+      console.log('[ShareableArticle] capture() called, viewShotRef:', !!viewShotRef.current);
       if (!viewShotRef.current) {
-        console.error('[ShareableArticle] viewShotRef is null');
+        console.error('[ShareableArticle] viewShotRef is null - Modal may not be fully rendered');
         return null;
       }
       setCapturing(true);
       onCaptureStart?.();
       try {
         // Wait for images to load
+        console.log('[ShareableArticle] Waiting for images...', { loaded: imagesLoaded, total: totalImages.current });
         await waitForImages();
+        console.log('[ShareableArticle] Images loaded, capturing view...');
         
-        // Use captureRef instead of ViewShot.capture
-        const uri = await captureRef(viewShotRef, {
-          format: 'png',
-          quality: 1,
-          result: 'tmpfile',
-        });
-        console.log('[ShareableArticle] Captured:', uri);
+        // Use ViewShot component's capture method (like ArticlePage.tsx does)
+        const uri = await viewShotRef.current.capture?.();
+        if (!uri) {
+          console.error('[ShareableArticle] ViewShot capture returned null');
+          return null;
+        }
+        console.log('[ShareableArticle] Captured successfully:', uri);
         return uri;
       } catch (e) {
         console.error('[ShareableArticle] Capture failed:', e);
@@ -196,30 +197,42 @@ const ShareableArticleImage = forwardRef<ShareableArticleImageRef, Props>(
         setCapturing(false);
         onCaptureEnd?.();
       }
-    }, [onCaptureStart, onCaptureEnd, waitForImages]);
+    }, [onCaptureStart, onCaptureEnd, waitForImages, imagesLoaded]);
 
     // Capture and share - uses react-native-share to send image + URL together
     const captureAndShare = useCallback(async (): Promise<void> => {
       console.log('[ShareableArticle] Starting captureAndShare...');
-      setShowModal(true);
       
-      // Wait for modal to open and render
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // ViewShot is always rendered off-screen, so we just need to wait for images
+      // Wait a bit for images to load (off-screen component is always mounted)
+      await new Promise(resolve => setTimeout(resolve, 800));
+      console.log('[ShareableArticle] Attempting capture...');
       
       const uri = await capture();
-      setShowModal(false);
       
+      const shareUrl = article.webArticleUrl || '';
+      const shareMessage = shareUrl 
+        ? `${article.title}\n\n📰 Read full article: ${shareUrl}` 
+        : article.title;
+      
+      // If capture failed, fall back to text-only share
       if (!uri) {
-        console.error('[ShareableArticle] No URI from capture');
+        console.warn('[ShareableArticle] Image capture failed, falling back to text share');
+        try {
+          await RNShare.open({
+            title: article.title,
+            message: shareMessage,
+            failOnCancel: false,
+          });
+        } catch (e: any) {
+          if (e?.message !== 'User did not share') {
+            console.error('[ShareableArticle] Text share failed:', e);
+          }
+        }
         return;
       }
       
       try {
-        const shareUrl = article.webArticleUrl || '';
-        const shareMessage = shareUrl 
-          ? `${article.title}\n\n📰 Read full article: ${shareUrl}` 
-          : article.title;
-
         // Use react-native-share which supports image + text together
         await RNShare.open({
           title: article.title,
@@ -287,13 +300,17 @@ const ShareableArticleImage = forwardRef<ShareableArticleImageRef, Props>(
 
     if (!visible) return null;
 
-    // Render content for capture
-    const renderContent = () => (
-      <View 
-        ref={viewShotRef}
-        collapsable={false}
-        style={[styles.captureView, { width: IMAGE_WIDTH }]}
-      >
+    // Render ViewShot OFF-SCREEN (always rendered, not inside Modal)
+    // This ensures the ref is always valid for capture
+    return (
+      <>
+        {/* Off-screen ViewShot - always rendered but hidden */}
+        <View style={{ position: 'absolute', top: -99999, left: -99999 }} pointerEvents="none">
+          <ViewShot 
+            ref={viewShotRef}
+            options={{ format: 'png', quality: 1, result: 'tmpfile' }}
+            style={[styles.captureView, { width: IMAGE_WIDTH }]}
+          >
         {/* Background */}
         <View style={[styles.cardBg, { backgroundColor: '#FFFBF5' }]}>
             {/* ── Header: Logo Only (Centered) ── */}
@@ -470,35 +487,19 @@ const ShareableArticleImage = forwardRef<ShareableArticleImageRef, Props>(
               )}
             </View>
           </View>
+        </ViewShot>
         </View>
-    );
 
-    return (
-      <Modal
-        visible={showModal}
-        transparent={true}
-        animationType="none"
-        statusBarTranslucent
-        onRequestClose={() => setShowModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <ScrollView 
-            contentContainerStyle={styles.modalContent}
-            showsVerticalScrollIndicator={false}
-          >
-            {renderContent()}
-          </ScrollView>
-          {/* Capturing indicator */}
-          {capturing && (
-            <View style={styles.capturingOverlay}>
-              <View style={styles.capturingBox}>
-                <ActivityIndicator size="large" color={primaryColor} />
-                <Text style={styles.capturingText}>Preparing image...</Text>
-              </View>
+        {/* Optional: Show capturing indicator overlay on the whole screen */}
+        {capturing && (
+          <View style={styles.capturingOverlayFullScreen}>
+            <View style={styles.capturingBox}>
+              <ActivityIndicator size="large" color={primaryColor} />
+              <Text style={styles.capturingText}>Preparing image...</Text>
             </View>
-          )}
-        </View>
-      </Modal>
+          </View>
+        )}
+      </>
     );
   }
 );
@@ -534,6 +535,17 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  capturingOverlayFullScreen: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 9999,
   },
   capturingBox: {
     backgroundColor: '#fff',

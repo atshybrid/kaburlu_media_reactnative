@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
-import { Platform } from 'react-native';
+import { Platform, Vibration } from 'react-native';
 import { router } from 'expo-router';
 
 type PushStatus = 'granted' | 'denied' | 'undetermined';
@@ -9,68 +9,181 @@ type PushStatus = 'granted' | 'denied' | 'undetermined';
 const PUSH_TOKEN_KEY = 'push_token';
 const PUSH_PERMISSION_PROMPTED_KEY = 'push_permission_prompted_v1';
 let initDone = false;
+let listenersSetup = false;
 let cachedToken: string | undefined;
 
-// Ensure foreground notifications show a banner/toast
+// Ensure foreground notifications show a banner/toast with sound
 Notifications.setNotificationHandler({
-	handleNotification: async () => ({
-		shouldShowAlert: true,
-		shouldPlaySound: true,
-		shouldSetBadge: false,
-		// Newer SDKs
-		shouldShowBanner: true as any,
-		shouldShowList: true as any,
-	} as any),
+	handleNotification: async (notification) => {
+		// Vibrate when notification arrives in foreground
+		Vibration.vibrate([0, 250, 100, 250]);
+		
+		console.log('[NOTIF] Foreground notification received, playing sound and vibrating');
+		
+		return {
+			shouldShowAlert: true,
+			shouldPlaySound: true,
+			shouldSetBadge: true,
+			// Newer SDKs
+			shouldShowBanner: true as any,
+			shouldShowList: true as any,
+		} as any;
+	},
 });
 
 // Handle notification tap - navigate to article
-function handleNotificationTap(data: any) {
+function handleNotificationTap(data: any, retryCount = 0) {
 	try {
-		console.log('[NOTIF] Handling tap with data:', JSON.stringify(data));
-		if (data?.articleId) {
-			router.push({ pathname: '/article/[id]', params: { id: data.articleId } });
-		} else if (data?.shortId) {
-			router.push({ pathname: '/article/[id]', params: { id: data.shortId, isShortId: 'true' } });
-		} else if (data?.shortNewsId) {
-			router.push({ pathname: '/article/[id]', params: { id: data.shortNewsId } });
+		// Log ALL keys in the data object to understand backend format
+		console.log('[NOTIF] ========================================');
+		console.log('[NOTIF] Handling tap with data:', JSON.stringify(data, null, 2));
+		console.log('[NOTIF] Data keys:', Object.keys(data || {}));
+		console.log('[NOTIF] Retry count:', retryCount);
+		console.log('[NOTIF] ========================================');
+		
+		// Determine the target ID - check multiple possible field names
+		let targetId: string | null = null;
+		let isShortId = false;
+		
+		// Try various possible field names the backend might use
+		targetId = 
+			data?.shortNewsId ||     // shortNewsId
+			data?.shortnewsId ||     // shortnewsId (lowercase)
+			data?.short_news_id ||   // snake_case
+			data?.articleId ||       // articleId
+			data?.article_id ||      // snake_case
+			data?.id ||              // just id
+			data?.newsId ||          // newsId
+			data?.news_id ||         // snake_case
+			data?.shortId ||         // shortId (for short URLs)
+			data?.short_id ||        // snake_case
+			null;
+		
+		// Check if it's a short ID
+		if (data?.shortId || data?.short_id) {
+			isShortId = true;
+		}
+		
+		console.log('[NOTIF] Resolved targetId:', targetId, 'isShortId:', isShortId);
+		
+		if (!targetId) {
+			console.log('[NOTIF] No navigation target found in data. Available keys:', Object.keys(data || {}));
+			return;
+		}
+		
+		// Try to navigate
+		try {
+			const params: any = { id: targetId };
+			if (isShortId) params.isShortId = 'true';
+			
+			console.log('[NOTIF] Navigating to /article/[id] with params:', JSON.stringify(params));
+			router.push({ pathname: '/article/[id]', params });
+			console.log('[NOTIF] Navigation successful');
+		} catch (navError) {
+			// Router might not be ready, retry with delay
+			if (retryCount < 5) {
+				console.log('[NOTIF] Router not ready, retrying in 500ms...');
+				setTimeout(() => handleNotificationTap(data, retryCount + 1), 500);
+			} else {
+				console.warn('[NOTIF] Navigation failed after retries:', navError);
+			}
 		}
 	} catch (e) {
 		console.warn('[NOTIF] Navigation failed:', e);
 	}
 }
 
+/**
+ * Setup notification listeners early (call from _layout.tsx)
+ * This ensures we catch notification clicks even when app opens from quit state
+ */
+export function setupNotificationListeners() {
+	if (listenersSetup) return;
+	listenersSetup = true;
+	
+	console.log('[NOTIF] Setting up notification listeners');
+	
+	// Android notification channels with sound and vibration
+	if (Platform.OS === 'android') {
+		// Default channel - for regular news
+		Notifications.setNotificationChannelAsync('default', {
+			name: 'వార్తలు (News)',
+			description: 'Regular news notifications',
+			importance: Notifications.AndroidImportance.HIGH,
+			vibrationPattern: [0, 250, 250, 250],
+			lightColor: '#109edc',
+			sound: 'default',
+			enableVibrate: true,
+			enableLights: true,
+			showBadge: true,
+		}).catch((e) => console.warn('[NOTIF] default channel failed:', e));
+		
+		// Breaking news channel - high priority
+		Notifications.setNotificationChannelAsync('breaking', {
+			name: 'బ్రేకింగ్ న్యూస్ (Breaking News)',
+			description: 'Important breaking news alerts',
+			importance: Notifications.AndroidImportance.MAX,
+			vibrationPattern: [0, 500, 200, 500, 200, 500],
+			lightColor: '#FF0000',
+			sound: 'default',
+			enableVibrate: true,
+			enableLights: true,
+			showBadge: true,
+			bypassDnd: true,
+		}).catch((e) => console.warn('[NOTIF] breaking channel failed:', e));
+		
+		// Short news channel
+		Notifications.setNotificationChannelAsync('shortnews', {
+			name: 'షార్ట్ న్యూస్ (Short News)',
+			description: 'Quick short news updates',
+			importance: Notifications.AndroidImportance.HIGH,
+			vibrationPattern: [0, 200, 100, 200],
+			lightColor: '#10b981',
+			sound: 'default',
+			enableVibrate: true,
+			enableLights: true,
+			showBadge: true,
+		}).catch((e) => console.warn('[NOTIF] shortnews channel failed:', e));
+	}
+	
+	// Listen for notifications (foreground)
+	Notifications.addNotificationReceivedListener((n) => {
+		console.log('[NOTIF] received (fg)', JSON.stringify(n.request?.content));
+	});
+	
+	// Handle notification tap - navigate to article
+	Notifications.addNotificationResponseReceivedListener((resp) => {
+		console.log('[NOTIF] response', JSON.stringify(resp.notification?.request?.content));
+		const data = resp.notification?.request?.content?.data;
+		if (data) {
+			handleNotificationTap(data);
+		}
+	});
+	
+	// Check if app was opened from a notification (quit state)
+	Notifications.getLastNotificationResponseAsync().then((response) => {
+		if (response) {
+			console.log('[NOTIF] App opened from notification (quit state):', JSON.stringify(response.notification?.request?.content));
+			const data = response.notification?.request?.content?.data;
+			if (data) {
+				// Delay to ensure router is ready
+				setTimeout(() => {
+					handleNotificationTap(data);
+				}, 1000);
+			}
+		}
+	}).catch((e) => {
+		console.warn('[NOTIF] getLastNotificationResponseAsync failed:', e);
+	});
+}
+
 async function ensureNotificationsSetupInternal(options?: { requestPermission?: boolean }): Promise<{ status: PushStatus; fcmToken?: string; expoToken?: string; deviceToken?: string }> {
 	try {
 		const requestPermission = options?.requestPermission !== false;
-		if (!initDone) {
-			if (Platform.OS === 'android') {
-				try {
-					await Notifications.setNotificationChannelAsync('default', {
-						name: 'Default',
-						importance: Notifications.AndroidImportance.HIGH,
-						vibrationPattern: [0, 250, 250, 250],
-						lightColor: '#FF231F7C',
-						sound: 'default',
-					});
-				} catch {}
-			}
-
-			// Listen for notifications (foreground) and user taps
-			Notifications.addNotificationReceivedListener((n) => {
-				console.log('[NOTIF] received (fg)', JSON.stringify(n.request?.content));
-			});
-			
-			// Handle notification tap - navigate to article
-			Notifications.addNotificationResponseReceivedListener((resp) => {
-				console.log('[NOTIF] response', JSON.stringify(resp.notification?.request?.content));
-				const data = resp.notification?.request?.content?.data;
-				if (data) {
-					handleNotificationTap(data);
-				}
-			});
-
-			initDone = true;
-		}
+		
+		// Ensure listeners are setup (idempotent)
+		setupNotificationListeners();
+		initDone = true;
 
 		// Check/request permission
 		const current = await Notifications.getPermissionsAsync();
@@ -92,7 +205,8 @@ async function ensureNotificationsSetupInternal(options?: { requestPermission?: 
 			if (fcmToken) {
 				cachedToken = fcmToken;
 				await AsyncStorage.setItem(PUSH_TOKEN_KEY, fcmToken);
-				console.log('[NOTIF] FCM Token:', fcmToken.substring(0, 20) + '...');
+				// Log full token for debugging
+				console.log('[NOTIF] FCM Token (full):', fcmToken);
 			}
 		} catch (e) {
 			console.warn('[NOTIF] getDevicePushTokenAsync failed', e instanceof Error ? e.message : e);

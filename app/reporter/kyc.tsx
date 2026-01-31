@@ -1,5 +1,4 @@
 import { ThemedText } from '@/components/ThemedText';
-import { Skeleton } from '@/components/ui/Skeleton';
 import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { loadTokens } from '@/services/auth';
@@ -9,7 +8,6 @@ import {
     type MyProfileResponse,
 } from '@/services/reporters';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
@@ -31,26 +29,12 @@ function isValidHexColor(v?: string | null) {
   return /^#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})$/.test(String(v).trim());
 }
 
-function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
-  const h = hex.trim();
-  if (!isValidHexColor(h)) return null;
-  const raw = h.slice(1);
-  const full = raw.length === 3 ? raw.split('').map((c) => c + c).join('') : raw;
-  const n = parseInt(full, 16);
-  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
-}
-
-function alphaBg(hex: string, alpha: number, fallback: string) {
-  const rgb = hexToRgb(hex);
-  if (!rgb) return fallback;
-  return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${Math.max(0, Math.min(1, alpha))})`;
-}
-
-const KYC_STATUS_META: Record<string, { label: string; color: string; icon: keyof typeof MaterialIcons.glyphMap; desc: string }> = {
-  APPROVED: { label: 'Verified', color: '#10b981', icon: 'verified-user', desc: 'Your KYC documents have been verified' },
-  SUBMITTED: { label: 'Under Review', color: '#f59e0b', icon: 'pending', desc: 'Your documents are being reviewed' },
-  PENDING: { label: 'Pending', color: '#8b5cf6', icon: 'hourglass-empty', desc: 'Please submit your KYC documents' },
-  REJECTED: { label: 'Rejected', color: '#ef4444', icon: 'cancel', desc: 'Your documents were rejected. Please resubmit' },
+// Telugu text for KYC status
+const KYC_STATUS_META: Record<string, { label: string; labelTe: string; color: string; icon: keyof typeof MaterialIcons.glyphMap; desc: string; descTe: string }> = {
+  APPROVED: { label: 'Verified', labelTe: '✅ వెరిఫై అయింది', color: '#10b981', icon: 'verified-user', desc: 'Your KYC documents have been verified', descTe: 'మీ KYC పూర్తయింది. ID కార్డ్ డౌన్‌లోడ్ చేసుకోండి!' },
+  SUBMITTED: { label: 'Under Review', labelTe: '⏳ రివ్యూలో ఉంది', color: '#f59e0b', icon: 'pending', desc: 'Your documents are being reviewed', descTe: 'మీ డాక్యుమెంట్స్ చెక్ అవుతున్నాయి. 1-2 రోజుల్లో అప్‌డేట్ వస్తుంది.' },
+  PENDING: { label: 'Pending', labelTe: '📝 సబ్మిట్ చేయండి', color: '#6366f1', icon: 'hourglass-empty', desc: 'Please submit your KYC documents', descTe: 'మీ ఆధార్ లేదా PAN నంబర్ ఇవ్వండి.' },
+  REJECTED: { label: 'Rejected', labelTe: '❌ రిజెక్ట్ అయింది', color: '#ef4444', icon: 'cancel', desc: 'Your documents were rejected. Please resubmit', descTe: 'డాక్యుమెంట్స్ రిజెక్ట్ అయ్యాయి. మళ్ళీ సబ్మిట్ చేయండి.' },
 };
 
 /* ─────────────────────────────  Main Screen  ───────────────────────────── */
@@ -66,12 +50,10 @@ export default function ReporterKycScreen() {
   const [profile, setProfile] = useState<MyProfileResponse | null>(null);
   const [brandPrimary, setBrandPrimary] = useState<string | null>(null);
 
-  // Form fields
-  const [aadharMasked, setAadharMasked] = useState('');
-  const [panMasked, setPanMasked] = useState('');
-  const [workProofUrl, setWorkProofUrl] = useState('');
+  // Form fields - simplified to just Aadhar last 4 digits
+  const [aadharLast4, setAadharLast4] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [submitMessage, setSubmitMessage] = useState<string | null>(null);
+  const [submitSuccess, setSubmitSuccess] = useState(false);
 
   const primary = brandPrimary || c.tint;
   const reporter = profile?.reporter;
@@ -86,7 +68,7 @@ export default function ReporterKycScreen() {
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
     setError(null);
-    setSubmitMessage(null);
+    setSubmitSuccess(false);
 
     try {
       const t = await loadTokens();
@@ -99,7 +81,7 @@ export default function ReporterKycScreen() {
       const data = await getMyProfile();
       setProfile(data);
     } catch (e: any) {
-      setError(e?.message || 'Failed to load profile');
+      setError(e?.message || 'లోడ్ కాలేదు');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -116,45 +98,47 @@ export default function ReporterKycScreen() {
 
   const onSubmitKyc = useCallback(async () => {
     if (!tenantId || !reporterId) {
-      setSubmitMessage('Session expired. Please login again.');
+      Alert.alert('Error', 'మళ్ళీ లాగిన్ అవ్వండి');
       return;
     }
 
-    if (!aadharMasked.trim() && !panMasked.trim() && !workProofUrl.trim()) {
-      Alert.alert('Required', 'Please fill at least one document field');
+    const last4 = aadharLast4.trim();
+    if (!last4 || last4.length !== 4 || !/^\d{4}$/.test(last4)) {
+      Alert.alert('ఆధార్ నంబర్', 'ఆధార్ చివరి 4 అంకెలు సరిగ్గా ఇవ్వండి');
       return;
     }
 
     setSubmitting(true);
-    setSubmitMessage(null);
 
     try {
+      // Format as masked Aadhar: XXXX-XXXX-1234
+      const maskedAadhar = `XXXX-XXXX-${last4}`;
+      
       const result = await submitReporterKyc(tenantId, reporterId, {
-        aadharNumberMasked: aadharMasked.trim() || undefined,
-        panNumberMasked: panMasked.trim() || undefined,
-        workProofUrl: workProofUrl.trim() || undefined,
+        aadharNumberMasked: maskedAadhar,
       });
 
       setProfile((prev) =>
         prev ? { ...prev, reporter: { ...prev.reporter, kycStatus: result.kycStatus } } : prev
       );
-      setSubmitMessage('KYC documents submitted successfully!');
-      setAadharMasked('');
-      setPanMasked('');
-      setWorkProofUrl('');
+      setSubmitSuccess(true);
+      setAadharLast4('');
     } catch (e: any) {
-      setSubmitMessage(e?.message || 'Failed to submit KYC');
+      Alert.alert('Error', e?.message || 'సబ్మిట్ కాలేదు. మళ్ళీ ట్రై చేయండి.');
     } finally {
       setSubmitting(false);
     }
-  }, [tenantId, reporterId, aadharMasked, panMasked, workProofUrl]);
+  }, [tenantId, reporterId, aadharLast4]);
 
   /* ─────────────────────────────  Render  ───────────────────────────── */
 
   if (loading) {
     return (
-      <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['bottom']}>
-        <KycSkeleton scheme={scheme} onBack={() => router.back()} />
+      <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['top', 'bottom']}>
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color={primary} />
+          <ThemedText style={{ color: c.muted, marginTop: 12 }}>లోడ్ అవుతోంది...</ThemedText>
+        </View>
       </SafeAreaView>
     );
   }
@@ -162,22 +146,17 @@ export default function ReporterKycScreen() {
   if (error) {
     return (
       <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['top', 'bottom']}>
-        <View style={styles.errorCenter}>
-          <View style={[styles.errorIcon, { backgroundColor: alphaBg('#ef4444', 0.1, c.background) }]}>
-            <MaterialIcons name="error-outline" size={48} color="#ef4444" />
-          </View>
-          <ThemedText type="defaultSemiBold" style={{ color: c.text, marginTop: 12 }}>
-            {error}
-          </ThemedText>
+        <View style={styles.center}>
+          <MaterialIcons name="error-outline" size={56} color="#ef4444" />
+          <ThemedText style={{ color: c.text, marginTop: 12, fontSize: 16 }}>{error}</ThemedText>
           <Pressable
             onPress={() => loadData()}
-            style={({ pressed }) => [styles.retryBtn, { backgroundColor: primary }, pressed && { opacity: 0.9 }]}
+            style={[styles.retryBtn, { backgroundColor: primary }]}
           >
-            <MaterialIcons name="refresh" size={18} color="#fff" />
-            <ThemedText style={{ color: '#fff', fontWeight: '600' }}>Try Again</ThemedText>
+            <ThemedText style={{ color: '#fff', fontWeight: '600' }}>మళ్ళీ ట్రై</ThemedText>
           </Pressable>
-          <Pressable onPress={() => router.back()} style={{ marginTop: 8 }}>
-            <ThemedText style={{ color: primary }}>Go Back</ThemedText>
+          <Pressable onPress={() => router.back()} style={{ marginTop: 12 }}>
+            <ThemedText style={{ color: primary }}>వెనక్కి</ThemedText>
           </Pressable>
         </View>
       </SafeAreaView>
@@ -185,278 +164,134 @@ export default function ReporterKycScreen() {
   }
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['bottom']}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['top', 'bottom']}>
+      {/* Header */}
+      <View style={[styles.header, { borderBottomColor: c.border }]}>
+        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backBtn}>
+          <MaterialIcons name="arrow-back" size={24} color={c.text} />
+        </Pressable>
+        <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 18 }}>
+          KYC వెరిఫికేషన్
+        </ThemedText>
+        <View style={{ width: 40 }} />
+      </View>
+
       <ScrollView
         showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.content}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[primary]} tintColor={primary} />}
       >
-        {/* ── Header ── */}
-        <LinearGradient
-          colors={[kycMeta.color, alphaBg(kycMeta.color, 0.8, kycMeta.color)]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.header}
-        >
-          <Pressable
-            onPress={() => router.back()}
-            style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.8 }]}
-            hitSlop={12}
-          >
-            <MaterialIcons name="arrow-back" size={22} color="#fff" />
-          </Pressable>
-
-          <View style={styles.headerContent}>
-            <View style={styles.headerIcon}>
-              <MaterialIcons name={kycMeta.icon} size={48} color="rgba(255,255,255,0.95)" />
-            </View>
-            <ThemedText type="title" style={styles.headerTitle}>
-              KYC Verification
-            </ThemedText>
-            <View style={styles.statusBadge}>
-              <ThemedText style={styles.statusBadgeText}>{kycMeta.label}</ThemedText>
-            </View>
-            <ThemedText style={styles.headerDesc}>{kycMeta.desc}</ThemedText>
-          </View>
-        </LinearGradient>
-
-        <View style={styles.content}>
-          {/* ── Status Card ── */}
-          <View style={[styles.card, { backgroundColor: c.card, borderColor: c.border }]}>
-            <View style={styles.cardHeader}>
-              <View style={[styles.cardIcon, { backgroundColor: alphaBg(kycMeta.color, 0.12, c.background) }]}>
-                <MaterialIcons name={kycMeta.icon} size={24} color={kycMeta.color} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 16 }}>
-                  Verification Status
-                </ThemedText>
-                <ThemedText style={{ color: c.muted, fontSize: 12 }}>{kycMeta.desc}</ThemedText>
-              </View>
-            </View>
-
-            {kycStatus === 'APPROVED' && (
-              <View style={[styles.successBanner, { backgroundColor: alphaBg('#10b981', 0.1, c.background) }]}>
-                <MaterialIcons name="check-circle" size={20} color="#10b981" />
-                <ThemedText style={{ color: '#10b981', flex: 1, marginLeft: 8 }}>
-                  Your documents have been verified. You can now receive your ID card.
-                </ThemedText>
-              </View>
-            )}
-
-            {kycStatus === 'SUBMITTED' && (
-              <View style={[styles.infoBanner, { backgroundColor: alphaBg('#f59e0b', 0.1, c.background) }]}>
-                <MaterialIcons name="pending" size={20} color="#f59e0b" />
-                <ThemedText style={{ color: '#f59e0b', flex: 1, marginLeft: 8 }}>
-                  Your documents are being reviewed. This usually takes 1-2 business days.
-                </ThemedText>
-              </View>
-            )}
-
-            {kycStatus === 'REJECTED' && (
-              <View style={[styles.errorBanner, { backgroundColor: alphaBg('#ef4444', 0.1, c.background) }]}>
-                <MaterialIcons name="error" size={20} color="#ef4444" />
-                <ThemedText style={{ color: '#ef4444', flex: 1, marginLeft: 8 }}>
-                  Your documents were rejected. Please submit valid documents again.
-                </ThemedText>
-              </View>
-            )}
-          </View>
-
-          {/* ── Submit KYC Form ── */}
-          {canSubmit && (
-            <>
-              <ThemedText type="defaultSemiBold" style={[styles.sectionTitle, { color: c.text }]}>
-                Submit Documents
-              </ThemedText>
-
-              <View style={[styles.card, { backgroundColor: c.card, borderColor: c.border }]}>
-                {/* Aadhar */}
-                <View style={styles.inputGroup}>
-                  <View style={styles.inputLabel}>
-                    <MaterialIcons name="credit-card" size={18} color="#6366f1" />
-                    <ThemedText style={{ color: c.text, marginLeft: 8, fontWeight: '500' }}>
-                      Aadhar Number (Masked)
-                    </ThemedText>
-                  </View>
-                  <TextInput
-                    style={[styles.input, { backgroundColor: c.background, borderColor: c.border, color: c.text }]}
-                    placeholder="XXXX-XXXX-1234"
-                    placeholderTextColor={c.muted}
-                    value={aadharMasked}
-                    onChangeText={setAadharMasked}
-                    keyboardType="default"
-                    autoCapitalize="characters"
-                  />
-                  <ThemedText style={{ color: c.muted, fontSize: 11, marginTop: 4 }}>
-                    Enter last 4 digits visible format: XXXX-XXXX-1234
-                  </ThemedText>
-                </View>
-
-                {/* PAN */}
-                <View style={styles.inputGroup}>
-                  <View style={styles.inputLabel}>
-                    <MaterialIcons name="badge" size={18} color="#f59e0b" />
-                    <ThemedText style={{ color: c.text, marginLeft: 8, fontWeight: '500' }}>
-                      PAN Number (Masked)
-                    </ThemedText>
-                  </View>
-                  <TextInput
-                    style={[styles.input, { backgroundColor: c.background, borderColor: c.border, color: c.text }]}
-                    placeholder="XXXXX1234X"
-                    placeholderTextColor={c.muted}
-                    value={panMasked}
-                    onChangeText={setPanMasked}
-                    keyboardType="default"
-                    autoCapitalize="characters"
-                    maxLength={10}
-                  />
-                  <ThemedText style={{ color: c.muted, fontSize: 11, marginTop: 4 }}>
-                    Format: XXXXX1234X (last 5 characters visible)
-                  </ThemedText>
-                </View>
-
-                {/* Work Proof URL */}
-                <View style={styles.inputGroup}>
-                  <View style={styles.inputLabel}>
-                    <MaterialIcons name="attachment" size={18} color="#10b981" />
-                    <ThemedText style={{ color: c.text, marginLeft: 8, fontWeight: '500' }}>
-                      Work Proof URL
-                    </ThemedText>
-                  </View>
-                  <TextInput
-                    style={[styles.input, { backgroundColor: c.background, borderColor: c.border, color: c.text }]}
-                    placeholder="https://example.com/work-proof.pdf"
-                    placeholderTextColor={c.muted}
-                    value={workProofUrl}
-                    onChangeText={setWorkProofUrl}
-                    keyboardType="url"
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                  />
-                  <ThemedText style={{ color: c.muted, fontSize: 11, marginTop: 4 }}>
-                    Upload your work proof document and paste the URL here
-                  </ThemedText>
-                </View>
-
-                {/* Submit Button */}
-                <Pressable
-                  onPress={onSubmitKyc}
-                  disabled={submitting}
-                  style={({ pressed }) => [
-                    styles.submitBtn,
-                    { backgroundColor: primary },
-                    pressed && { opacity: 0.9 },
-                    submitting && { opacity: 0.7 },
-                  ]}
-                >
-                  {submitting ? (
-                    <ActivityIndicator color="#fff" size="small" />
-                  ) : (
-                    <>
-                      <MaterialIcons name="send" size={18} color="#fff" />
-                      <ThemedText style={{ color: '#fff', fontWeight: '600', marginLeft: 8 }}>
-                        Submit KYC Documents
-                      </ThemedText>
-                    </>
-                  )}
-                </Pressable>
-
-                {submitMessage && (
-                  <View style={[styles.messageBanner, { backgroundColor: alphaBg(submitMessage.includes('success') ? '#10b981' : '#ef4444', 0.1, c.background) }]}>
-                    <MaterialIcons
-                      name={submitMessage.includes('success') ? 'check-circle' : 'error'}
-                      size={18}
-                      color={submitMessage.includes('success') ? '#10b981' : '#ef4444'}
-                    />
-                    <ThemedText style={{ color: submitMessage.includes('success') ? '#10b981' : '#ef4444', flex: 1, marginLeft: 8 }}>
-                      {submitMessage}
-                    </ThemedText>
-                  </View>
-                )}
-              </View>
-            </>
-          )}
-
-          {/* ── Requirements Info ── */}
-          <ThemedText type="defaultSemiBold" style={[styles.sectionTitle, { color: c.text }]}>
-            Requirements
+        {/* Status Card */}
+        <View style={[styles.statusCard, { backgroundColor: kycMeta.color + '15', borderColor: kycMeta.color + '40' }]}>
+          <MaterialIcons name={kycMeta.icon} size={40} color={kycMeta.color} />
+          <ThemedText type="defaultSemiBold" style={{ color: kycMeta.color, fontSize: 18, marginTop: 12 }}>
+            {kycMeta.labelTe}
           </ThemedText>
-          <View style={[styles.card, { backgroundColor: c.card, borderColor: c.border }]}>
-            <RequirementRow
-              icon="credit-card"
-              title="Aadhar Card"
-              desc="Valid Aadhar card with masked number"
-              c={c}
-            />
-            <View style={[styles.divider, { backgroundColor: c.border }]} />
-            <RequirementRow
-              icon="badge"
-              title="PAN Card"
-              desc="Valid PAN card with masked number"
-              c={c}
-            />
-            <View style={[styles.divider, { backgroundColor: c.border }]} />
-            <RequirementRow
-              icon="work"
-              title="Work Proof"
-              desc="Press ID, joining letter, or other work document"
-              c={c}
-            />
-          </View>
-
-          <View style={{ height: 32 }} />
+          <ThemedText style={{ color: c.muted, fontSize: 14, textAlign: 'center', marginTop: 6 }}>
+            {kycMeta.descTe}
+          </ThemedText>
         </View>
+
+        {/* Success Message */}
+        {submitSuccess && (
+          <View style={[styles.successBanner, { backgroundColor: '#10b98120' }]}>
+            <MaterialIcons name="check-circle" size={24} color="#10b981" />
+            <ThemedText style={{ color: '#10b981', marginLeft: 8, flex: 1, fontSize: 15 }}>
+              సబ్మిట్ అయింది! 1-2 రోజుల్లో అప్రూవల్ వస్తుంది.
+            </ThemedText>
+          </View>
+        )}
+
+        {/* Submit Form - Only show if PENDING or REJECTED */}
+        {canSubmit && !submitSuccess && (
+          <View style={[styles.formCard, { backgroundColor: c.card, borderColor: c.border }]}>
+            <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 16, marginBottom: 4 }}>
+              ఆధార్ వెరిఫికేషన్
+            </ThemedText>
+            <ThemedText style={{ color: c.muted, fontSize: 13, marginBottom: 16 }}>
+              మీ ఆధార్ కార్డ్ చివరి 4 అంకెలు ఇవ్వండి
+            </ThemedText>
+
+            <View style={styles.inputRow}>
+              <View style={[styles.maskedPart, { backgroundColor: c.background, borderColor: c.border }]}>
+                <ThemedText style={{ color: c.muted, fontSize: 18, letterSpacing: 2 }}>XXXX XXXX</ThemedText>
+              </View>
+              <TextInput
+                style={[styles.last4Input, { backgroundColor: c.background, borderColor: primary, color: c.text }]}
+                placeholder="1234"
+                placeholderTextColor={c.muted}
+                value={aadharLast4}
+                onChangeText={(text) => setAadharLast4(text.replace(/\D/g, '').slice(0, 4))}
+                keyboardType="number-pad"
+                maxLength={4}
+              />
+            </View>
+
+            <ThemedText style={{ color: c.muted, fontSize: 11, marginTop: 8, textAlign: 'center' }}>
+              🔒 మీ ఫుల్ ఆధార్ నంబర్ మా దగ్గర స్టోర్ కాదు
+            </ThemedText>
+
+            <Pressable
+              onPress={onSubmitKyc}
+              disabled={submitting || aadharLast4.length !== 4}
+              style={[
+                styles.submitBtn,
+                { backgroundColor: primary },
+                (submitting || aadharLast4.length !== 4) && { opacity: 0.5 },
+              ]}
+            >
+              {submitting ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <ThemedText style={{ color: '#fff', fontWeight: '700', fontSize: 16 }}>
+                  సబ్మిట్ KYC
+                </ThemedText>
+              )}
+            </Pressable>
+          </View>
+        )}
+
+        {/* ID Card Button - Only show if APPROVED */}
+        {kycStatus === 'APPROVED' && (
+          <Pressable
+            onPress={() => router.push('/reporter/id-card')}
+            style={[styles.idCardBtn, { backgroundColor: '#10b981' }]}
+          >
+            <MaterialIcons name="badge" size={24} color="#fff" />
+            <ThemedText style={{ color: '#fff', fontWeight: '700', fontSize: 16, marginLeft: 8 }}>
+              ID కార్డ్ డౌన్‌లోడ్
+            </ThemedText>
+          </Pressable>
+        )}
+
+        {/* Info Section */}
+        <View style={[styles.infoCard, { backgroundColor: c.card, borderColor: c.border }]}>
+          <ThemedText type="defaultSemiBold" style={{ color: c.text, marginBottom: 12 }}>
+            ℹ️ KYC ఎందుకు?
+          </ThemedText>
+          <View style={styles.infoRow}>
+            <MaterialIcons name="verified-user" size={18} color="#10b981" />
+            <ThemedText style={{ color: c.muted, marginLeft: 8, flex: 1 }}>
+              వెరిఫైడ్ రిపోర్టర్ బ్యాడ్జ్ పొందండి
+            </ThemedText>
+          </View>
+          <View style={styles.infoRow}>
+            <MaterialIcons name="badge" size={18} color="#6366f1" />
+            <ThemedText style={{ color: c.muted, marginLeft: 8, flex: 1 }}>
+              ప్రెస్ ID కార్డ్ డౌన్‌లోడ్ చేసుకోండి
+            </ThemedText>
+          </View>
+          <View style={styles.infoRow}>
+            <MaterialIcons name="star" size={18} color="#f59e0b" />
+            <ThemedText style={{ color: c.muted, marginLeft: 8, flex: 1 }}>
+              మీ వార్తలకు ఎక్కువ ప్రాధాన్యత
+            </ThemedText>
+          </View>
+        </View>
+
+        <View style={{ height: 32 }} />
       </ScrollView>
     </SafeAreaView>
-  );
-}
-
-/* ─────────────────────────────  Sub-Components  ───────────────────────────── */
-
-function RequirementRow({
-  icon,
-  title,
-  desc,
-  c,
-}: {
-  icon: keyof typeof MaterialIcons.glyphMap;
-  title: string;
-  desc: string;
-  c: typeof Colors.light;
-}) {
-  return (
-    <View style={styles.requirementRow}>
-      <View style={[styles.requirementIcon, { backgroundColor: alphaBg('#6366f1', 0.12, c.background) }]}>
-        <MaterialIcons name={icon} size={20} color="#6366f1" />
-      </View>
-      <View style={{ flex: 1 }}>
-        <ThemedText type="defaultSemiBold" style={{ color: c.text }}>{title}</ThemedText>
-        <ThemedText style={{ color: c.muted, fontSize: 12 }}>{desc}</ThemedText>
-      </View>
-      <MaterialIcons name="check-circle-outline" size={20} color={c.muted} />
-    </View>
-  );
-}
-
-function KycSkeleton({ scheme, onBack }: { scheme: 'light' | 'dark'; onBack: () => void }) {
-  const c = Colors[scheme];
-  return (
-    <ScrollView style={{ flex: 1 }}>
-      <View style={[styles.header, { backgroundColor: c.muted }]}>
-        <Pressable onPress={onBack} style={styles.backBtn} hitSlop={12}>
-          <MaterialIcons name="arrow-back" size={22} color="#fff" />
-        </Pressable>
-        <View style={styles.headerContent}>
-          <Skeleton width={64} height={64} borderRadius={32} style={{ marginBottom: 12 }} />
-          <Skeleton width={180} height={24} borderRadius={4} style={{ marginBottom: 8 }} />
-          <Skeleton width={120} height={20} borderRadius={4} />
-        </View>
-      </View>
-      <View style={[styles.content, { paddingTop: 20 }]}>
-        <Skeleton width="100%" height={120} borderRadius={12} style={{ marginBottom: 16 }} />
-        <Skeleton width="100%" height={300} borderRadius={12} />
-      </View>
-    </ScrollView>
   );
 }
 
@@ -464,66 +299,106 @@ function KycSkeleton({ scheme, onBack }: { scheme: 'light' | 'dark'; onBack: () 
 
 const styles = StyleSheet.create({
   safe: { flex: 1 },
-  header: { paddingTop: 48, paddingBottom: 28, paddingHorizontal: 20, borderBottomLeftRadius: 24, borderBottomRightRadius: 24 },
-  backBtn: {
-    position: 'absolute',
-    top: 48,
-    left: 16,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 10,
-  },
-  headerContent: { alignItems: 'center', marginTop: 24 },
-  headerIcon: { marginBottom: 12 },
-  headerTitle: { color: '#fff', fontSize: 24, textAlign: 'center' },
-  headerDesc: { color: 'rgba(255,255,255,0.85)', fontSize: 13, textAlign: 'center', marginTop: 8 },
-  statusBadge: { backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12, marginTop: 8 },
-  statusBadgeText: { color: '#fff', fontSize: 12, fontWeight: '600' },
-
-  content: { paddingHorizontal: 16, paddingTop: 20 },
-  sectionTitle: { fontSize: 15, marginBottom: 12, marginTop: 8 },
-
-  card: { borderRadius: 16, borderWidth: 1, overflow: 'hidden', marginBottom: 16 },
-  cardHeader: { flexDirection: 'row', alignItems: 'center', padding: 16, gap: 12 },
-  cardIcon: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
-
-  successBanner: { flexDirection: 'row', alignItems: 'center', padding: 12, margin: 12, marginTop: 0, borderRadius: 8 },
-  infoBanner: { flexDirection: 'row', alignItems: 'center', padding: 12, margin: 12, marginTop: 0, borderRadius: 8 },
-  errorBanner: { flexDirection: 'row', alignItems: 'center', padding: 12, margin: 12, marginTop: 0, borderRadius: 8 },
-  messageBanner: { flexDirection: 'row', alignItems: 'center', padding: 12, marginTop: 12, borderRadius: 8 },
-
-  inputGroup: { padding: 16, paddingBottom: 8 },
-  inputLabel: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
-  input: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15 },
-
-  submitBtn: {
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
+  
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
     paddingVertical: 14,
+    borderBottomWidth: 1,
+  },
+  backBtn: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  
+  content: { padding: 16 },
+  
+  statusCard: {
+    alignItems: 'center',
+    padding: 24,
+    borderRadius: 16,
+    borderWidth: 1,
+    marginBottom: 16,
+  },
+  
+  successBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
     borderRadius: 12,
-    marginHorizontal: 16,
-    marginVertical: 16,
+    marginBottom: 16,
+  },
+  
+  formCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 20,
+    marginBottom: 16,
+  },
+  
+  inputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 8,
   },
-
-  requirementRow: { flexDirection: 'row', alignItems: 'center', padding: 14, gap: 12 },
-  requirementIcon: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
-  divider: { height: 1, marginHorizontal: 16 },
-
-  errorCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
-  errorIcon: { width: 80, height: 80, borderRadius: 40, alignItems: 'center', justifyContent: 'center' },
-  retryBtn: {
+  maskedPart: {
+    flex: 1,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: 'center',
+  },
+  last4Input: {
+    width: 80,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 2,
+    fontSize: 20,
+    fontWeight: '700',
+    textAlign: 'center',
+    letterSpacing: 4,
+  },
+  
+  submitBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+    borderRadius: 12,
+    marginTop: 20,
+  },
+  
+  idCardBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
+    justifyContent: 'center',
+    paddingVertical: 16,
+    borderRadius: 12,
+    marginBottom: 16,
+  },
+  
+  infoCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 16,
+  },
+  infoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  
+  retryBtn: {
+    paddingHorizontal: 24,
+    paddingVertical: 12,
     borderRadius: 20,
     marginTop: 16,
   },
 });
+

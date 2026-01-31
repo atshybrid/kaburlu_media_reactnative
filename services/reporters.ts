@@ -205,8 +205,30 @@ export type GenerateReporterIdCardResponse = {
   tenantId?: string;
   message?: string;
   url?: string;
+  id?: string;
+  cardNumber?: string;
+  issuedAt?: string;
+  expiresAt?: string;
+  pdfUrl?: string | null;
+  alreadyExists?: boolean;
+  whatsappSent?: boolean;
 };
 
+/** Generate own ID Card (for REPORTER role) - uses /reporters/me/id-card */
+export async function generateMyIdCard(): Promise<GenerateReporterIdCardResponse> {
+  return await request<GenerateReporterIdCardResponse>('/reporters/me/id-card', {
+    method: 'POST',
+  });
+}
+
+/** Resend own ID Card via WhatsApp (for REPORTER role) - uses /reporters/me/id-card/resend */
+export async function resendMyIdCardToWhatsApp(): Promise<ResendIdCardWhatsAppResponse> {
+  return await request<ResendIdCardWhatsAppResponse>('/reporters/me/id-card/resend', {
+    method: 'POST',
+  });
+}
+
+/** @deprecated Use generateMyIdCard() for reporter's own ID card */
 export async function generateReporterIdCard(tenantId: string, reporterId: string): Promise<GenerateReporterIdCardResponse> {
   return await request<GenerateReporterIdCardResponse>(`/tenants/${tenantId}/reporters/${reporterId}/id-card`, {
     method: 'POST',
@@ -227,6 +249,36 @@ export type ReporterIdCard = {
 export async function getReporterIdCard(tenantId: string, reporterId: string): Promise<ReporterIdCard> {
   return await request<ReporterIdCard>(`/tenants/${tenantId}/reporters/${reporterId}/id-card`, {
     method: 'GET',
+  });
+}
+
+/** Resend ID Card via WhatsApp */
+export type ResendIdCardWhatsAppResponse = {
+  success: boolean;
+  message: string;
+  messageId?: string;
+  sentTo?: string;
+};
+
+/** @deprecated Use resendMyIdCardToWhatsApp() for reporter's own ID card */
+export async function resendIdCardToWhatsApp(tenantId: string, reporterId: string): Promise<ResendIdCardWhatsAppResponse> {
+  return await request<ResendIdCardWhatsAppResponse>(`/tenants/${tenantId}/reporters/${reporterId}/id-card/resend`, {
+    method: 'POST',
+  });
+}
+
+/** Regenerate own ID Card (for REPORTER role) - uses /reporters/me/id-card/regenerate */
+export async function regenerateMyIdCard(keepCardNumber = true): Promise<GenerateReporterIdCardResponse> {
+  return await request<GenerateReporterIdCardResponse>('/reporters/me/id-card/regenerate', {
+    method: 'POST',
+    body: { keepCardNumber },
+  });
+}
+
+/** @deprecated Use regenerateMyIdCard() for reporter's own ID card regeneration */
+export async function regenerateReporterIdCard(tenantId: string, reporterId: string): Promise<GenerateReporterIdCardResponse> {
+  return await request<GenerateReporterIdCardResponse>(`/tenants/${tenantId}/reporters/${reporterId}/id-card/regenerate`, {
+    method: 'POST',
   });
 }
 
@@ -377,6 +429,46 @@ export type ReporterMeResponse = {
   } | null;
 
   stats: ReporterStats | null;
+
+  // Access Control - for overlay screens
+  accessStatus?: {
+    status: 'ACTIVE' | 'PAYMENT_REQUIRED' | 'ACCESS_EXPIRED';
+    reason?: string;
+    action: 'NONE' | 'PAY' | 'CONTACT_PUBLISHER';
+  };
+
+  // Payment details when payment required
+  paymentStatus?: {
+    required: boolean;
+    outstanding?: Array<{
+      type: 'ONBOARDING' | 'MONTHLY_SUBSCRIPTION';
+      amount: number;
+      currency: string;
+      year: number;
+      month: number;
+      status: string;
+      paymentId?: string;
+      razorpayOrderId?: string;
+    }>;
+    razorpay?: {
+      orderId?: string;
+      amount?: number;
+      currency?: string;
+    };
+  };
+
+  // Manual login status
+  manualLoginStatus?: {
+    enabled: boolean;
+    expiresAt?: string;
+    daysRemaining?: number;
+    expired: boolean;
+    publisherContact?: {
+      name?: string;
+      phone?: string;
+      message?: string;
+    };
+  };
 };
 
 /** Get current reporter's full profile with stats */

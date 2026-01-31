@@ -4,6 +4,7 @@ import { useColorScheme } from '@/hooks/useColorScheme';
 import { uploadMedia } from '@/services/api';
 import type { AIRewriteUnifiedResponse, MediaPhoto } from '@/services/aiRewriteUnified';
 import { submitUnifiedArticle } from '@/services/unifiedArticle';
+import { clearPostNewsAsyncStorage } from '@/state/postNewsDraftStore';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Image } from 'expo-image';
@@ -333,17 +334,17 @@ export default function PostNewsUploadMediaScreen() {
       const result = await submitUnifiedArticle();
 
       if (result.success) {
-        await AsyncStorage.removeItem('AI_REWRITE_RESPONSE');
-        await AsyncStorage.removeItem('AI_REWRITE_TENANT_ID');
-        await AsyncStorage.removeItem('AI_REWRITE_LANGUAGE');
-        await AsyncStorage.removeItem('SELECTED_LOCATION');
-        await AsyncStorage.removeItem('UPLOADED_PHOTOS');
-        await AsyncStorage.removeItem('UPLOADED_VIDEO');
-        await AsyncStorage.removeItem('FORMATTED_DATELINE');
+        // Clear all post-news related AsyncStorage keys using centralized function
+        await clearPostNewsAsyncStorage();
 
         setShowSuccess(true);
         setTimeout(() => {
-          router.replace('/post-news' as any);
+          // Navigate to dashboard and reset entire navigation stack
+          // Using while loop to pop all screens then replace to home
+          while (router.canGoBack()) {
+            router.back();
+          }
+          router.replace('/(tabs)' as any);
         }, 2500);
       } else {
         Alert.alert('Submission Failed', result.message || 'Failed to create article');
@@ -740,16 +741,44 @@ export default function PostNewsUploadMediaScreen() {
       </Modal>
 
       {/* Success Modal */}
-      <Modal visible={showSuccess} transparent animationType="fade">
+      <Modal visible={showSuccess} transparent animationType="none">
         <View style={styles.successModal}>
           <View style={[styles.successModalContent, { backgroundColor: c.background }]}>
             <LottieView source={congratsAnim} autoPlay loop={false} style={{ width: 220, height: 220 }} />
             <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 22, marginTop: 16 }}>
-              Article Published! 🎉
+              అభినందనలు! 🎉
             </ThemedText>
-            <ThemedText style={{ color: c.muted, marginTop: 8 }}>
-              Your news article is now live
+            <ThemedText style={{ color: c.muted, marginTop: 8, textAlign: 'center' }}>
+              మీ ఆర్టికల్ విజయవంతంగా సబ్మిట్ చేయబడింది
             </ThemedText>
+            
+            {/* Action Buttons */}
+            <View style={styles.successActions}>
+              <Pressable 
+                style={[styles.successPrimaryBtn, { backgroundColor: c.tint }]} 
+                onPress={() => {
+                  setShowSuccess(false);
+                  setTimeout(() => {
+                    router.replace('/post-news');
+                  }, 100);
+                }}
+              >
+                <MaterialIcons name="edit" size={18} color="#fff" />
+                <ThemedText style={styles.successPrimaryBtnText}>మరో న్యూస్ పోస్ట్ చేయండి</ThemedText>
+              </Pressable>
+              <Pressable 
+                style={[styles.successSecondaryBtn, { borderColor: c.tint }]} 
+                onPress={() => {
+                  setShowSuccess(false);
+                  setTimeout(() => {
+                    router.replace('/reporter/dashboard');
+                  }, 100);
+                }}
+              >
+                <MaterialIcons name="dashboard" size={18} color={c.tint} />
+                <ThemedText style={[styles.successSecondaryBtnText, { color: c.tint }]}>డ్యాష్‌బోర్డ్ చూడండి</ThemedText>
+              </Pressable>
+            </View>
           </View>
         </View>
       </Modal>
@@ -943,15 +972,47 @@ const styles = StyleSheet.create({
   },
   successModal: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.9)',
+    backgroundColor: 'rgba(0,0,0,0.95)',
     justifyContent: 'center',
     alignItems: 'center',
   },
   successModalContent: {
-    flex: 1,
-    width: '100%',
+    width: '85%',
+    borderRadius: 20,
+    paddingVertical: 40,
+    paddingHorizontal: 24,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 24,
+  },
+  successActions: {
+    width: '100%',
+    marginTop: 24,
+    gap: 12,
+  },
+  successPrimaryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    borderRadius: 12,
+  },
+  successPrimaryBtnText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  successSecondaryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    borderRadius: 12,
+    borderWidth: 1.5,
+  },
+  successSecondaryBtnText: {
+    fontSize: 15,
+    fontWeight: '600',
   },
 });

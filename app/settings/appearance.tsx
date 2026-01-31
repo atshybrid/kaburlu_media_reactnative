@@ -2,7 +2,11 @@ import { ThemePref, useThemePref } from '@/context/ThemeContext';
 import { useUiPrefs } from '@/context/UiPrefsContext';
 import { useThemeColor } from '@/hooks/useThemeColor';
 import { Feather } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+
+export const APP_SOUND_MUTED_KEY = 'app_sound_muted';
 
 // ThemePref now provided by ThemeContext
 
@@ -17,6 +21,20 @@ export default function AppearanceScreen() {
 
   const { themePref, setThemePref } = useThemePref();
   const { fontScale, setFontScale, readingMode, setReadingMode } = useUiPrefs();
+  
+  // Global sound mute setting
+  const [soundMuted, setSoundMuted] = useState(false);
+  
+  useEffect(() => {
+    AsyncStorage.getItem(APP_SOUND_MUTED_KEY).then((val) => {
+      setSoundMuted(val === 'true');
+    });
+  }, []);
+  
+  const toggleSoundMute = async (val: boolean) => {
+    setSoundMuted(val);
+    await AsyncStorage.setItem(APP_SOUND_MUTED_KEY, val ? 'true' : 'false');
+  };
 
   const pickTheme = async (val: ThemePref) => { await setThemePref(val); };
   const changeFont = async (delta: number) => {
@@ -91,6 +109,18 @@ export default function AppearanceScreen() {
               <Text style={[styles.optionSubtitle, { color: muted }]}>Cleaner layout and subtle UI chrome</Text>
             </View>
             <Switch value={readingMode} onValueChange={(v) => setReadingMode(v)} />
+          </View>
+        </View>
+
+        <View style={[styles.card, { backgroundColor: card, borderColor: border }]}>
+          <Text style={[styles.cardTitle, { color: text }]}>Sound</Text>
+          <View style={styles.separator} />
+          <View style={styles.readRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.optionTitle, { color: text }]}>ఆడియో Mute</Text>
+              <Text style={[styles.optionSubtitle, { color: muted }]}>App లో అన్ని audios బంద్ చేయండి</Text>
+            </View>
+            <Switch value={soundMuted} onValueChange={toggleSoundMute} />
           </View>
         </View>
 

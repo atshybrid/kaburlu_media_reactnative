@@ -15,6 +15,7 @@ import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { loadTokens } from '@/services/auth';
 import {
+    getNewspaperArticles,
     getTenantAdminDashboard,
     type TenantAdminFullResponse,
 } from '@/services/tenantAdmin';
@@ -88,6 +89,7 @@ export default function TenantDashboardScreen() {
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<TenantAdminFullResponse | null>(null);
   const [sessionBrand, setSessionBrand] = useState<{ primary?: string; logo?: string; name?: string }>({});
+  const [actualPendingCount, setActualPendingCount] = useState<number | null>(null); // null = not fetched yet
 
   const primary = data?.branding?.primaryColor || sessionBrand.primary || c.tint;
   const logoUrl = data?.branding?.logoUrl || sessionBrand.logo;
@@ -112,6 +114,15 @@ export default function TenantDashboardScreen() {
 
       const dashboard = await getTenantAdminDashboard();
       setData(dashboard);
+      
+      // Fetch actual pending count from newspaper API for accuracy
+      try {
+        const pendingRes = await getNewspaperArticles({ status: 'PENDING', limit: 1 });
+        setActualPendingCount(pendingRes.total || 0);
+        console.log('[Dashboard] Actual newspaper pending count:', pendingRes.total);
+      } catch (e) {
+        console.warn('[Dashboard] Failed to fetch pending count:', e);
+      }
     } catch (e: any) {
       setError(e?.message || 'Failed to load dashboard');
     } finally {
@@ -128,11 +139,22 @@ export default function TenantDashboardScreen() {
 
   const onRefresh = useCallback(() => void loadData(true), [loadData]);
 
-  // Calculate stats
+  // Calculate stats - Use actual pending count from API for accuracy
   const pendingArticles = useMemo(() => {
+    // Prefer actual count fetched from newspaper API (even if 0)
+    if (actualPendingCount !== null) {
+      console.log('[Dashboard] Using actual pending count:', actualPendingCount);
+      return actualPendingCount;
+    }
+    // Fallback to dashboard data only if newspaper API failed
     if (!data) return 0;
-    return (data.articles.web.byStatus.PENDING || 0) + (data.articles.raw.pendingReview || 0);
-  }, [data]);
+    const webPending = data.articles.web.byStatus.PENDING || 0;
+    const rawPending = data.articles.raw.pendingReview || 0;
+    const newspaperPending = data.articles.newspaper.byStatus.PENDING || 0;
+    const total = webPending + rawPending + newspaperPending;
+    console.log('[Dashboard] Pending from dashboard API:', { webPending, rawPending, newspaperPending, total });
+    return total;
+  }, [data, actualPendingCount]);
 
   const pendingKyc = useMemo(() => {
     if (!data) return 0;

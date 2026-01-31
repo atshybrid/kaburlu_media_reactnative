@@ -10,6 +10,7 @@ import { searchCombinedLocations, type CombinedLocationItem } from '@/services/l
 import { usePostNewsDraftStore } from '@/state/postNewsDraftStore';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Audio } from 'expo-av';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -158,6 +159,7 @@ export default function PostNewsDetailsScreen() {
   const [dateLineBusy, setDateLineBusy] = useState(false);
   const [dateLineResults, setDateLineResults] = useState<CombinedLocationItem[]>([]);
   const [locationModalVisible, setLocationModalVisible] = useState(false);
+  const [bodyModalVisible, setBodyModalVisible] = useState(false);
   const [locationQueryDraft, setLocationQueryDraft] = useState<string>('');
   const [locationSearchError, setLocationSearchError] = useState<string>('');
   const [dateLineInlineError, setDateLineInlineError] = useState<string>(''); // Inline error shown on Date Line field
@@ -165,6 +167,8 @@ export default function PostNewsDetailsScreen() {
 
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSearchRef = useRef<string>('');
+
+  // NOTE: Intro audio removed from details page - only plays on post-news.tsx main page
 
   useEffect(() => {
     let alive = true;
@@ -770,16 +774,37 @@ export default function PostNewsDetailsScreen() {
 
           <View style={[styles.section, { borderColor: c.border, backgroundColor: c.card }]}
           >
-            <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Body</ThemedText>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <ThemedText type="defaultSemiBold" style={{ color: c.text }}>Body</ThemedText>
+              <Pressable
+                onPress={() => setBodyModalVisible(true)}
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4 }}
+              >
+                <MaterialIcons name="fullscreen" size={20} color={primary} />
+                <ThemedText style={{ color: primary, fontSize: 13 }}>Expand</ThemedText>
+              </Pressable>
+            </View>
             <TextInput
               value={draft.body || ''}
-              onChangeText={(t) => setDraft({ body: t })}
-              placeholder="Article body"
+              onChangeText={(t) => {
+                // Limit to ~1500 words (approx 10000 chars)
+                if (t.length <= 10000) setDraft({ body: t });
+              }}
+              placeholder="Article body (నీ వార్త ఇక్కడ రాయండి...)"
               placeholderTextColor={c.muted}
               style={[styles.textAreaBig, { borderColor: c.border, color: c.text, backgroundColor: c.background }]}
               multiline
               textAlignVertical="top"
+              maxLength={10000}
             />
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 }}>
+              <ThemedText style={{ color: c.muted, fontSize: 12 }}>
+                {(draft.body || '').trim().split(/\s+/).filter(Boolean).length} words
+              </ThemedText>
+              <ThemedText style={{ color: c.muted, fontSize: 12 }}>
+                {(draft.body || '').length} / 10000
+              </ThemedText>
+            </View>
           </View>
 
           <View style={styles.bottomPad} />
@@ -925,6 +950,58 @@ export default function PostNewsDetailsScreen() {
         </View>
       </Modal>
 
+      {/* Fullscreen Body Modal */}
+      <Modal visible={bodyModalVisible} animationType="slide" onRequestClose={() => setBodyModalVisible(false)}>
+        <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]}>
+          <View style={[styles.appBar, { backgroundColor: c.background, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border }]}>
+            <Pressable onPress={() => setBodyModalVisible(false)} style={styles.backBtn} hitSlop={10}>
+              <MaterialIcons name="close" size={24} color={c.text} />
+            </Pressable>
+            <View style={styles.appBarCenter} pointerEvents="none">
+              <ThemedText type="defaultSemiBold" style={[styles.title, { color: c.text }]}>వార్త రాయండి</ThemedText>
+            </View>
+            <Pressable onPress={() => setBodyModalVisible(false)} style={{ padding: 8 }} hitSlop={10}>
+              <MaterialIcons name="check" size={24} color={primary} />
+            </Pressable>
+          </View>
+          
+          <View style={{ flex: 1, padding: 16 }}>
+            <TextInput
+              value={draft.body || ''}
+              onChangeText={(t) => {
+                if (t.length <= 10000) setDraft({ body: t });
+              }}
+              placeholder="మీ వార్త ఇక్కడ రాయండి... (1500 words వరకు రాయవచ్చు)"
+              placeholderTextColor={c.muted}
+              style={{
+                flex: 1,
+                borderWidth: 1,
+                borderColor: c.border,
+                borderRadius: 12,
+                padding: 16,
+                fontSize: 16,
+                lineHeight: 26,
+                color: c.text,
+                backgroundColor: c.card,
+                textAlignVertical: 'top',
+              }}
+              multiline
+              textAlignVertical="top"
+              maxLength={10000}
+              autoFocus
+            />
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12, paddingHorizontal: 4 }}>
+              <ThemedText style={{ color: c.muted, fontSize: 14 }}>
+                📝 {(draft.body || '').trim().split(/\s+/).filter(Boolean).length} words
+              </ThemedText>
+              <ThemedText style={{ color: (draft.body || '').length > 9000 ? '#e53935' : c.muted, fontSize: 14 }}>
+                {(draft.body || '').length} / 10000 chars
+              </ThemedText>
+            </View>
+          </View>
+        </SafeAreaView>
+      </Modal>
+
       {/* Legacy location picker modal removed; forced location modal is used above. */}
     </SafeAreaView>
   );
@@ -975,8 +1052,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 12,
     marginTop: 10,
-    minHeight: 180,
-    fontSize: 14,
+    minHeight: 220,
+    maxHeight: 300,
+    fontSize: 15,
+    lineHeight: 24,
   },
   bottomPad: { height: 84 },
   bottomBar: {

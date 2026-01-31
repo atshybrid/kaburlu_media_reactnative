@@ -159,7 +159,7 @@ export type TenantArticles = {
     topViewed?: ArticlePreview[];
   };
   newspaper: {
-    byStatus: { DRAFT?: number; PUBLISHED?: number };
+    byStatus: { DRAFT?: number; PENDING?: number; PUBLISHED?: number; REJECTED?: number };
     created30d: number;
   };
   raw: {

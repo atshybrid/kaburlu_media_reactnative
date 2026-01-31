@@ -294,29 +294,11 @@ export default function NewsApprovalScreen() {
     );
   }, [activeTab]);
 
-  // Open preview with full article details
-  const openPreview = useCallback(async (article: NewspaperArticle) => {
-    console.log('[NewsApproval] Opening preview for article:', article.id);
-    setPreviewLoading(true);
-    setPreviewArticle(article); // Show modal immediately with basic info
-    try {
-      const fullArticle = await getNewspaperArticle(article.id);
-      console.log('[NewsApproval] Full article loaded:', {
-        id: fullArticle.id,
-        hasContent: Boolean(fullArticle.content),
-        hasLead: Boolean(fullArticle.lead),
-        hasHeading: Boolean(fullArticle.heading),
-        hasPoints: Boolean(fullArticle.points?.length),
-        contentPreview: fullArticle.content?.substring(0, 100),
-      });
-      setPreviewArticle(fullArticle);
-    } catch (e: any) {
-      console.error('[NewsApproval] Failed to load full article:', e?.message, e);
-      // Keep showing the basic article info
-    } finally {
-      setPreviewLoading(false);
-    }
-  }, []);
+  // Open article detail page
+  const openPreview = useCallback((article: NewspaperArticle) => {
+    console.log('[NewsApproval] Opening article detail:', article.id);
+    router.push(`/tenant/article/${article.id}`);
+  }, [router]);
 
   // Share article as image
   const handleShareAsImage = useCallback(async (article: NewspaperArticle) => {

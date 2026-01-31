@@ -225,13 +225,10 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
   });
 
   // Footer fixed at device bottom within safe area
-  // When tab bar is visible, add extra offset to avoid overlap (tab bar is ~64px + safe area)
-  const tabBarHeight = 64;
-  const footerBottomOffset = isTabBarVisible 
-    ? tabBarHeight + insets.bottom
-    : 0;
+  // Disabled responsive behavior - footer stays at fixed position regardless of tab bar visibility
+  const footerBottomOffset = 0; // Fixed: no responsive adjustment based on tab bar
   // Footer padding to extend background into safe area when tab bar is hidden
-  const footerSafeAreaPadding = isTabBarVisible ? 0 : insets.bottom;
+  const footerSafeAreaPadding = insets.bottom; // Fixed: always include safe area padding
 
   // Relative time helper for createdAt: Xm, Xh (<=24h), then X day(s)
   const formatRelativeTime = (iso?: string): string => {

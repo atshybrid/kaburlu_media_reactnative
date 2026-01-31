@@ -84,6 +84,11 @@ type SubmitResult = {
 };
 
 export async function submitUnifiedArticle(): Promise<SubmitResult> {
+  const startTime = Date.now();
+  console.log('═══════════════════════════════════════════════════════════════');
+  console.log('[PostNews] 🚀 SUBMIT STARTED at', new Date().toISOString());
+  console.log('═══════════════════════════════════════════════════════════════');
+  
   try {
     const DEBUG_FULL = (() => {
       const raw = String(process.env.EXPO_PUBLIC_HTTP_DEBUG ?? '').toLowerCase();
@@ -91,6 +96,7 @@ export async function submitUnifiedArticle(): Promise<SubmitResult> {
     })();
 
     // Load all stored data
+    console.log('[PostNews] 📦 Loading stored data...');
     const [responseStr, locationStr, photosStr, tenantIdStr, languageCode, tokens] = await Promise.all([
       AsyncStorage.getItem('AI_REWRITE_RESPONSE'),
       AsyncStorage.getItem('SELECTED_LOCATION'),
@@ -100,7 +106,18 @@ export async function submitUnifiedArticle(): Promise<SubmitResult> {
       loadTokens(),
     ]);
 
+    console.log('[PostNews] 📦 Data loaded:', {
+      hasResponse: !!responseStr,
+      hasLocation: !!locationStr,
+      hasPhotos: !!photosStr,
+      tenantIdFromStorage: tenantIdStr,
+      languageCode,
+      hasTokens: !!tokens,
+      hasJwt: !!(tokens as any)?.jwt,
+    });
+
     if (!responseStr) {
+      console.error('[PostNews] ❌ ERROR: No article data found in storage');
       return { success: false, message: 'No article data found' };
     }
 
@@ -108,24 +125,61 @@ export async function submitUnifiedArticle(): Promise<SubmitResult> {
     const selectedLocation: CombinedLocationItem | null = locationStr ? JSON.parse(locationStr) : null;
     const uploadedPhotos: UploadedPhoto[] = photosStr ? JSON.parse(photosStr) : [];
 
+    console.log('[PostNews] 📝 AI Response parsed:', {
+      detected_category: response.detected_category,
+      selected_category: response.selected_category?.name,
+      print_headline: response.print_article?.headline?.substring(0, 50) + '...',
+      web_headline: response.web_article?.headline?.substring(0, 50) + '...',
+      publish_ready: response.status?.publish_ready,
+      validation_issues: response.status?.validation_issues,
+    });
+
+    console.log('[PostNews] 📍 Location:', selectedLocation ? {
+      village: selectedLocation.village?.name,
+      mandal: selectedLocation.mandal?.name,
+      district: selectedLocation.district?.name,
+      state: selectedLocation.state?.name,
+    } : 'NO LOCATION SELECTED');
+
+    console.log('[PostNews] 🖼️ Photos:', {
+      count: uploadedPhotos.length,
+      urls: uploadedPhotos.map(p => p.url?.substring(0, 60) + '...'),
+    });
+
     // Get tenant info from session
     const session = (tokens as any)?.session;
     const tenant = session?.tenant;
     const sessionTenantId = String(tenant?.id || '').trim();
     const finalTenantId = tenantIdStr || sessionTenantId;
 
+    console.log('[PostNews] 🏢 Tenant:', {
+      tenantIdFromStorage: tenantIdStr,
+      sessionTenantId,
+      finalTenantId,
+      tenantName: tenant?.name,
+    });
+
     if (!finalTenantId) {
+      console.error('[PostNews] ❌ ERROR: Tenant ID not found');
       return { success: false, message: 'Tenant ID not found' };
     }
 
     // Get category ID from detected category
     const detectedCategory = response.detected_category || response.selected_category?.name || '';
     
+    console.log('[PostNews] 📂 Fetching categories for tenant:', finalTenantId);
+    
     // Fetch categories to find ID
     const categoriesUrl = `/categories/tenant?tenantId=${encodeURIComponent(finalTenantId)}`;
     const categoriesRes = await request<any>(categoriesUrl, { method: 'GET' });
     const categoriesPayload = (categoriesRes as any)?.data ?? categoriesRes;
     const categoriesList = Array.isArray(categoriesPayload?.categories) ? categoriesPayload.categories : [];
+    
+    console.log('[PostNews] 📂 Categories fetched:', {
+      totalCategories: categoriesList.length,
+      lookingFor: detectedCategory,
+      availableCategories: categoriesList.slice(0, 10).map((c: any) => c.nameDefault || c.name),
+    });
     
     const foundCategory = categoriesList.find(
       (cat: any) => 
@@ -135,8 +189,18 @@ export async function submitUnifiedArticle(): Promise<SubmitResult> {
     );
 
     if (!foundCategory) {
+      console.error('[PostNews] ❌ ERROR: Category not found:', {
+        searchedFor: detectedCategory,
+        availableCategories: categoriesList.map((c: any) => c.nameDefault || c.name),
+      });
       return { success: false, message: `Category "${detectedCategory}" not found` };
     }
+
+    console.log('[PostNews] ✅ Category found:', {
+      id: foundCategory.id,
+      name: foundCategory.nameDefault || foundCategory.name,
+      slug: foundCategory.slug,
+    });
 
     // Build location object
     const locationResolved: any = {};
@@ -183,7 +247,11 @@ export async function submitUnifiedArticle(): Promise<SubmitResult> {
       villageId: selectedLocation?.village?.id,
     };
     const hasAnyLoc = !!(loc.stateId || loc.districtId || loc.mandalId || loc.villageId);
+    
+    console.log('[PostNews] 📍 Location IDs:', loc);
+    
     if (!hasAnyLoc) {
+      console.error('[PostNews] ❌ ERROR: No location selected');
       return { success: false, message: 'Please select a location before submitting' };
     }
 
@@ -251,6 +319,30 @@ export async function submitUnifiedArticle(): Promise<SubmitResult> {
       },
     };
 
+    console.log('═══════════════════════════════════════════════════════════════');
+    console.log('[PostNews] 📦 PAYLOAD READY');
+    console.log('═══════════════════════════════════════════════════════════════');
+    console.log('[PostNews] Payload Summary:', {
+      tenantId: payload.tenantId,
+      languageCode: payload.baseArticle.languageCode,
+      newsType: payload.baseArticle.newsType,
+      categoryId: payload.baseArticle.category.categoryId,
+      categoryName: payload.baseArticle.category.categoryName,
+      locationInputText: payload.location.inputText,
+      locationResolved: payload.location.resolved,
+      printHeadline: payload.printArticle.headline?.substring(0, 50),
+      webHeadline: payload.webArticle.headline?.substring(0, 50),
+      shortNewsH1: payload.shortNews.h1?.substring(0, 50),
+      imagesCount: payload.media.images.length,
+      imageUrls: payload.media.images.map(i => i.url?.substring(0, 60)),
+      publishReady: payload.publishControl.publishReady,
+      validationReason: payload.publishControl.reason,
+    });
+
+    console.log('[PostNews] 📋 FULL PAYLOAD (for backend debug):');
+    console.log(JSON.stringify(payload, null, 2));
+    console.log('═══════════════════════════════════════════════════════════════');
+
     if (__DEV__) {
       try {
         console.log('[unifiedArticle] → /articles/unified payload summary', {
@@ -271,22 +363,53 @@ export async function submitUnifiedArticle(): Promise<SubmitResult> {
       } catch {}
     }
 
-    // Submit to unified API (preferred). If backend has a 500, fall back to legacy endpoint.
+    // Submit to unified API (preferred). If backend has 404/500, fall back to legacy endpoint.
     let result: any;
     try {
+      console.log('[PostNews] 🌐 Submitting to /articles/unified...');
+      const submitStartTime = Date.now();
+      
       result = await request<any>('/articles/unified', {
         method: 'POST',
         body: payload,
+      });
+      
+      console.log('[PostNews] ✅ /articles/unified SUCCESS:', {
+        timeTaken: Date.now() - submitStartTime + 'ms',
+        success: result.success,
+        status: result.status,
+        message: result.message,
+        articleId: result.data?.id || result.data?.articleId,
       });
     } catch (e: any) {
       const isHttp = e instanceof HttpError;
       const status = isHttp ? e.status : 0;
       const details = isHttp ? (e.body?.details || e.body?.message || e.body?.error) : undefined;
+      const fullBody = isHttp ? e.body : undefined;
 
-      // Backend bug signature we saw: Cannot read properties of undefined (reading 'findFirst')
-      const shouldFallback = status === 500;
-      if (!shouldFallback) throw e;
+      console.error('═══════════════════════════════════════════════════════════════');
+      console.error('[PostNews] ❌ /articles/unified FAILED:');
+      console.error('═══════════════════════════════════════════════════════════════');
+      console.error('[PostNews] Error details:', {
+        status,
+        details,
+        message: e?.message,
+        isHttpError: isHttp,
+      });
+      if (fullBody) {
+        console.error('[PostNews] Full error body:', JSON.stringify(fullBody, null, 2));
+      }
 
+      console.warn('[unifiedArticle] /articles/unified failed:', { status, details, message: e?.message });
+
+      // Fallback to legacy endpoint on 404 (not deployed) or 500 (backend bug)
+      const shouldFallback = status === 404 || status === 500;
+      if (!shouldFallback) {
+        console.error('[PostNews] ❌ Not falling back - throwing error. Status:', status);
+        throw e;
+      }
+
+      console.log('[PostNews] 🔄 Falling back to /articles/newspaper endpoint...');
       console.warn('[unifiedArticle] /articles/unified failed, falling back to /articles/newspaper', {
         status,
         details,
@@ -356,9 +479,26 @@ export async function submitUnifiedArticle(): Promise<SubmitResult> {
         message: 'Created via fallback endpoint (/articles/newspaper)',
         data: legacy,
       };
+      
+      console.log('[PostNews] ✅ Fallback /articles/newspaper SUCCESS:', {
+        articleId: legacy?.id || legacy?.articleId,
+        status: 'DRAFT',
+      });
     }
 
+    const totalTime = Date.now() - startTime;
+    
     if (result.success) {
+      console.log('═══════════════════════════════════════════════════════════════');
+      console.log('[PostNews] 🎉 SUBMIT COMPLETE - SUCCESS');
+      console.log('[PostNews] Total time:', totalTime + 'ms');
+      console.log('[PostNews] Result:', {
+        success: true,
+        message: result.message,
+        status: result.status,
+        articleId: result.data?.id || result.data?.articleId,
+      });
+      console.log('═══════════════════════════════════════════════════════════════');
       return {
         success: true,
         message: result.message || 'Article created successfully',
@@ -366,21 +506,46 @@ export async function submitUnifiedArticle(): Promise<SubmitResult> {
         data: result.data,
       };
     } else {
+      console.error('═══════════════════════════════════════════════════════════════');
+      console.error('[PostNews] ❌ SUBMIT COMPLETE - FAILED');
+      console.error('[PostNews] Total time:', totalTime + 'ms');
+      console.error('[PostNews] Result:', {
+        success: false,
+        message: result.message || result.error,
+      });
+      console.error('═══════════════════════════════════════════════════════════════');
       return {
         success: false,
         message: result.message || result.error || 'Failed to create article',
       };
     }
   } catch (error: any) {
+    const totalTime = Date.now() - startTime;
+    console.error('═══════════════════════════════════════════════════════════════');
+    console.error('[PostNews] 💥 EXCEPTION CAUGHT');
+    console.error('[PostNews] Total time:', totalTime + 'ms');
+    console.error('═══════════════════════════════════════════════════════════════');
+    
     if (error instanceof HttpError) {
+      console.error('[PostNews] HttpError:', {
+        status: error.status,
+        message: error.message,
+        body: JSON.stringify(error.body, null, 2),
+      });
       console.error('Submit unified article error:', {
         status: error.status,
         body: error.body,
         message: error.message,
       });
     } else {
+      console.error('[PostNews] Error:', {
+        name: error?.name,
+        message: error?.message,
+        stack: error?.stack,
+      });
       console.error('Submit unified article error:', error);
     }
+    console.error('═══════════════════════════════════════════════════════════════');
     return {
       success: false,
       message: error?.message || 'An error occurred while submitting the article',

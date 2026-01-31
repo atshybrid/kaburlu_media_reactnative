@@ -10,7 +10,8 @@
 
 import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
-import { loginWithMpin, PaymentBreakdown, RazorpayLoginData } from '@/services/api';
+import { changeMpin, loginWithMpin, PaymentBreakdown, RazorpayLoginData } from '@/services/api';
+import { saveTokens } from '@/services/auth';
 import { formatPaymentAmount, openRazorpayCheckout, verifyPayment } from '@/services/payment';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -18,7 +19,7 @@ import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import LottieView from 'lottie-react-native';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -26,6 +27,7 @@ import {
   StatusBar,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -51,6 +53,11 @@ export default function ReporterPaymentScreen() {
     mpin?: string;
     razorpayData?: string; // JSON string of RazorpayLoginData
     breakdownData?: string; // JSON string of PaymentBreakdown
+    tenantName?: string;
+    tenantNativeName?: string;
+    tenantLogo?: string;
+    tenantPrimaryColor?: string;
+    isNewReporter?: string; // 'true' if reporter needs to set MPIN after payment
   }>();
   const colorScheme = useColorScheme();
   const isDark = colorScheme === 'dark';
@@ -75,6 +82,13 @@ export default function ReporterPaymentScreen() {
     mobile: string;
     mpin: string;
   } | null>(null);
+  
+  // Change MPIN state (shown after successful payment for new reporters)
+  const [showChangeMpin, setShowChangeMpin] = useState(false);
+  const [newMpin, setNewMpin] = useState('');
+  const [confirmMpin, setConfirmMpin] = useState('');
+  const [changingMpin, setChangingMpin] = useState(false);
+  const [mpinError, setMpinError] = useState<string | null>(null);
 
   // Theme
   const bgColor = isDark ? '#0f172a' : '#f8fafc';
@@ -215,7 +229,20 @@ export default function ReporterPaymentScreen() {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setSuccess(true);
 
-      // Try to auto-login if we have credentials (from params or stored)
+      // Check if this is a new reporter who needs to set MPIN
+      const isNewReporter = params.isNewReporter === 'true';
+      const mobileNumber = effectiveMobile || params.mobile;
+      
+      if (isNewReporter && mobileNumber) {
+        // New reporter: show change MPIN screen after brief success animation
+        setTimeout(() => {
+          setSuccess(false);
+          setShowChangeMpin(true);
+        }, 1500);
+        return;
+      }
+
+      // Existing reporter: Try to auto-login if we have credentials (from params or stored)
       if (effectiveMobile && effectiveMpin) {
         setTimeout(async () => {
           try {
@@ -225,17 +252,33 @@ export default function ReporterPaymentScreen() {
               source: params.mobile ? 'params' : 'stored',
             });
             const res = await loginWithMpin({ mobileNumber: effectiveMobile!, mpin: effectiveMpin! });
-            await AsyncStorage.setItem('jwt', res.jwt);
-            await AsyncStorage.setItem('refreshToken', res.refreshToken);
-            if (res.user?.languageId) await AsyncStorage.setItem('languageId', res.user.languageId);
+            
+            // Check if MPIN is insecure (last 4 digits of phone)
+            const last4 = effectiveMobile!.slice(-4);
+            const isInsecureMpin = effectiveMpin === last4;
+            
+            await saveTokens({
+              jwt: res.jwt,
+              refreshToken: res.refreshToken,
+              expiresAt: res.expiresIn ? Date.now() + res.expiresIn * 1000 : undefined,
+              languageId: res.user?.languageId,
+              user: res.user,
+            });
             
             // Clear stored credentials after successful login
             await AsyncStorage.removeItem('pendingPaymentCredentials');
             
-            // Navigate to home
-            setTimeout(() => {
-              router.replace('/news');
-            }, 1500);
+            if (isInsecureMpin) {
+              // MPIN is last 4 digits - force change
+              console.log('[PAYMENT] Insecure MPIN detected, showing change MPIN');
+              setSuccess(false);
+              setShowChangeMpin(true);
+            } else {
+              // Navigate to dashboard
+              setTimeout(() => {
+                router.replace('/reporter/dashboard');
+              }, 1500);
+            }
           } catch (loginErr: any) {
             console.error('[PAYMENT] Login after payment failed', loginErr, {
               status: loginErr?.status,
@@ -264,7 +307,84 @@ export default function ReporterPaymentScreen() {
     } finally {
       setPaying(false);
     }
-  }, [razorpayData, effectiveMobile, effectiveMpin, storedCredentials, params.reporterId, params.tenantId, params.mobile, router]);
+  }, [razorpayData, effectiveMobile, effectiveMpin, storedCredentials, params.reporterId, params.tenantId, params.mobile, params.isNewReporter, router]);
+
+  // Handle change MPIN after payment
+  const handleChangeMpin = useCallback(async () => {
+    const mobileNumber = effectiveMobile || params.mobile;
+    if (!mobileNumber) {
+      setMpinError('మొబైల్ నంబర్ కనుగొనబడలేదు');
+      return;
+    }
+    
+    if (!/^\d{4}$/.test(newMpin)) {
+      setMpinError('కొత్త MPIN 4 అంకెలు ఉండాలి');
+      return;
+    }
+    
+    if (newMpin !== confirmMpin) {
+      setMpinError('MPIN లు సరిపోలడం లేదు');
+      return;
+    }
+    
+    // Check if new MPIN is also the last 4 digits (still insecure)
+    const last4 = mobileNumber.slice(-4);
+    if (newMpin === last4) {
+      setMpinError('మీ ఫోన్ నంబర్ చివరి 4 అంకెలు MPIN గా వాడవద్దు');
+      return;
+    }
+    
+    setChangingMpin(true);
+    setMpinError(null);
+    
+    try {
+      // For new reporters, old MPIN is last 4 digits of phone (auto-set by backend)
+      const oldMpin = last4;
+      
+      await changeMpin({
+        mobileNumber,
+        oldMpin,
+        newMpin,
+      });
+      
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      
+      // Now login with new MPIN
+      try {
+        const res = await loginWithMpin({ mobileNumber, mpin: newMpin });
+        await saveTokens({
+          jwt: res.jwt,
+          refreshToken: res.refreshToken,
+          expiresAt: res.expiresIn ? Date.now() + res.expiresIn * 1000 : undefined,
+          languageId: res.user?.languageId,
+          user: res.user,
+        });
+        
+        await AsyncStorage.removeItem('pendingPaymentCredentials');
+        
+        // Navigate to dashboard
+        setTimeout(() => {
+          router.replace('/reporter/dashboard');
+        }, 500);
+      } catch (loginErr: any) {
+        console.error('[PAYMENT] Login after MPIN change failed', loginErr);
+        // MPIN changed successfully, redirect to login
+        setTimeout(() => {
+          router.replace('/auth/login');
+        }, 1000);
+      }
+    } catch (err: any) {
+      console.error('[PAYMENT] Change MPIN failed', err);
+      setMpinError(err?.message || 'MPIN మార్చడం విఫలమైంది');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      setChangingMpin(false);
+    }
+  }, [effectiveMobile, params.mobile, newMpin, confirmMpin, router]);
+
+  // Refs for MPIN inputs
+  const newMpinRef = useRef<TextInput>(null);
+  const confirmMpinRef = useRef<TextInput>(null);
 
   // Retry verification when it failed previously
   const handleRetryVerification = useCallback(async () => {
@@ -290,6 +410,18 @@ export default function ReporterPaymentScreen() {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setSuccess(true);
 
+      // Check if this is a new reporter
+      const isNewReporter = params.isNewReporter === 'true';
+      const mobileNumber = effectiveMobile || params.mobile;
+      
+      if (isNewReporter && mobileNumber) {
+        setTimeout(() => {
+          setSuccess(false);
+          setShowChangeMpin(true);
+        }, 1500);
+        return;
+      }
+
       // Try to auto-login if we have credentials (from params or stored)
       if (effectiveMobile && effectiveMpin) {
         setTimeout(async () => {
@@ -300,16 +432,29 @@ export default function ReporterPaymentScreen() {
               source: params.mobile ? 'params' : 'stored',
             });
             const res = await loginWithMpin({ mobileNumber: effectiveMobile!, mpin: effectiveMpin! });
-            await AsyncStorage.setItem('jwt', res.jwt);
-            await AsyncStorage.setItem('refreshToken', res.refreshToken);
-            if (res.user?.languageId) await AsyncStorage.setItem('languageId', res.user.languageId);
+            
+            const last4 = effectiveMobile!.slice(-4);
+            const isInsecureMpin = effectiveMpin === last4;
+            
+            await saveTokens({
+              jwt: res.jwt,
+              refreshToken: res.refreshToken,
+              expiresAt: res.expiresIn ? Date.now() + res.expiresIn * 1000 : undefined,
+              languageId: res.user?.languageId,
+              user: res.user,
+            });
             
             // Clear stored credentials after successful login
             await AsyncStorage.removeItem('pendingPaymentCredentials');
             
-            setTimeout(() => {
-              router.replace('/news');
-            }, 1500);
+            if (isInsecureMpin) {
+              setSuccess(false);
+              setShowChangeMpin(true);
+            } else {
+              setTimeout(() => {
+                router.replace('/reporter/dashboard');
+              }, 1500);
+            }
           } catch (loginErr: any) {
             console.error('[PAYMENT] Login after retry verification failed', loginErr, {
               status: loginErr?.status,
@@ -336,7 +481,7 @@ export default function ReporterPaymentScreen() {
     } finally {
       setVerifying(false);
     }
-  }, [pendingPaymentData, params.reporterId, params.tenantId, params.mobile, effectiveMobile, effectiveMpin, storedCredentials, router]);
+  }, [pendingPaymentData, params.reporterId, params.tenantId, params.mobile, params.isNewReporter, effectiveMobile, effectiveMpin, storedCredentials, router]);
 
   // Go back
   const handleBack = useCallback(() => {
@@ -346,6 +491,123 @@ export default function ReporterPaymentScreen() {
       router.replace('/auth/login');
     }
   }, [router]);
+
+  // Tenant branding from params
+  const tenantLogo = params.tenantLogo;
+  const tenantName = params.tenantNativeName || params.tenantName || 'Kaburlu';
+
+  // Change MPIN state (after successful payment)
+  if (showChangeMpin) {
+    return (
+      <View style={[styles.container, { backgroundColor: bgColor }]}>
+        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+        
+        {/* Header with tenant branding */}
+        <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+          <View style={{ width: 44 }} />
+          <View style={styles.headerCenter}>
+            {tenantLogo ? (
+              <Image source={{ uri: tenantLogo }} style={styles.headerLogo} />
+            ) : (
+              <Image source={require('@/assets/images/app-icon.png')} style={styles.headerLogo} />
+            )}
+            <Text style={[styles.headerTitle, { color: textColor }]}>{tenantName}</Text>
+          </View>
+          <View style={{ width: 44 }} />
+        </View>
+
+        <ScrollView 
+          contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={[styles.paymentCard, { backgroundColor: cardBg, borderColor }]}>
+            {/* Icon */}
+            <LinearGradient
+              colors={['#10b981', '#059669']}
+              style={styles.iconContainer}
+            >
+              <Ionicons name="shield-checkmark" size={36} color="#fff" />
+            </LinearGradient>
+
+            <Text style={[styles.title, { color: textColor }]}>MPIN సెట్ చేయండి</Text>
+            <Text style={[styles.subtitle, { color: mutedColor }]}>
+              మీ అకౌంట్ భద్రత కోసం కొత్త 4-అంకెల MPIN సృష్టించండి
+            </Text>
+
+            {/* MPIN Error */}
+            {mpinError && (
+              <View style={[styles.errorBox, { backgroundColor: '#fef2f2', borderColor: '#fecaca' }]}>
+                <Ionicons name="alert-circle" size={20} color="#dc2626" />
+                <Text style={styles.errorText}>{mpinError}</Text>
+              </View>
+            )}
+
+            {/* New MPIN Input */}
+            <View style={styles.mpinInputContainer}>
+              <Text style={[styles.mpinLabel, { color: textColor }]}>కొత్త MPIN</Text>
+              <TextInput
+                ref={newMpinRef}
+                style={[styles.mpinTextInput, { backgroundColor: isDark ? '#1e293b' : '#f1f5f9', color: textColor, borderColor }]}
+                value={newMpin}
+                onChangeText={(t) => { setNewMpin(t.replace(/\D/g, '').slice(0, 4)); setMpinError(null); }}
+                keyboardType="number-pad"
+                maxLength={4}
+                placeholder="••••"
+                placeholderTextColor={mutedColor}
+                secureTextEntry
+                autoFocus
+                returnKeyType="next"
+                onSubmitEditing={() => confirmMpinRef.current?.focus()}
+              />
+            </View>
+
+            {/* Confirm MPIN Input */}
+            <View style={styles.mpinInputContainer}>
+              <Text style={[styles.mpinLabel, { color: textColor }]}>MPIN నిర్ధారించండి</Text>
+              <TextInput
+                ref={confirmMpinRef}
+                style={[styles.mpinTextInput, { backgroundColor: isDark ? '#1e293b' : '#f1f5f9', color: textColor, borderColor }]}
+                value={confirmMpin}
+                onChangeText={(t) => { setConfirmMpin(t.replace(/\D/g, '').slice(0, 4)); setMpinError(null); }}
+                keyboardType="number-pad"
+                maxLength={4}
+                placeholder="••••"
+                placeholderTextColor={mutedColor}
+                secureTextEntry
+                returnKeyType="done"
+                onSubmitEditing={handleChangeMpin}
+              />
+            </View>
+
+            {/* Set MPIN Button */}
+            <TouchableOpacity
+              style={[styles.payBtn, changingMpin && styles.payBtnDisabled]}
+              onPress={handleChangeMpin}
+              disabled={changingMpin}
+            >
+              <LinearGradient
+                colors={changingMpin ? ['#94a3b8', '#94a3b8'] : ['#10b981', '#059669']}
+                style={styles.payBtnGradient}
+              >
+                {changingMpin ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <>
+                    <Ionicons name="checkmark-circle" size={20} color="#fff" />
+                    <Text style={styles.payBtnText}>MPIN సెట్ చేయండి</Text>
+                  </>
+                )}
+              </LinearGradient>
+            </TouchableOpacity>
+
+            <Text style={[styles.helpText, { color: mutedColor, marginTop: 16 }]}>
+              మీ ఫోన్ నంబర్ చివరి 4 అంకెలు MPIN గా ఉపయోగించవద్దు
+            </Text>
+          </View>
+        </ScrollView>
+      </View>
+    );
+  }
 
   // Success state
   if (success) {
@@ -372,14 +634,18 @@ export default function ReporterPaymentScreen() {
     <View style={[styles.container, { backgroundColor: bgColor }]}>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
       
-      {/* Header */}
+      {/* Header with tenant branding */}
       <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity style={[styles.backBtn, { backgroundColor: cardBg }]} onPress={handleBack}>
           <Ionicons name="arrow-back" size={22} color={textColor} />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
-          <Image source={require('@/assets/images/app-icon.png')} style={styles.headerLogo} />
-          <Text style={[styles.headerTitle, { color: textColor }]}>Kaburlu</Text>
+          {tenantLogo ? (
+            <Image source={{ uri: tenantLogo }} style={styles.headerLogo} />
+          ) : (
+            <Image source={require('@/assets/images/app-icon.png')} style={styles.headerLogo} />
+          )}
+          <Text style={[styles.headerTitle, { color: textColor }]}>{tenantName}</Text>
         </View>
         <View style={{ width: 44 }} />
       </View>
@@ -781,5 +1047,26 @@ const styles = StyleSheet.create({
   successSubtitle: {
     fontSize: 16,
     marginTop: 8,
+  },
+  // MPIN Input styles
+  mpinInputContainer: {
+    width: '100%',
+    marginBottom: 16,
+  },
+  mpinLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  mpinTextInput: {
+    width: '100%',
+    height: 56,
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 20,
+    fontSize: 24,
+    fontWeight: '700',
+    textAlign: 'center',
+    letterSpacing: 8,
   },
 });

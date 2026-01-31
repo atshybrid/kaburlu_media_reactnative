@@ -69,6 +69,7 @@ const LanguageSelectionScreen = () => {
       // Only check existing permissions - don't request during registration (Play Store policy)
       const { checkPermissionsOnly } = await import('@/services/permissions');
       const perms = await checkPermissionsOnly();
+      console.log('[LANG] FCM token for registration:', perms.pushToken ? perms.pushToken : 'NOT AVAILABLE');
       const authResponse = await registerGuestUser({
         // Backend expects string IDs like "cmfdwhqk80009ugtof37yt8vv"
         languageId: language.id,

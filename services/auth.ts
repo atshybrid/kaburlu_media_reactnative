@@ -203,3 +203,71 @@ export async function checkPostArticleAccess(): Promise<{
     };
   }
 }
+
+// ----------------------------
+// FRESH INSTALL DETECTION
+// ----------------------------
+// On iOS, Keychain/AsyncStorage can persist through app reinstall.
+// This creates a "fresh install marker" to detect if user uninstalled/reinstalled.
+const INSTALL_MARKER_KEY = 'app_install_marker';
+const INSTALL_VERSION = '1'; // Bump this to force a fresh start on next update if needed
+
+/**
+ * Check if this is a fresh install and clear stale data if so.
+ * Should be called early in app boot (e.g., splash screen).
+ * Returns true if data was cleared.
+ */
+export async function checkAndClearOnFreshInstall(): Promise<boolean> {
+  try {
+    const marker = await AsyncStorage.getItem(INSTALL_MARKER_KEY);
+    
+    if (marker === INSTALL_VERSION) {
+      // Same install, nothing to do
+      return false;
+    }
+    
+    // Fresh install or version bump - clear ALL app data
+    console.log('[AUTH] Fresh install detected, clearing all app data...');
+    
+    // Get all keys
+    const allKeys = await AsyncStorage.getAllKeys();
+    
+    // Clear everything except essential onboarding keys
+    const keysToPreserve = [
+      'selectedLanguage',       // Keep language selection
+      'last_login_mobile',      // Keep last mobile for convenience
+      'app_sound_muted',        // Keep sound preference
+    ];
+    
+    const keysToRemove = allKeys.filter(k => !keysToPreserve.includes(k));
+    
+    if (keysToRemove.length > 0) {
+      await AsyncStorage.multiRemove(keysToRemove);
+      console.log('[AUTH] Cleared', keysToRemove.length, 'stale keys');
+    }
+    
+    // Set the marker for future boots
+    await AsyncStorage.setItem(INSTALL_MARKER_KEY, INSTALL_VERSION);
+    console.log('[AUTH] Fresh install cleanup complete');
+    
+    return true;
+  } catch (e) {
+    console.warn('[AUTH] checkAndClearOnFreshInstall failed:', e);
+    // Still set marker to avoid repeating
+    try { await AsyncStorage.setItem(INSTALL_MARKER_KEY, INSTALL_VERSION); } catch {}
+    return false;
+  }
+}
+
+/**
+ * Force clear all app data (for debug/logout flows)
+ */
+export async function clearAllAppData(): Promise<void> {
+  try {
+    await AsyncStorage.clear();
+    await AsyncStorage.setItem(INSTALL_MARKER_KEY, INSTALL_VERSION);
+    console.log('[AUTH] All app data cleared');
+  } catch (e) {
+    console.warn('[AUTH] clearAllAppData failed:', e);
+  }
+}

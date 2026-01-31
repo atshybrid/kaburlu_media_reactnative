@@ -266,6 +266,29 @@ export async function checkPermissionsOnly(): Promise<PermissionStatus> {
     const Notifications = await import('expo-notifications');
     const current = await Notifications.getPermissionsAsync();
     status.notifications = current.status as any;
+    
+    // Get FCM token if notification permission is granted
+    if (current.status === 'granted') {
+      try {
+        // Prefer FCM/Device token over Expo token
+        const deviceToken = await Notifications.getDevicePushTokenAsync();
+        const tokenStr = (deviceToken as any)?.data || (deviceToken as any)?.token;
+        if (tokenStr) {
+          status.pushToken = tokenStr;
+          console.log('[PERM] FCM Token (full):', tokenStr);
+        }
+      } catch (e) {
+        console.warn('[PERM] FCM token fetch failed, trying Expo token');
+        try {
+          const Constants = await import('expo-constants');
+          const projectId = (Constants as any)?.default?.expoConfig?.extra?.eas?.projectId
+            || (Constants as any)?.expoConfig?.extra?.eas?.projectId;
+          const expoToken = await Notifications.getExpoPushTokenAsync(projectId ? { projectId } as any : undefined as any);
+          status.pushToken = expoToken?.data;
+          console.log('[PERM] Expo Token:', status.pushToken);
+        } catch {}
+      }
+    }
   } catch {}
 
   try {

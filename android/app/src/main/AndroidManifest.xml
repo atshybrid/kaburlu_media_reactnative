@@ -2,6 +2,7 @@
   <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
   <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
   <uses-permission android:name="android.permission.INTERNET"/>
+  <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
   <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
   <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
   <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
@@ -29,7 +30,6 @@
         <action android:name="android.intent.action.MAIN"/>
         <category android:name="android.intent.category.LAUNCHER"/>
       </intent-filter>
-      <!-- Custom URL Scheme: kaburlu:// -->
       <intent-filter>
         <action android:name="android.intent.action.VIEW"/>
         <category android:name="android.intent.category.DEFAULT"/>
@@ -37,19 +37,24 @@
         <data android:scheme="kaburlu"/>
         <data android:scheme="exp+kaburlu"/>
       </intent-filter>
-      <!-- App Links: s.kaburlumedia.com (short URLs) -->
-      <intent-filter android:autoVerify="true">
+      <intent-filter android:autoVerify="true" data-generated="true">
         <action android:name="android.intent.action.VIEW"/>
-        <category android:name="android.intent.category.DEFAULT"/>
+        <data android:scheme="https" android:host="s.kaburlumedia.com" android:pathPrefix="/"/>
         <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="https" android:host="s.kaburlumedia.com"/>
+        <category android:name="android.intent.category.DEFAULT"/>
       </intent-filter>
-      <!-- App Links: kaburlumedia.com (main domain) -->
-      <intent-filter android:autoVerify="true">
+      <intent-filter android:autoVerify="true" data-generated="true">
         <action android:name="android.intent.action.VIEW"/>
-        <category android:name="android.intent.category.DEFAULT"/>
-        <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="https" android:host="kaburlumedia.com" android:pathPrefix="/article"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+      </intent-filter>
+      <intent-filter data-generated="true">
+        <action android:name="android.intent.action.VIEW"/>
+        <data android:scheme="kaburlu"/>
+        <data android:scheme="exp+kaburlu"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <category android:name="android.intent.category.DEFAULT"/>
       </intent-filter>
     </activity>
   </application>

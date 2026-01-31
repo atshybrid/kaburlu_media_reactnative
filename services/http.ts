@@ -209,7 +209,8 @@ export async function request<T = any>(path: string, options: { method?: HttpMet
       const isHttp = err instanceof HttpError;
       const status = isHttp ? err.status : 0;
       // Handle auth errors by attempting a token refresh once per request
-      if (!attemptedRefresh && isAuthError(err) && !path.startsWith('/auth/refresh')) {
+      // Skip auth refresh for noAuth requests (like login) - they handle 401 themselves
+      if (!options.noAuth && !attemptedRefresh && isAuthError(err) && !path.startsWith('/auth/refresh') && !path.startsWith('/auth/login')) {
         try {
           const newJwt = await tryRefreshJwt();
           headers.Authorization = `Bearer ${newJwt}`;

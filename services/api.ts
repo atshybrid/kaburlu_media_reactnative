@@ -706,6 +706,8 @@ function normalizeApiArticle(a: any): Article {
  * @param isShortId - If true, resolve the shortId to full article ID first
  */
 export const getArticleById = async (id: string, isShortId?: boolean): Promise<Article | undefined> => {
+  console.log('[API] getArticleById called with id:', id, 'isShortId:', isShortId);
+  
   // If mock mode, use mock data
   if (await getMockMode()) {
     await new Promise(resolve => setTimeout(resolve, 500));
@@ -724,16 +726,25 @@ export const getArticleById = async (id: string, isShortId?: boolean): Promise<A
       articleId = resolved;
     }
     
-    // Fetch the article from the API
-    const json = await request<any>(`/shortnews/${articleId}`, { 
+    // Fetch the article from the PUBLIC API endpoint
+    // Correct endpoint: /shortnews/public/:id (not /shortnews/:id)
+    console.log('[API] Fetching from /shortnews/public/' + articleId);
+    const json = await request<any>(`/shortnews/public/${articleId}`, { 
       method: 'GET',
       timeoutMs: 15000,
       noAuth: true,
     });
     
+    console.log('[API] Response received:', json ? 'OK' : 'Empty', Object.keys(json || {}));
+    
     // Handle response structure variations
     const raw = json?.data || json;
-    if (!raw) return undefined;
+    if (!raw) {
+      console.warn('[API] No data in response');
+      return undefined;
+    }
+    
+    console.log('[API] Raw article data keys:', Object.keys(raw));
     
     // Normalize the article to the Article type
     const article = normalizeApiArticle(raw);
@@ -1110,9 +1121,64 @@ export type AuthResponse = {
   };
 };
 
+// Extended data returned when 402 Payment Required is thrown during mpin-status check
+export interface MpinStatusPaymentRequiredData extends PaymentRequiredData {
+  tenant?: {
+    id: string;
+    name: string;
+    slug?: string;
+    nativeName?: string;
+    registrationTitle?: string;
+    publisherName?: string;
+    logoUrl?: string;
+    faviconUrl?: string;
+    primaryColor?: string;
+  };
+}
+
 export async function getMpinStatus(mobileNumber: string): Promise<MpinStatus> {
-  const res = await request<MpinStatus>(`/auth/mpin-status/${encodeURIComponent(mobileNumber)}` as any, { noAuth: true });
-  return res;
+  try {
+    const res = await request<MpinStatus>(`/auth/mpin-status/${encodeURIComponent(mobileNumber)}` as any, { noAuth: true });
+    return res;
+  } catch (err: any) {
+    // Handle 402 Payment Required - reporter has pending payment
+    if (err instanceof HttpError && err.status === 402) {
+      const body = err.body;
+      const code = body?.code || body?.data?.code;
+      
+      if (code === 'PAYMENT_REQUIRED' || body?.data?.reporter) {
+        const data = body?.data || body;
+        const razorpayData = data?.razorpay;
+        const breakdown = data?.breakdown;
+        const outstanding = data?.outstanding;
+        const reporter = data?.reporter;
+        const tenant = data?.tenant;
+        
+        console.log('[API] getMpinStatus payment required', { 
+          mobile: mobileNumber.replace(/(\d{3})\d+(\d{2})$/, '$1***$2'),
+          hasRazorpay: !!razorpayData,
+          hasBreakdown: !!breakdown,
+          hasReporter: !!reporter,
+          hasTenant: !!tenant,
+          tenantName: tenant?.name,
+          tenantLogo: tenant?.logoUrl,
+        });
+        
+        const paymentError = new PaymentRequiredError({ 
+          razorpay: razorpayData,
+          breakdown,
+          outstanding,
+          reporter,
+        } as MpinStatusPaymentRequiredData, body?.message || 'Payment required', mobileNumber);
+        
+        // Attach tenant data for branding
+        (paymentError.data as MpinStatusPaymentRequiredData).tenant = tenant;
+        
+        throw paymentError;
+      }
+    }
+    throw err;
+  }
 }
 
 // --- MPIN Reset Flow (request OTP -> verify OTP -> set new MPIN) ---
@@ -1141,6 +1207,14 @@ export interface SetNewMpinPayload { id: string; mobileNumber: string; mpin: str
 export interface SetNewMpinResponse { success: boolean; }
 export async function setNewMpin(payload: SetNewMpinPayload): Promise<SetNewMpinResponse> {
   return await request<SetNewMpinResponse>(`/auth/set-mpin`, { method: 'POST', body: payload });
+}
+
+// --- Change MPIN (for logged-in users or after payment) ---
+// POST /auth/change-mpin { mobileNumber, oldMpin, newMpin }
+export interface ChangeMpinPayload { mobileNumber: string; oldMpin: string; newMpin: string; }
+export interface ChangeMpinResponse { success: boolean; message?: string; }
+export async function changeMpin(payload: ChangeMpinPayload): Promise<ChangeMpinResponse> {
+  return await request<ChangeMpinResponse>(`/auth/change-mpin`, { method: 'POST', body: payload, noAuth: true });
 }
 
 // ---- Logout ----
@@ -1428,6 +1502,8 @@ export const registerGuestUser = async (data: { languageId: string; deviceDetail
     const { label, body } = variants[i];
     try {
       attemptsMade++;
+      // Log full token for debugging (one-time fix check)
+      console.log(`[API] Registering guest (attempt ${i + 1}/${variants.length} ${label}), pushToken:`, pushToken || 'NOT SET');
       const logBody = JSON.parse(JSON.stringify(body));
       try {
         if (logBody?.deviceDetails?.pushToken) logBody.deviceDetails.pushToken = '[redacted]';
@@ -2236,6 +2312,7 @@ export type CreateNewspaperArticleInput = {
 };
 
 export type CreateNewspaperArticleResponse = {
+  id?: string;
   articleId?: string;
   baseArticleId?: string;
   newspaperArticleId?: string;

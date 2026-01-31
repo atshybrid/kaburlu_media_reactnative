@@ -1,7 +1,7 @@
 /**
- * Reporter Article Detail Page
- * Beginner-friendly design with Telugu labels
- * View, Edit, Delete, and Share your own newspaper articles
+ * Tenant Admin Article Detail Page
+ * Same as Reporter Article Detail with additional Approve/Reject actions
+ * View, Edit, Delete, Share, Approve, Reject newspaper articles
  */
 import ShareableArticleImage, {
     ShareableArticleData,
@@ -9,14 +9,13 @@ import ShareableArticleImage, {
 } from '@/components/ShareableArticleImage';
 import { loadTokens } from '@/services/auth';
 import {
-    deleteNewspaperArticle,
-    getNewspaperArticleById,
-    getReporterMe,
+    approveNewspaperArticle,
+    getNewspaperArticle,
+    rejectNewspaperArticle,
     updateNewspaperArticle,
-    type NewspaperArticleDetail,
-    type ReporterMeResponse,
+    type NewspaperArticle,
     type UpdateNewspaperArticlePayload,
-} from '@/services/reporters';
+} from '@/services/tenantAdmin';
 
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
@@ -48,7 +47,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 type SessionData = {
   user?: { name?: string };
   tenant?: { name?: string };
-  reporter?: ReporterMeResponse;
 };
 
 const DEFAULT_PRIMARY = '#109edc';
@@ -158,13 +156,9 @@ const ArticleSkeleton = ({ insets }: { insets: { top: number; bottom: number } }
             <SkeletonBox width={8} height={8} borderRadius={4} style={{ marginRight: 10 }} />
             <SkeletonBox width="75%" height={16} />
           </View>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
-            <SkeletonBox width={8} height={8} borderRadius={4} style={{ marginRight: 10 }} />
-            <SkeletonBox width="90%" height={16} />
-          </View>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             <SkeletonBox width={8} height={8} borderRadius={4} style={{ marginRight: 10 }} />
-            <SkeletonBox width="60%" height={16} />
+            <SkeletonBox width="90%" height={16} />
           </View>
         </View>
 
@@ -172,30 +166,10 @@ const ArticleSkeleton = ({ insets }: { insets: { top: number; bottom: number } }
         <SkeletonBox width="100%" height={16} style={{ marginBottom: 8 }} />
         <SkeletonBox width="100%" height={16} style={{ marginBottom: 8 }} />
         <SkeletonBox width="95%" height={16} style={{ marginBottom: 8 }} />
-        <SkeletonBox width="100%" height={16} style={{ marginBottom: 8 }} />
-        <SkeletonBox width="80%" height={16} style={{ marginBottom: 16 }} />
-
-        <SkeletonBox width="100%" height={16} style={{ marginBottom: 8 }} />
-        <SkeletonBox width="90%" height={16} style={{ marginBottom: 8 }} />
-        <SkeletonBox width="100%" height={16} style={{ marginBottom: 8 }} />
-        <SkeletonBox width="70%" height={16} style={{ marginBottom: 20 }} />
-
-        {/* Web Link Card Skeleton */}
-        <View style={[styles.webLinkCard, { backgroundColor: '#F3F4F6' }]}>
-          <SkeletonBox width={44} height={44} borderRadius={22} />
-          <View style={{ flex: 1 }}>
-            <SkeletonBox width={100} height={14} style={{ marginBottom: 6 }} />
-            <SkeletonBox width={180} height={12} />
-          </View>
-        </View>
+        <SkeletonBox width="80%" height={16} style={{ marginBottom: 20 }} />
 
         {/* Meta Card Skeleton */}
         <View style={styles.metaCard}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-            <SkeletonBox width={16} height={16} borderRadius={4} style={{ marginRight: 8 }} />
-            <SkeletonBox width={60} height={14} style={{ marginRight: 8 }} />
-            <SkeletonBox width={140} height={14} />
-          </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
             <SkeletonBox width={16} height={16} borderRadius={4} style={{ marginRight: 8 }} />
             <SkeletonBox width={60} height={14} style={{ marginRight: 8 }} />
@@ -212,7 +186,7 @@ const ArticleSkeleton = ({ insets }: { insets: { top: number; bottom: number } }
 
     {/* Action Bar Skeleton */}
     <View style={[styles.actionBar, { paddingBottom: insets.bottom + 12 }]}>
-      <SkeletonBox width="25%" height={44} borderRadius={10} />
+      <SkeletonBox width="30%" height={44} borderRadius={10} />
       <SkeletonBox width="30%" height={44} borderRadius={10} />
       <SkeletonBox width="30%" height={44} borderRadius={10} />
     </View>
@@ -228,13 +202,13 @@ const STATUS_COLORS: Record<string, { bg: string; text: string; label: string; t
   ARCHIVED: { bg: '#E5E7EB', text: '#6B7280', label: 'Archived', teluguLabel: 'ఆర్కైవ్', icon: 'archive-outline' },
 };
 
-export default function ReporterArticleDetail() {
+export default function TenantArticleDetail() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
 
   const [loading, setLoading] = useState(true);
-  const [article, setArticle] = useState<NewspaperArticleDetail | null>(null);
+  const [article, setArticle] = useState<NewspaperArticle | null>(null);
   const [error, setError] = useState<string | null>(null);
   
   // Edit mode
@@ -247,10 +221,12 @@ export default function ReporterArticleDetail() {
   // Delete confirmation
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  
+  // Approve/Reject loading
+  const [actionLoading, setActionLoading] = useState<'approve' | 'reject' | null>(null);
 
-  // Session/reporter data for share as image
+  // Session data for share
   const [session, setSession] = useState<SessionData | null>(null);
-  const [reporter, setReporter] = useState<ReporterMeResponse | null>(null);
   const [primaryColor, setPrimaryColor] = useState(DEFAULT_PRIMARY);
 
   // Share as image
@@ -277,11 +253,8 @@ export default function ReporterArticleDetail() {
             if (isValidHexColor(pColor)) setPrimaryColor(pColor);
           }
         }
-        // Also load reporter from API for latest data
-        const reporterData = await getReporterMe();
-        setReporter(reporterData);
       } catch (e) {
-        console.log('[ArticleDetail] Failed to load session/reporter:', e);
+        console.log('[TenantArticleDetail] Failed to load session:', e);
       }
     })();
   }, []);
@@ -294,13 +267,13 @@ export default function ReporterArticleDetail() {
     setError(null);
     
     try {
-      const data = await getNewspaperArticleById(id);
+      const data = await getNewspaperArticle(id);
       setArticle(data);
       setEditTitle(data.title || '');
       setEditSubtitle(data.subTitle || '');
       setEditContent(data.content || '');
     } catch (e: any) {
-      console.error('[ArticleDetail] Load failed:', e);
+      console.error('[TenantArticleDetail] Load failed:', e);
       setError(e?.message || 'Failed to load article');
     } finally {
       setLoading(false);
@@ -310,6 +283,74 @@ export default function ReporterArticleDetail() {
   useEffect(() => {
     loadArticle();
   }, [loadArticle]);
+
+  // Approve article
+  const handleApprove = () => {
+    if (!id || !article) return;
+    
+    Alert.alert(
+      'ఆర్టికల్ ఆమోదించాలా?',
+      `"${article.title?.slice(0, 50)}..." ప్రచురించబడుతుంది.`,
+      [
+        { text: 'వద్దు', style: 'cancel' },
+        {
+          text: 'ఆమోదించు',
+          style: 'default',
+          onPress: async () => {
+            setActionLoading('approve');
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            try {
+              await approveNewspaperArticle(id);
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              Alert.alert('విజయం! ✅', 'ఆర్టికల్ ప్రచురించబడింది', [
+                { text: 'సరే', onPress: () => router.back() },
+              ]);
+            } catch (e: any) {
+              console.error('[TenantArticleDetail] Approve failed:', e);
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+              Alert.alert('లోపం', e?.message || 'ఆమోదించడం విఫలమైంది');
+            } finally {
+              setActionLoading(null);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  // Reject article
+  const handleReject = () => {
+    if (!id || !article) return;
+    
+    Alert.alert(
+      'ఆర్టికల్ తిరస్కరించాలా?',
+      `"${article.title?.slice(0, 50)}..." తిరస్కరించబడుతుంది.`,
+      [
+        { text: 'వద్దు', style: 'cancel' },
+        {
+          text: 'తిరస్కరించు',
+          style: 'destructive',
+          onPress: async () => {
+            setActionLoading('reject');
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            try {
+              await rejectNewspaperArticle(id);
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              Alert.alert('తిరస్కరించబడింది', 'ఆర్టికల్ తిరస్కరించబడింది', [
+                { text: 'సరే', onPress: () => router.back() },
+              ]);
+            } catch (e: any) {
+              console.error('[TenantArticleDetail] Reject failed:', e);
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+              Alert.alert('లోపం', e?.message || 'తిరస్కరించడం విఫలమైంది');
+            } finally {
+              setActionLoading(null);
+            }
+          },
+        },
+      ]
+    );
+  };
 
   // Share article - directly share as image for published, link for others
   const handleShare = async () => {
@@ -335,7 +376,7 @@ export default function ReporterArticleDetail() {
           : { message: `${article?.title}\n\n${shareUrl}`, url: shareUrl, title: article?.title || 'Article' }
       );
     } catch (error: any) {
-      console.error('[ArticleDetail] Share error:', error);
+      console.error('[TenantArticleDetail] Share error:', error);
     }
   };
   
@@ -353,7 +394,7 @@ export default function ReporterArticleDetail() {
       setShowCopiedToast(true);
       setTimeout(() => setShowCopiedToast(false), 2000);
     } catch (e) {
-      console.error('[ArticleDetail] Copy failed:', e);
+      console.error('[TenantArticleDetail] Copy failed:', e);
     }
   };
 
@@ -364,8 +405,9 @@ export default function ReporterArticleDetail() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     
     // Get cover image URL
-    const coverImageUrl = article.baseArticle?.contentJson?.raw?.coverImageUrl || 
-      (article.baseArticle?.contentJson?.raw?.images?.[0]);
+    const coverImageUrl = article.coverImageUrl || 
+      (article.baseArticle?.contentJson as any)?.raw?.coverImageUrl ||
+      ((article.baseArticle?.contentJson as any)?.raw?.images?.[0]);
     
     // Convert to ShareableArticleData
     const shareData: ShareableArticleData = {
@@ -377,15 +419,11 @@ export default function ReporterArticleDetail() {
       content: article.content,
       coverImageUrl,
       webArticleUrl: article.sportLink || article.webArticleUrl,
-      reporter: {
-        id: reporter?.id,
-        fullName: reporter?.fullName || session?.user?.name,
-        profilePhotoUrl: reporter?.profilePhotoUrl || undefined,
-        designation: reporter?.designation ? { name: reporter.designation.name } : undefined,
-        level: reporter?.level ? { name: reporter.level } : undefined,
-        district: reporter?.district ? { name: reporter.district.name } : undefined,
-        mandal: reporter?.mandal ? { name: reporter.mandal.name } : undefined,
-      },
+      reporter: article.author?.profile ? {
+        id: article.author.id,
+        fullName: article.author.profile.fullName,
+        profilePhotoUrl: article.author.profile.profilePhotoUrl,
+      } : undefined,
     };
     setShareArticle(shareData);
     
@@ -394,18 +432,18 @@ export default function ReporterArticleDetail() {
       if (shareImageRef.current) {
         setIsSharing(true);
         try {
-          console.log('[ArticleDetail] Starting image capture...');
+          console.log('[TenantArticleDetail] Starting image capture...');
           await shareImageRef.current.captureAndShare();
-          console.log('[ArticleDetail] Image capture completed');
+          console.log('[TenantArticleDetail] Image capture completed');
         } catch (e) {
-          console.error('[ArticleDetail] Share image failed:', e);
+          console.error('[TenantArticleDetail] Share image failed:', e);
           Alert.alert('షేర్ విఫలమైంది', 'ఇమేజ్ తయారు చేయడంలో సమస్య. మళ్ళీ ప్రయత్నించండి.');
         } finally {
           setIsSharing(false);
           setShareArticle(null);
         }
       } else {
-        console.error('[ArticleDetail] shareImageRef is null');
+        console.error('[TenantArticleDetail] shareImageRef is null');
         setIsSharing(false);
         setShareArticle(null);
       }
@@ -422,14 +460,6 @@ export default function ReporterArticleDetail() {
 
   // Start edit mode
   const handleStartEdit = () => {
-    if (article?.status === 'PUBLISHED') {
-      Alert.alert(
-        'మార్పులు చేయలేరు',
-        'ప్రచురించిన ఆర్టికల్స్ మార్చడానికి మీ ఎడిటర్‌ని సంప్రదించండి.',
-        [{ text: 'సరే' }]
-      );
-      return;
-    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setEditMode(true);
   };
@@ -464,7 +494,7 @@ export default function ReporterArticleDetail() {
       setEditMode(false);
       loadArticle(); // Reload to get updated data
     } catch (e: any) {
-      console.error('[ArticleDetail] Update failed:', e);
+      console.error('[TenantArticleDetail] Update failed:', e);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       Alert.alert('లోపం', e?.message || 'అప్‌డేట్ విఫలమైంది. మళ్ళీ ప్రయత్నించండి.');
     } finally {
@@ -479,13 +509,13 @@ export default function ReporterArticleDetail() {
     setDeleting(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     try {
-      await deleteNewspaperArticle(id);
+      await rejectNewspaperArticle(id); // Use reject as delete for tenant admin
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      Alert.alert('తొలగించబడింది ✅', 'ఆర్టికల్ తొలగించబడింది', [
+      Alert.alert('తొలగించబడింది ✅', 'ఆర్టికల్ తిరస్కరించబడింది', [
         { text: 'సరే', onPress: () => router.back() },
       ]);
     } catch (e: any) {
-      console.error('[ArticleDetail] Delete failed:', e);
+      console.error('[TenantArticleDetail] Delete failed:', e);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       Alert.alert('లోపం', e?.message || 'తొలగించడం విఫలమైంది');
     } finally {
@@ -496,14 +526,6 @@ export default function ReporterArticleDetail() {
 
   // Confirm delete
   const confirmDelete = () => {
-    if (article?.status === 'PUBLISHED') {
-      Alert.alert(
-        'తొలగించలేరు',
-        'ప్రచురించిన ఆర్టికల్స్ తొలగించడానికి మీ ఎడిటర్‌ని సంప్రదించండి.',
-        [{ text: 'సరే' }]
-      );
-      return;
-    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setShowDeleteModal(true);
   };
@@ -538,14 +560,15 @@ export default function ReporterArticleDetail() {
   }
 
   // Get cover image URL
-  const coverImageUrl = article.baseArticle?.contentJson?.raw?.coverImageUrl || 
-    (article.baseArticle?.contentJson?.raw?.images?.[0]);
+  const coverImageUrl = article.coverImageUrl || 
+    (article.baseArticle?.contentJson as any)?.raw?.coverImageUrl ||
+    ((article.baseArticle?.contentJson as any)?.raw?.images?.[0]);
 
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor={primaryColor} translucent={false} />
 
-      {/* Share Image Component (Modal-based) */}
+      {/* Share Image Component (Off-screen for capture) */}
       {shareArticle && (
         <ShareableArticleImage
           ref={shareImageRef}
@@ -630,6 +653,29 @@ export default function ReporterArticleDetail() {
             )}
           </View>
 
+          {/* Author Info */}
+          {article.author && (
+            <View style={styles.authorCard}>
+              <View style={styles.authorAvatar}>
+                {article.author.profile?.profilePhotoUrl ? (
+                  <Image
+                    source={{ uri: article.author.profile.profilePhotoUrl }}
+                    style={styles.authorAvatarImage}
+                    contentFit="cover"
+                  />
+                ) : (
+                  <Ionicons name="person" size={20} color="#6B7280" />
+                )}
+              </View>
+              <View style={styles.authorInfo}>
+                <Text style={styles.authorName}>
+                  {article.author.profile?.fullName || 'Unknown'}
+                </Text>
+                <Text style={styles.authorMobile}>{article.author.mobileNumber}</Text>
+              </View>
+            </View>
+          )}
+
           {/* Content */}
           {editMode ? (
             // Edit Mode
@@ -673,7 +719,7 @@ export default function ReporterArticleDetail() {
               <View style={styles.editHelpBox}>
                 <Ionicons name="information-circle-outline" size={18} color="#6B7280" />
                 <Text style={styles.editHelpText}>
-                  మార్పులు చేసిన తర్వాత "సేవ్ చేయండి" నొక్కండి
+                  మార్పులు చేసిన తర్వాత &ldquo;సేవ్ చేయండి&rdquo; నొక్కండి
                 </Text>
               </View>
             </View>
@@ -747,7 +793,7 @@ export default function ReporterArticleDetail() {
                         <Text style={styles.sportLinkBtnText}>ఓపెన్</Text>
                       </TouchableOpacity>
                       
-                      {article.status !== 'PENDING' && (
+                      {article.status === 'PUBLISHED' && (
                         <TouchableOpacity 
                           style={[styles.sportLinkBtn, styles.sportLinkShareBtn]}
                           onPress={handleShare}
@@ -837,9 +883,44 @@ export default function ReporterArticleDetail() {
             </TouchableOpacity>
           </View>
         ) : (
-          // View mode actions - Large, beginner-friendly buttons
+          // View mode actions
           <View style={styles.actionBtnContainer}>
-            {/* Row 1: Delete and Edit */}
+            {/* Row 1: For PENDING - Approve and Reject */}
+            {article?.status === 'PENDING' && (
+              <View style={styles.actionBtnRow}>
+                <TouchableOpacity
+                  style={[styles.actionBtn, styles.rejectBtn]}
+                  onPress={handleReject}
+                  disabled={!!actionLoading}
+                >
+                  {actionLoading === 'reject' ? (
+                    <ActivityIndicator size="small" color="#DC2626" />
+                  ) : (
+                    <>
+                      <Ionicons name="close-circle" size={20} color="#DC2626" />
+                      <Text style={styles.rejectBtnText}>తిరస్కరించు</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={[styles.actionBtn, styles.approveBtn]}
+                  onPress={handleApprove}
+                  disabled={!!actionLoading}
+                >
+                  {actionLoading === 'approve' ? (
+                    <ActivityIndicator size="small" color="#FFF" />
+                  ) : (
+                    <>
+                      <Ionicons name="checkmark-circle" size={20} color="#FFF" />
+                      <Text style={styles.approveBtnText}>ఆమోదించు</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* Row 2: Edit and Delete */}
             <View style={styles.actionBtnRow}>
               <TouchableOpacity
                 style={[styles.actionBtn, styles.deleteBtn]}
@@ -858,7 +939,7 @@ export default function ReporterArticleDetail() {
               </TouchableOpacity>
             </View>
             
-            {/* Row 2: Web view and Share (only for published) */}
+            {/* Row 3: Web view and Share (only for published) */}
             {article?.status === 'PUBLISHED' && (
               <View style={styles.actionBtnRow}>
                 <TouchableOpacity
@@ -878,19 +959,6 @@ export default function ReporterArticleDetail() {
                 </TouchableOpacity>
               </View>
             )}
-            
-            {/* Share for REJECTED status (single button centered) */}
-            {article?.status === 'REJECTED' && (
-              <View style={styles.actionBtnRow}>
-                <TouchableOpacity
-                  style={[styles.actionBtn, styles.shareActionBtn]}
-                  onPress={handleShare}
-                >
-                  <Ionicons name="share-social" size={20} color="#FFF" />
-                  <Text style={styles.shareBtnText}>షేర్</Text>
-                </TouchableOpacity>
-              </View>
-            )}
           </View>
         )}
       </View>
@@ -907,9 +975,9 @@ export default function ReporterArticleDetail() {
             <View style={styles.modalIcon}>
               <Ionicons name="warning" size={40} color="#DC2626" />
             </View>
-            <Text style={styles.modalTitle}>ఆర్టికల్ తొలగించాలా?</Text>
+            <Text style={styles.modalTitle}>ఆర్టికల్ తిరస్కరించాలా?</Text>
             <Text style={styles.modalMessage}>
-              ఈ చర్యను వెనక్కి తీసుకోలేరు. ఆర్టికల్ శాశ్వతంగా తొలగించబడుతుంది.
+              ఈ చర్యను వెనక్కి తీసుకోలేరు. ఆర్టికల్ తిరస్కరించబడుతుంది.
             </Text>
             <View style={styles.modalActions}>
               <TouchableOpacity
@@ -928,8 +996,8 @@ export default function ReporterArticleDetail() {
                   <ActivityIndicator size="small" color="#FFF" />
                 ) : (
                   <>
-                    <Ionicons name="trash" size={16} color="#FFF" />
-                    <Text style={styles.modalDeleteText}>తొలగించు</Text>
+                    <Ionicons name="close-circle" size={16} color="#FFF" />
+                    <Text style={styles.modalDeleteText}>తిరస్కరించు</Text>
                   </>
                 )}
               </TouchableOpacity>
@@ -965,11 +1033,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#111',
     marginBottom: 8,
-  },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 14,
-    color: '#6B7280',
   },
   errorText: {
     fontSize: 14,
@@ -1045,14 +1108,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
-  headerMenuBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
 
   scrollContent: {
     paddingBottom: 20,
@@ -1096,6 +1151,44 @@ const styles = StyleSheet.create({
   viewsText: {
     fontSize: 13,
     color: '#6B7280',
+  },
+
+  // Author Card
+  authorCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    backgroundColor: '#FFF',
+    padding: 12,
+    borderRadius: 12,
+  },
+  authorAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  authorAvatarImage: {
+    width: 44,
+    height: 44,
+  },
+  authorInfo: {
+    flex: 1,
+  },
+  authorName: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#111',
+  },
+  authorMobile: {
+    fontSize: 13,
+    color: '#6B7280',
+    marginTop: 2,
   },
 
   // Article Content
@@ -1161,7 +1254,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
 
-  // Sport Link Section - Prominent
+  // Sport Link Section
   sportLinkSection: {
     marginBottom: 16,
   },
@@ -1223,38 +1316,6 @@ const styles = StyleSheet.create({
   sportLinkShareBtn: {
     backgroundColor: '#10B981',
     borderColor: '#10B981',
-  },
-
-  // Legacy Web Link Card (fallback)
-  webLinkCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#E0F2FE',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 16,
-    gap: 12,
-  },
-  webLinkIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#FFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  webLinkInfo: {
-    flex: 1,
-  },
-  webLinkTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: DEFAULT_PRIMARY,
-    marginBottom: 2,
-  },
-  webLinkUrl: {
-    fontSize: 12,
-    color: '#0891B2',
   },
 
   // Meta Card
@@ -1358,6 +1419,24 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingVertical: 14,
     borderRadius: 12,
+  },
+  approveBtn: {
+    backgroundColor: '#10B981',
+  },
+  approveBtnText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFF',
+  },
+  rejectBtn: {
+    backgroundColor: '#FEE2E2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  rejectBtnText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#DC2626',
   },
   deleteBtn: {
     backgroundColor: '#FEE2E2',

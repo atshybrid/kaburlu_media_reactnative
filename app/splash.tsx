@@ -1,5 +1,5 @@
 import { refreshLanguageDependentCaches } from '@/services/api';
-import { isExpired, loadTokens, Tokens } from '@/services/auth';
+import { checkAndClearOnFreshInstall, isExpired, loadTokens, Tokens } from '@/services/auth';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
 import * as ExpoSplashScreen from 'expo-splash-screen';
@@ -15,6 +15,9 @@ export default function SplashScreen() {
   useEffect(() => {
     (async () => {
       try {
+        // Check for fresh install and clear stale data if needed
+        await checkAndClearOnFreshInstall();
+
         const looksLikeLangCode = (v: string) => /^[a-z]{2,3}(-[a-z0-9]{2,8})?$/i.test(String(v || '').trim());
         // Determine route purely from local state: tokens and stored language
         const tokens: Tokens | null = await loadTokens();
