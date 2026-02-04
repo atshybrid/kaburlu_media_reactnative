@@ -109,7 +109,7 @@ export async function aiRewriteUnified(
     newspaperName: params.newspaperName,
     language: params.language,
     temperature: params.temperature ?? 0.2,
-    model: params.model ?? '5.2',
+    model: params.model ?? '4o mini',  // Match swagger model name
   };
 
   // Debug checks
@@ -134,9 +134,13 @@ export async function aiRewriteUnified(
  * Get category nameDefault values for AI API
  * Fetches categories from tenant and extracts nameDefault field
  */
-export async function getCategoryNamesForAI(tenantId: string): Promise<string[]> {
+export async function getCategoryNamesForAI(tenantId: string, domainId?: string): Promise<string[]> {
   try {
-    const url = `/categories/tenant?tenantId=${encodeURIComponent(tenantId)}`;
+    const params = new URLSearchParams();
+    params.set('tenantId', tenantId);
+    if (domainId) params.set('domainId', domainId);
+    
+    const url = `/categories/tenant?${params.toString()}`;
     console.log('[getCategoryNamesForAI] URL:', url);
     
     const res = await request<any>(url, { method: 'GET' });

@@ -2,7 +2,7 @@ import { ThemedText } from '@/components/ThemedText';
 import { Colors } from '@/constants/Colors';
 import { formatMonthDayFromLexicon, getDateLineLanguage } from '@/constants/dateLineLexicon';
 import { useColorScheme } from '@/hooks/useColorScheme';
-import { searchCombinedLocations, type CombinedLocationItem } from '@/services/locations';
+import { searchCombinedLocations, requestAddLocation, type CombinedLocationItem } from '@/services/locations';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
@@ -58,6 +58,11 @@ export default function PostNewsReviewScreen() {
   const [locationModalVisible, setLocationModalVisible] = useState(false);
   const [locationQuery, setLocationQuery] = useState('');
   const [locationResults, setLocationResults] = useState<CombinedLocationItem[]>([]);
+
+  // Location not found popup
+  const [locationNotFoundVisible, setLocationNotFoundVisible] = useState(false);
+  const [notFoundPlaceName, setNotFoundPlaceName] = useState('');
+  const [requestingAdd, setRequestingAdd] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
@@ -157,8 +162,13 @@ export default function PostNewsReviewScreen() {
           const formatted = formatDateline(placeName, newspaperName, languageCode);
           setDatelineText(formatted);
         }
-      } catch (error) {
+      } catch (error: any) {
         console.error('Auto location search failed:', error);
+        // Show location not found popup for 404 errors
+        if (error?.status === 404 || error?.message?.includes('404')) {
+          setNotFoundPlaceName(placeName);
+          setLocationNotFoundVisible(true);
+        }
         // Fallback to AI provided dateline
         const formatted = formatDateline(placeName, newspaperName, languageCode);
         setDatelineText(formatted);
@@ -177,19 +187,42 @@ export default function PostNewsReviewScreen() {
     setLocationSearching(true);
     try {
       const result = await searchCombinedLocations(query.trim(), 20, tenantId);
-      setLocationResults(result.items || []);
+      const items = result.items || [];
+      setLocationResults(items);
       
       // Update newspaper name if available
       if (result.tenant?.nativeName) {
         setNewspaperName(result.tenant.nativeName);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Location search failed:', error);
       setLocationResults([]);
+      // Don't show popup for auto-search, only manual search
+      // Show location not found popup for 404 errors
+      if (error?.status === 404 || error?.message?.includes('404')) {
+        setNotFoundPlaceName(query.trim());
+        setLocationModalVisible(false);
+        setLocationNotFoundVisible(true);
+      }
     } finally {
       setLocationSearching(false);
     }
   }, [tenantId]);
+
+  // Auto-search when user types in location modal
+  useEffect(() => {
+    // Only auto-search when modal is visible and query has at least 2 characters
+    if (!locationModalVisible || locationQuery.trim().length < 2) {
+      setLocationResults([]);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      searchLocation(locationQuery);
+    }, 500); // 500ms debounce
+
+    return () => clearTimeout(timer);
+  }, [locationQuery, locationModalVisible, searchLocation]);
 
   const onLocationSelect = (item: CombinedLocationItem) => {
     setSelectedLocation(item);
@@ -206,6 +239,26 @@ export default function PostNewsReviewScreen() {
     setLocationResults([]);
   };
 
+  const handleRequestAddLocation = async () => {
+    if (!notFoundPlaceName.trim() || !tenantId) return;
+    
+    setRequestingAdd(true);
+    try {
+      await requestAddLocation(notFoundPlaceName.trim(), tenantId, languageCode);
+      Alert.alert(
+        'Request Sent',
+        `Location "${notFoundPlaceName}" has been requested. Our team will add it soon.`,
+        [{ text: 'OK' }]
+      );
+    } catch (error) {
+      console.error('Failed to request location:', error);
+      Alert.alert('Error', 'Failed to send request. Please try again later.');
+    } finally {
+      setRequestingAdd(false);
+      setLocationNotFoundVisible(false);
+    }
+  };
+
   const onNext = async () => {
     if (!headline.trim()) {
       Alert.alert('Error', 'Headline is required');
@@ -214,6 +267,13 @@ export default function PostNewsReviewScreen() {
 
     if (!placeName.trim()) {
       Alert.alert('Error', 'Place name is required');
+      return;
+    }
+
+    // Location ID is required - if not selected, open search modal
+    if (!selectedLocation?.match?.id) {
+      setLocationQuery(placeName);
+      setLocationModalVisible(true);
       return;
     }
 
@@ -455,8 +515,7 @@ export default function PostNewsReviewScreen() {
               <TextInput
                 value={locationQuery}
                 onChangeText={setLocationQuery}
-                onSubmitEditing={() => searchLocation(locationQuery)}
-                placeholder="Search place name..."
+                placeholder="Type to search places... (auto-search)"
                 placeholderTextColor={c.muted}
                 style={[styles.searchInput, { color: c.text }]}
                 autoFocus
@@ -464,18 +523,32 @@ export default function PostNewsReviewScreen() {
               {locationSearching && <ActivityIndicator size="small" />}
             </View>
 
-            <Pressable
-              onPress={() => searchLocation(locationQuery)}
-              style={({ pressed }) => [
-                styles.searchBtn,
-                { backgroundColor: c.tint },
-                pressed && { opacity: 0.85 },
-              ]}
-            >
-              <ThemedText style={{ color: '#fff', fontWeight: '600' }}>Search</ThemedText>
-            </Pressable>
-
             <ScrollView style={styles.resultsContainer}>
+              {locationResults.length === 0 && locationQuery.trim() && !locationSearching && (
+                <View style={styles.emptyResults}>
+                  <MaterialIcons name="search-off" size={40} color={c.muted} />
+                  <ThemedText style={{ color: c.muted, marginTop: 8, textAlign: 'center' }}>
+                    No locations found for &ldquo;{locationQuery}&rdquo;
+                  </ThemedText>
+                  <Pressable
+                    onPress={() => {
+                      setNotFoundPlaceName(locationQuery.trim());
+                      setLocationModalVisible(false);
+                      setLocationNotFoundVisible(true);
+                    }}
+                    style={({ pressed }) => [
+                      styles.notFoundBtn,
+                      { borderColor: c.tint },
+                      pressed && { opacity: 0.7 },
+                    ]}
+                  >
+                    <MaterialIcons name="report" size={16} color={c.tint} />
+                    <ThemedText style={{ color: c.tint, fontWeight: '600', marginLeft: 6, fontSize: 13 }}>
+                      Location Not Listed?
+                    </ThemedText>
+                  </Pressable>
+                </View>
+              )}
               {locationResults.map((item, index) => (
                 <Pressable
                   key={index}
@@ -508,6 +581,76 @@ export default function PostNewsReviewScreen() {
                 </Pressable>
               ))}
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Location Not Found Popup */}
+      <Modal visible={locationNotFoundVisible} animationType="fade" transparent>
+        <View style={styles.popupOverlay}>
+          <View style={[styles.popupContent, { backgroundColor: c.card, borderColor: c.border }]}>
+            <View style={styles.popupIcon}>
+              <MaterialIcons name="location-off" size={48} color="#e74c3c" />
+            </View>
+            <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 18, textAlign: 'center' }}>
+              Location Not Available
+            </ThemedText>
+            <ThemedText style={{ color: c.muted, textAlign: 'center', marginTop: 8, lineHeight: 22 }}>
+              &ldquo;{notFoundPlaceName}&rdquo; is not available in our system.
+            </ThemedText>
+            
+            {/* Info Box */}
+            <View style={[styles.popupInfoBox, { backgroundColor: c.tint + '15', borderColor: c.tint + '30' }]}>
+              <MaterialIcons name="info" size={20} color={c.tint} />
+              <ThemedText style={{ color: c.text, fontSize: 13, flex: 1, marginLeft: 10, lineHeight: 18 }}>
+                Location is required for publishing. Please contact your publisher to add this location.
+              </ThemedText>
+            </View>
+            
+            <View style={styles.popupButtons}>
+              {/* Request to Add */}
+              <Pressable
+                onPress={handleRequestAddLocation}
+                disabled={requestingAdd}
+                style={({ pressed }) => [
+                  styles.popupBtn,
+                  styles.popupBtnPrimary,
+                  { backgroundColor: c.tint },
+                  pressed && { opacity: 0.85 },
+                  requestingAdd && { opacity: 0.6 },
+                ]}
+              >
+                {requestingAdd ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <>
+                    <MaterialIcons name="send" size={18} color="#fff" />
+                    <ThemedText style={{ color: '#fff', fontWeight: '600', marginLeft: 6 }}>
+                      Request Publisher to Add
+                    </ThemedText>
+                  </>
+                )}
+              </Pressable>
+              
+              {/* Search Different Location */}
+              <Pressable
+                onPress={() => {
+                  setLocationNotFoundVisible(false);
+                  setLocationQuery(notFoundPlaceName);
+                  setLocationModalVisible(true);
+                }}
+                style={({ pressed }) => [
+                  styles.popupBtn,
+                  { borderWidth: 1, borderColor: c.tint },
+                  pressed && { opacity: 0.7 },
+                ]}
+              >
+                <MaterialIcons name="search" size={18} color={c.tint} />
+                <ThemedText style={{ color: c.tint, fontWeight: '600', marginLeft: 6 }}>
+                  Search Different Location
+                </ThemedText>
+              </Pressable>
+            </View>
           </View>
         </View>
       </Modal>
@@ -751,5 +894,68 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 10,
+  },
+  popupOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  popupContent: {
+    width: '100%',
+    maxWidth: 340,
+    borderRadius: 20,
+    padding: 24,
+    borderWidth: 1,
+    alignItems: 'center',
+  },
+  popupIcon: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: 'rgba(231,76,60,0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  popupInfoBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    width: '100%',
+    marginTop: 16,
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  popupButtons: {
+    width: '100%',
+    marginTop: 24,
+    gap: 12,
+  },
+  popupBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    borderRadius: 12,
+  },
+  popupBtnPrimary: {
+    // additional styling handled inline
+  },
+  emptyResults: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+    paddingHorizontal: 20,
+  },
+  notFoundBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    borderWidth: 1,
   },
 });

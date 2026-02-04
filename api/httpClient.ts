@@ -1,4 +1,5 @@
 import { ApiErrorShape } from '../types/chat';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Base URL placeholder - override via env or runtime injection
 const DEFAULT_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.yourdomain.com';
@@ -46,22 +47,49 @@ export async function http<TResp = any, TBody = any>(path: string, opts: Request
   if (opts.auth && authToken) {
     headers['Authorization'] = `Bearer ${authToken}`;
   }
+  
+  // Add timeout (60 seconds for AI requests)
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 60000);
+  
   const fetchInit: RequestInit = {
     method: opts.method || (opts.body ? 'POST' : 'GET'),
     headers,
-    signal: opts.signal,
+    signal: opts.signal || controller.signal,
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   };
 
   let resp: Response;
   try {
+    console.log(`[HTTP ${fetchInit.method}] ${url}`);
+    if (opts.body) {
+      console.log('[HTTP Body]', JSON.stringify(opts.body).substring(0, 200));
+    }
+    
     resp = await fetch(url, fetchInit);
+    clearTimeout(timeoutId);
+    
+    console.log(`[HTTP Response] ${resp.status} ${resp.statusText}`);
   } catch (e: any) {
+    clearTimeout(timeoutId);
+    if (e.name === 'AbortError') {
+      throw new HttpError('Request timeout - please try again', { retryable: true });
+    }
     throw new HttpError(e?.message || 'Network error', { retryable: true });
   }
   const json = await parseJsonSafe(resp);
   if (!resp.ok) {
     const message = (json && (json.message || json.error)) || `Request failed (${resp.status})`;
+    console.error('[HTTP Error]', message, json);
+    
+    // Handle 401 Unauthorized - token expired
+    if (resp.status === 401) {
+      console.warn('[HTTP] 401 Unauthorized - Token expired');
+      // Clear tokens asynchronously to prevent blocking
+      AsyncStorage.multiRemove(['jwt', 'refreshToken', 'expiresAt', 'languageId', 'user', 'session'])
+        .catch(e => console.error('[HTTP] Failed to clear tokens:', e));
+    }
+    
     throw new HttpError(message, { status: resp.status, code: json?.code, retryable: resp.status >= 500 });
   }
   return json as TResp;

@@ -10,20 +10,26 @@
  */
 
 import { ThemedText } from '@/components/ThemedText';
+import ReporterWantedPoster from '@/components/tenant/ReporterWantedPoster';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
-import { loadTokens } from '@/services/auth';
+import { loadTokens, softLogout } from '@/services/auth';
+import { logout } from '@/services/api';
 import {
     getNewspaperArticles,
     getTenantAdminDashboard,
     type TenantAdminFullResponse,
 } from '@/services/tenantAdmin';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Image } from 'expo-image';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import {
+    ActivityIndicator,
+    Alert,
+    BackHandler,
     Pressable,
     RefreshControl,
     ScrollView,
@@ -86,12 +92,15 @@ export default function TenantDashboardScreen() {
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [showReporterPoster, setShowReporterPoster] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<TenantAdminFullResponse | null>(null);
   const [sessionBrand, setSessionBrand] = useState<{ primary?: string; logo?: string; name?: string }>({});
   const [actualPendingCount, setActualPendingCount] = useState<number | null>(null); // null = not fetched yet
+  const [loggingOut, setLoggingOut] = useState(false);
 
   const primary = data?.branding?.primaryColor || sessionBrand.primary || c.tint;
+  const secondary = data?.branding?.secondaryColor || '#DC2626';
   const logoUrl = data?.branding?.logoUrl || sessionBrand.logo;
   const tenantName = data?.tenant?.name || sessionBrand.name || 'Admin Dashboard';
 
@@ -137,7 +146,53 @@ export default function TenantDashboardScreen() {
     }, [loadData])
   );
 
+  // Hardware back button: go to news page
+  useFocusEffect(
+    useCallback(() => {
+      const onBack = () => {
+        router.replace('/news');
+        return true;
+      };
+      const sub = BackHandler.addEventListener('hardwareBackPress', onBack);
+      return () => sub.remove();
+    }, [router])
+  );
+
   const onRefresh = useCallback(() => void loadData(true), [loadData]);
+
+  // Logout handler
+  const handleLogout = useCallback(async () => {
+    Alert.alert(
+      'లాగ్అవుట్',
+      'మీరు లాగ్అవుట్ చేయాలనుకుంటున్నారా?',
+      [
+        { text: 'రద్దు', style: 'cancel' },
+        {
+          text: 'లాగ్అవుట్',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setLoggingOut(true);
+              const jwt = await AsyncStorage.getItem('jwt');
+              const mobile = await AsyncStorage.getItem('profile_mobile') || await AsyncStorage.getItem('last_login_mobile') || '';
+              if (jwt) { try { await logout(); } catch (e: any) { console.warn('[TenantDashboard] remote logout failed', e?.message); } }
+              
+              // Keep language, location, and push notification preferences
+              const keysToKeep = ['selectedLanguage', 'profile_location', 'profile_location_obj', 'push_notifications_enabled'];
+              await softLogout(keysToKeep, mobile || undefined);
+              
+              // Go to account tab
+              router.replace('/tech');
+            } catch (e: any) {
+              console.error('[TenantDashboard] Logout failed:', e);
+            } finally {
+              setLoggingOut(false);
+            }
+          },
+        },
+      ]
+    );
+  }, [router]);
 
   // Calculate stats - Use actual pending count from API for accuracy
   const pendingArticles = useMemo(() => {
@@ -211,20 +266,25 @@ export default function TenantDashboardScreen() {
         ══════════════════════════════════════════════════════════════════ */}
         <View style={[styles.header, { paddingTop: insets.top + 12, backgroundColor: '#fff' }]}>
           
-          {/* Top Bar - Back & Refresh */}
+          {/* Top Bar - Back, Title & Logout */}
           <View style={styles.topBar}>
             <Pressable
-              onPress={() => router.back()}
+              onPress={() => router.replace('/news')}
               style={({ pressed }) => [styles.backBtnWhite, pressed && { opacity: 0.7 }]}
             >
               <MaterialIcons name="arrow-back" size={22} color={c.text} />
             </Pressable>
             <ThemedText style={[styles.headerTitle, { color: c.text }]}>Admin Dashboard</ThemedText>
             <Pressable
-              onPress={onRefresh}
+              onPress={handleLogout}
+              disabled={loggingOut}
               style={({ pressed }) => [styles.refreshBtnWhite, pressed && { opacity: 0.7 }]}
             >
-              <MaterialIcons name="refresh" size={22} color={c.muted} />
+              {loggingOut ? (
+                <ActivityIndicator size="small" color={c.muted} />
+              ) : (
+                <MaterialIcons name="logout" size={22} color={c.muted} />
+              )}
             </Pressable>
           </View>
 
@@ -368,6 +428,14 @@ export default function TenantDashboardScreen() {
               onPress={() => router.push('/tenant/reporters' as any)}
               c={c}
             />
+            <BigButton
+              icon="campaign"
+              label="Reporter Wanted"
+              desc="Create poster"
+              color="#DC2626"
+              onPress={() => setShowReporterPoster(true)}
+              c={c}
+            />
           </View>
 
           {/* ══════════════════════════════════════════════════════════════════
@@ -433,6 +501,16 @@ export default function TenantDashboardScreen() {
           <View style={{ height: 40 }} />
         </View>
       </ScrollView>
+
+      {/* Reporter Wanted Poster Modal */}
+      <ReporterWantedPoster
+        visible={showReporterPoster}
+        onClose={() => setShowReporterPoster(false)}
+        tenantName={tenantName}
+        tenantLogo={logoUrl}
+        primaryColor={primary}
+        secondaryColor={secondary}
+      />
     </SafeAreaView>
   );
 }

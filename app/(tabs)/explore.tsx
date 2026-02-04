@@ -1,5 +1,6 @@
 import { useColorScheme } from '@/hooks/useColorScheme';
-import { Feather } from '@expo/vector-icons';
+import { canAccessPostNewsByRole } from '@/services/roles';
+import { Feather, MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { makeRedirectUri } from 'expo-auth-session';
@@ -155,6 +156,7 @@ export default function PostCreateScreen() {
   // const [showCreateMpin, setShowCreateMpin] = useState(false); // deprecated MPIN create flow
   const [showArticlesSheet, setShowArticlesSheet] = useState(false);
   const [authToken, setAuthToken] = useState<string>('');
+  const [roleChecked, setRoleChecked] = useState(false); // Track if role check is complete
   // Reset local category when the screen regains focus (fresh start)
   useFocusEffect(
     React.useCallback(() => {
@@ -249,13 +251,27 @@ export default function PostCreateScreen() {
       try {
         const t = await loadTokens();
         const tokenRole = t?.user?.role;
+        let effectiveRole = 'Guest';
         if (tokenRole) {
+          effectiveRole = tokenRole;
           setRole(tokenRole);
         } else {
           const savedRole = await AsyncStorage.getItem('profile_role');
-          if (savedRole) setRole(savedRole);
+          if (savedRole) {
+            effectiveRole = savedRole;
+            setRole(savedRole);
+          }
         }
-      } catch {}
+        
+        // Role-based redirect: Reporter/TenantAdmin → AI Post-News flow
+        if (canAccessPostNewsByRole(effectiveRole)) {
+          router.replace('/post-news');
+          return; // Don't continue loading this screen
+        }
+        setRoleChecked(true);
+      } catch {
+        setRoleChecked(true);
+      }
       // Only CHECK permissions status at load (don't request upfront - Play Store policy)
       // Actual permission request happens when user tries to submit
       try {
@@ -569,6 +585,100 @@ export default function PostCreateScreen() {
     ? (scheme === 'dark' ? '#86efac' : '#166534')
     : (scheme === 'dark' ? '#fca5a5' : '#991b1b');
 
+  // Show "Become Citizen Reporter" screen for non-citizen-reporter users
+  const isCitizenReporter = role === 'CITIZEN_REPORTER';
+  const showBecomeCitizenReporter = roleChecked && !isCitizenReporter;
+
+  // Loading state while checking role
+  if (!roleChecked) {
+    return (
+      <SafeAreaView style={[styles.safe, { backgroundColor: theme.background, justifyContent: 'center', alignItems: 'center' }]}>
+        <LottieView
+          source={require('../../assets/lotti/News icon.json')}
+          autoPlay
+          loop
+          style={{ width: 120, height: 120 }}
+        />
+        <Text style={{ color: theme.muted, marginTop: 12 }}>Loading...</Text>
+      </SafeAreaView>
+    );
+  }
+
+  // Show "Become Citizen Reporter" screen for guests
+  if (showBecomeCitizenReporter) {
+    return (
+      <SafeAreaView style={[styles.safe, { backgroundColor: theme.background }]}>
+        {/* Header */}
+        <View style={[styles.headerBar, { backgroundColor: theme.card, borderBottomColor: theme.border }]}>
+          <TouchableOpacity
+            onPress={() => {
+              setTabBarVisible(true);
+              router.replace('/news');
+            }}
+            style={styles.headerLeft}
+          >
+            <Feather name="arrow-left" size={22} color={scheme === 'dark' ? '#fff' : theme.primary} />
+            <Text style={[styles.headerBackText, { color: scheme === 'dark' ? '#fff' : theme.primary }]}>Back</Text>
+          </TouchableOpacity>
+          <Text style={[styles.headerTitle, { color: theme.text }]}>Post News</Text>
+          <View style={styles.headerRight} />
+        </View>
+
+        {/* Become Citizen Reporter Content */}
+        <ScrollView contentContainerStyle={[styles.scrollBody, { alignItems: 'center', paddingTop: 40 }]}>
+          {/* Hero Icon */}
+          <View style={[styles.heroIconCircle, { backgroundColor: scheme === 'dark' ? '#1e3a5f' : '#dbeafe' }]}>
+            <MaterialIcons name="camera-alt" size={60} color={theme.primary} />
+          </View>
+
+          {/* Title */}
+          <Text style={[styles.heroTitle, { color: theme.text }]}>🎤 Citizen Reporter అవ్వండి</Text>
+          <Text style={[styles.heroSubtitle, { color: theme.muted }]}>
+            మీ చుట్టూ జరిగే వార్తలను మీరే రాయండి!{"\n"}మీ వాయిస్ వినిపించండి.
+          </Text>
+
+          {/* Benefits */}
+          <View style={[styles.benefitsCard, { backgroundColor: theme.card, borderColor: theme.border }]}>
+            <Text style={[styles.benefitsTitle, { color: theme.text }]}>📋 Features</Text>
+            <View style={styles.benefitRow}>
+              <Feather name="check-circle" size={18} color="#22c55e" />
+              <Text style={[styles.benefitText, { color: theme.text }]}>ఫోటో/వీడియో తో వార్తలు పోస్ట్ చేయండి</Text>
+            </View>
+            <View style={styles.benefitRow}>
+              <Feather name="check-circle" size={18} color="#22c55e" />
+              <Text style={[styles.benefitText, { color: theme.text }]}>మీ లొకేషన్ వార్తలు షేర్ చేయండి</Text>
+            </View>
+            <View style={styles.benefitRow}>
+              <Feather name="check-circle" size={18} color="#22c55e" />
+              <Text style={[styles.benefitText, { color: theme.text }]}>మీ పేరుతో వార్త పబ్లిష్ అవుతుంది</Text>
+            </View>
+            <View style={styles.benefitRow}>
+              <Feather name="check-circle" size={18} color="#22c55e" />
+              <Text style={[styles.benefitText, { color: theme.text }]}>100% Free - ఎటువంటి ఛార్జీలు లేవు</Text>
+            </View>
+          </View>
+
+          {/* CTA Button */}
+          <TouchableOpacity
+            style={[styles.ctaButton, { backgroundColor: theme.primary }]}
+            onPress={() => router.push('/auth/login?role=CITIZEN_REPORTER&from=post')}
+          >
+            <MaterialIcons name="person-add" size={22} color="#fff" />
+            <Text style={styles.ctaButtonText}>Register / Login</Text>
+          </TouchableOpacity>
+
+          {/* Already Reporter Info */}
+          <Text style={[styles.alreadyText, { color: theme.muted }]}>
+            🏢 Reporter లేదా Tenant Admin?
+          </Text>
+          <TouchableOpacity onPress={() => router.push('/auth/login?from=post')}>
+            <Text style={[styles.loginLink, { color: theme.primary }]}>Login చేయండి →</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: theme.background }] }>
       {/* Minimal header */}
@@ -839,6 +949,18 @@ export default function PostCreateScreen() {
 }
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#f8f9fa' },
+  // Become Citizen Reporter styles
+  heroIconCircle: { width: 120, height: 120, borderRadius: 60, alignItems: 'center', justifyContent: 'center', marginBottom: 24 },
+  heroTitle: { fontSize: 24, fontWeight: '700', textAlign: 'center', marginBottom: 8 },
+  heroSubtitle: { fontSize: 15, textAlign: 'center', lineHeight: 22, marginBottom: 28, paddingHorizontal: 20 },
+  benefitsCard: { width: '100%', padding: 20, borderRadius: 16, borderWidth: 1, marginBottom: 28 },
+  benefitsTitle: { fontSize: 16, fontWeight: '600', marginBottom: 14 },
+  benefitRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
+  benefitText: { fontSize: 14, flex: 1 },
+  ctaButton: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 32, paddingVertical: 16, borderRadius: 16 },
+  ctaButtonText: { color: '#fff', fontSize: 17, fontWeight: '600' },
+  alreadyText: { marginTop: 28, fontSize: 13, textAlign: 'center' },
+  loginLink: { fontSize: 14, fontWeight: '600', marginTop: 6, textAlign: 'center' },
   headerBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#e2e8f0', backgroundColor: '#fff' },
   headerLeft: { flexDirection: 'row', alignItems: 'center', padding: 4 },
   headerBackText: { marginLeft: 4, fontSize: 15, color: Colors.light.primary, fontWeight: '500' },

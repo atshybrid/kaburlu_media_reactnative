@@ -80,8 +80,21 @@
           "locationWhenInUsePermission": "kaburlu needs your location to tag news articles with your current place. This helps readers find local news in their area."
         }
       ],
-      "@react-native-google-signin/google-signin"
+      "@react-native-google-signin/google-signin",
+      [
+        "expo-updates",
+        {
+          "checkAutomatically": "ON_LOAD"
+        }
+      ]
     ],
+    "updates": {
+      "enabled": true,
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0,
+      "url": "https://u.expo.dev/c7881aa5-9bf6-4eb0-a143-f6008e905458"
+    },
+    "runtimeVersion": "1.0.0",
     "extra": {
       "google": {
         "androidClientId": "__AUTO_FROM_GOOGLE_SERVICES_JSON__",

@@ -238,24 +238,21 @@ export default function PostNewsMediaScreen() {
         location,
       });
 
-      // BEST PRACTICE: Show full-screen success, then navigate
-      // 1. Set flags first to prevent any modals from appearing
+      // Success! Clear draft and go back to post-news screen
       setJustPosted(true);
       resetDraft();
       
-      // 2. Show congrats animation
-      setShowCongrats(true);
-      
-      // 3. After animation plays, navigate to dashboard (clear navigation stack)
-      setTimeout(() => {
-        setShowCongrats(false);
-        // Dismiss all screens and go to reporter dashboard
-        // Using dismissAll to clear navigation stack then navigate fresh
-        if (router.canDismiss()) {
-          router.dismissAll();
-        }
-        router.replace('/reporter/dashboard' as any);
-      }, 2000);
+      // Show brief success message
+      Alert.alert(
+        '✅ విజయం!',
+        'మీ ఆర్టికల్ విజయవంతంగా పబ్లిష్ చేయబడింది.',
+        [
+          {
+            text: 'మరో న్యూస్ పోస్ట్ చేయండి',
+            onPress: () => router.replace('/post-news')
+          }
+        ]
+      );
       
       return res;
     } catch (e: any) {

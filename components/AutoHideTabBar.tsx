@@ -11,6 +11,7 @@ import { usePathname, useRouter } from 'expo-router';
 import React, { useRef, useState } from 'react';
 import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Svg, { Path } from 'react-native-svg';
 
 import { canAccessPostNewsByRole, getCachedProfileRole } from '@/services/roles';
 
@@ -113,6 +114,31 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
   // Debounce map for tab presses
   // removed debounce map (was used for career sheet)
 
+  // Notch dimensions
+  const NOTCH_WIDTH = 76;
+  const NOTCH_HEIGHT = 38;
+  const NOTCH_RADIUS = 38;
+
+  // Generate notched background path
+  const generateNotchPath = (width: number) => {
+    const centerX = width / 2;
+    const notchLeft = centerX - NOTCH_WIDTH / 2;
+    const notchRight = centerX + NOTCH_WIDTH / 2;
+    
+    return `
+      M 0 ${NOTCH_HEIGHT}
+      L ${notchLeft - NOTCH_RADIUS} ${NOTCH_HEIGHT}
+      C ${notchLeft - NOTCH_RADIUS / 2} ${NOTCH_HEIGHT} ${notchLeft} ${NOTCH_HEIGHT / 2} ${notchLeft} 0
+      C ${notchLeft} ${-NOTCH_HEIGHT * 0.3} ${notchLeft + NOTCH_WIDTH * 0.15} ${-NOTCH_HEIGHT * 0.5} ${centerX} ${-NOTCH_HEIGHT * 0.5}
+      C ${notchRight - NOTCH_WIDTH * 0.15} ${-NOTCH_HEIGHT * 0.5} ${notchRight} ${-NOTCH_HEIGHT * 0.3} ${notchRight} 0
+      C ${notchRight} ${NOTCH_HEIGHT / 2} ${notchRight + NOTCH_RADIUS / 2} ${NOTCH_HEIGHT} ${notchRight + NOTCH_RADIUS} ${NOTCH_HEIGHT}
+      L ${width} ${NOTCH_HEIGHT}
+      L ${width} 100
+      L 0 100
+      Z
+    `;
+  };
+
   return (
     <Animated.View
       style={[
@@ -122,25 +148,70 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
         },
       ]}
       onLayout={(e) => setMeasuredHeight(e.nativeEvent.layout.height)}
-  pointerEvents={shouldShow ? 'auto' : 'none'}
-  accessibilityElementsHidden={!shouldShow}
-  importantForAccessibility={shouldShow ? 'yes' : 'no-hide-descendants'}
+      pointerEvents={shouldShow ? 'auto' : 'none'}
+      accessibilityElementsHidden={!shouldShow}
+      importantForAccessibility={shouldShow ? 'yes' : 'no-hide-descendants'}
     >
-      <Animated.View style={[styles.shadowWrap, { transform: [{ scale: scaleRef.current }], backgroundColor: theme.card }]}>
+      <Animated.View style={[styles.shadowWrap, { transform: [{ scale: scaleRef.current }] }]}>
+        {/* Notched background SVG */}
+        {containerWidth > 0 && (
+          <View style={styles.notchSvgContainer}>
+            <Svg width={containerWidth} height={100 + NOTCH_HEIGHT} style={{ position: 'absolute', top: -NOTCH_HEIGHT }}>
+              <Path
+                d={generateNotchPath(containerWidth)}
+                fill={theme.card}
+              />
+            </Svg>
+          </View>
+        )}
+        
+        {/* Center FAB - positioned in the notch, only show when tab bar is visible */}
+        {shouldShow && (
+          <Animated.View
+            style={[
+              styles.centerFabWrap,
+              {
+                transform: [{ scale: fabScale.current }],
+              },
+            ]}
+          >
+            <Pressable
+              onPress={goToKaChat}
+              accessibilityRole="button"
+              accessibilityLabel="Ka Chat"
+              style={({ pressed }) => [
+                styles.centerFab,
+                { backgroundColor: onKaChat ? theme.tint : theme.secondary },
+                pressed && styles.fabPressed,
+              ]}
+              android_ripple={{ color: 'rgba(255,255,255,0.2)', borderless: true }}
+            >
+              <View style={styles.fabInner}>
+                {LanguageIcon ? (
+                  <LanguageIcon width={26} height={26} fill="#ffffff" />
+                ) : (
+                  <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={styles.fabKa}>Ka</Text>
+                    <Text style={styles.fabChat}>chat</Text>
+                  </View>
+                )}
+              </View>
+            </Pressable>
+          </Animated.View>
+        )}
+
         <View
           style={[
             styles.inner,
             {
-              backgroundColor: theme.card,
-              borderTopColor: theme.border,
-              borderTopWidth: StyleSheet.hairlineWidth,
+              backgroundColor: 'transparent',
               paddingBottom: insets.bottom,
             },
           ]}
           onLayout={onContainerLayout}
         >
           <View style={styles.tabRow}>
-            {/* Determine only the visible tab routes and enforce order [news, donations] [center] [career, tech] */}
+            {/* Left tabs: news, donations */}
             {(['news', 'donations'] as const).map((name) => {
               const route = routes.find((r) => r.name === name);
               if (!route) return <View key={`missing-${name}`} style={styles.tabItem} />;
@@ -175,13 +246,13 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
               );
             })}
 
-            {/* Center slot placeholder - shows the Ka Chat label to align like a tab */}
-            <View style={styles.tabItem} pointerEvents="none">
-              <View style={{ height: 24 }} />
+            {/* Center spacer for the notch - Ka Chat label below the FAB */}
+            <View style={styles.centerTabItem}>
+              <View style={{ height: 28 }} />
               <Text
                 style={[
                   styles.tabLabel,
-                  { color: onExplore ? theme.tint : theme.tabIconDefault },
+                  { color: onKaChat ? theme.tint : theme.tabIconDefault },
                 ]}
                 numberOfLines={1}
               >
@@ -243,38 +314,6 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
             })}
           </View>
         </View>
-        {/* Floating center FAB (clickable). Only show when tab bar is visible */}
-        {shouldShow && (
-          <Animated.View
-            style={[
-              styles.fabWrap,
-              {
-                // Place FAB with optimal spacing above tab bar (includes safe area padding)
-                bottom: insets.bottom + 48,
-                transform: [{ scale: fabScale.current }],
-              },
-            ]}
-          >
-            <Pressable
-              onPress={goToKaChat}
-              accessibilityRole="button"
-              accessibilityLabel="Ka Chat"
-              style={({ pressed }) => [styles.fab, { backgroundColor: theme.secondary }, pressed && styles.fabPressed]}
-              android_ripple={{ color: 'rgba(0,0,0,0.08)', borderless: true }}
-            >
-              <View style={styles.fabInner}>
-                {LanguageIcon ? (
-                  <LanguageIcon width={28} height={28} fill="#ffffff" />
-                ) : (
-                  <View style={{ alignItems: 'center', justifyContent: 'center' }}>
-                    <Text style={styles.fabKa}>Ka</Text>
-                    <Text style={styles.fabChat}>chat</Text>
-                  </View>
-                )}
-              </View>
-            </Pressable>
-          </Animated.View>
-        )}
       </Animated.View>
     </Animated.View>
   );
@@ -291,16 +330,24 @@ const styles = StyleSheet.create({
     elevation: 8,
     borderRadius: 0,
     shadowColor: '#000',
-    shadowOpacity: 0.12,
+    shadowOpacity: 0.15,
     shadowOffset: { width: 0, height: -4 },
-    shadowRadius: 8,
+    shadowRadius: 12,
+  },
+  notchSvgContainer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    zIndex: 0,
   },
   inner: {
     borderRadius: 0,
-    overflow: 'hidden',
+    overflow: 'visible',
     minHeight: 64,
-    // backgroundColor moved to themed inline style
     paddingHorizontal: 2,
+    zIndex: 1,
   },
   tabRow: {
     flexDirection: 'row',
@@ -315,6 +362,13 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 2,
   },
+  centerTabItem: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 2,
+    marginTop: 4,
+  },
   tabIconWrap: {
     height: 26,
     alignItems: 'center',
@@ -327,27 +381,27 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     letterSpacing: -0.2,
   },
-  fabWrap: {
+  centerFabWrap: {
     position: 'absolute',
     alignSelf: 'center',
-    bottom: 52, // lift to avoid overlapping center label
+    top: -28,
+    zIndex: 10,
   },
-  fab: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    // backgroundColor themed at render time
+  centerFab: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     backgroundColor: Colors.light.secondary,
-    elevation: 12,
+    elevation: 6,
     shadowColor: '#000',
-    shadowOpacity: 0.28,
-    shadowOffset: { width: 0, height: 8 },
-    shadowRadius: 12,
+    shadowOpacity: 0.25,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 8,
     overflow: 'hidden',
-    borderWidth: 2,
-    borderColor: 'rgba(255, 255, 255, 0.3)',
+    borderWidth: 3,
+    borderColor: '#fff',
   },
-  fabPressed: { opacity: 0.92 },
+  fabPressed: { opacity: 0.9, transform: [{ scale: 0.95 }] },
   fabInner: {
     flex: 1,
     alignItems: 'center',
@@ -355,30 +409,16 @@ const styles = StyleSheet.create({
   },
   fabKa: {
     color: '#fff',
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '800',
-    lineHeight: 20,
+    lineHeight: 18,
   },
   fabChat: {
     color: '#fff',
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '700',
-    lineHeight: 12,
-    marginTop: -2,
+    lineHeight: 11,
+    marginTop: -1,
     opacity: 0.95,
-  },
-  fabLabel: {
-    marginTop: 8,
-    textAlign: 'center',
-    fontSize: 11,
-    fontWeight: '600',
-    color: Colors.light.text,
-  },
-  fabDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#fff',
-    opacity: 0.9,
   },
 });

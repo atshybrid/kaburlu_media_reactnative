@@ -8,6 +8,7 @@ export { default as LikeIcon } from './LikeIcon';
 export { default as LolzIcon } from './LolzIcon';
 export { default as MoreIcon } from './MoreIcon';
 export { default as NewsIcon } from './NewsIcon';
+export { default as NewspaperIcon } from './NewspaperIcon';
 export { default as PlusIcon } from './PlusIcon';
 export { default as ProfileIcon } from './ProfileIcon';
 export { default as RupeeDonationIcon } from './RupeeDonationIcon';

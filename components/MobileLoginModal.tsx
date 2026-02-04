@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Modal, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Animated, Keyboard, KeyboardAvoidingView, Modal, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { createCitizenReporterMobile, getMpinStatus, loginWithMpin, PaymentRequiredError } from '../services/api';
 import { gatherRegistrationContext } from '../services/contextGather';
 
@@ -18,6 +18,7 @@ export const MobileLoginModal: React.FC<Props> = ({ visible, onClose, onSuccess 
   const router = useRouter();
   const [mobile, setMobile] = useState('');
   const [mpin, setMpin] = useState('');
+  const [confirmMpin, setConfirmMpin] = useState('');
   const [fullName, setFullName] = useState('');
   const [status, setStatus] = useState<Status>('idle');
   const [loading, setLoading] = useState(false);
@@ -30,14 +31,38 @@ export const MobileLoginModal: React.FC<Props> = ({ visible, onClose, onSuccess 
   // Input refs and focus guards
   const mobileRef = useRef<TextInput>(null);
   const mpinRef = useRef<TextInput>(null);
+  const confirmMpinRef = useRef<TextInput>(null);
   const fullNameRef = useRef<TextInput>(null);
   const mpinAutofocusedRef = useRef<boolean>(false);
   const didAutoBlurMpinRef = useRef<boolean>(false);
+  const didAutoBlurConfirmMpinRef = useRef<boolean>(false);
+  const didAutoFocusConfirmMpinRef = useRef<boolean>(false);
+  const [mpinFocused, setMpinFocused] = useState(false);
+  const [confirmMpinFocused, setConfirmMpinFocused] = useState(false);
+  const blinkAnim = useRef(new Animated.Value(1)).current;
+
+  // Blinking cursor animation for MPIN - always blink when on MPIN screen
+  useEffect(() => {
+    if (status === 'mpin' && mpin.length < 4) {
+      const blink = Animated.loop(
+        Animated.sequence([
+          Animated.timing(blinkAnim, { toValue: 0, duration: 500, useNativeDriver: true }),
+          Animated.timing(blinkAnim, { toValue: 1, duration: 500, useNativeDriver: true }),
+        ])
+      );
+      blink.start();
+      return () => blink.stop();
+    }
+  }, [status, mpin.length, blinkAnim]);
 
   const reset = () => {
-    setMobile(''); setMpin(''); setFullName(''); setStatus('idle'); setError(null); setRoleName(null); setIsRegistered(null); lookedUpRef.current = null;
+    setMobile(''); setMpin(''); setConfirmMpin(''); setFullName(''); setStatus('idle'); setError(null); setRoleName(null); setIsRegistered(null); lookedUpRef.current = null;
     mpinAutofocusedRef.current = false;
     didAutoBlurMpinRef.current = false;
+    didAutoBlurConfirmMpinRef.current = false;
+    didAutoFocusConfirmMpinRef.current = false;
+    setMpinFocused(false);
+    setConfirmMpinFocused(false);
   };
 
   // Debounced auto lookup when 10 digits entered OR when user presses Continue
@@ -132,10 +157,13 @@ export const MobileLoginModal: React.FC<Props> = ({ visible, onClose, onSuccess 
   useEffect(() => {
     if (!visible) return;
     if (status === 'mpin') {
-      // Focus MPIN only once when empty and not loading
-      if (!mpin && !loading && !mpinAutofocusedRef.current) {
+      // Focus MPIN immediately when status becomes mpin (after 10 digit lookup)
+      if (!mpinAutofocusedRef.current) {
         mpinAutofocusedRef.current = true;
-        setTimeout(() => mpinRef.current?.focus(), 150);
+        // Small delay to ensure TextInput is mounted and ready
+        setTimeout(() => {
+          mpinRef.current?.focus();
+        }, 200);
       }
     } else if (status === 'register') {
       // Focus full name first time
@@ -143,9 +171,9 @@ export const MobileLoginModal: React.FC<Props> = ({ visible, onClose, onSuccess 
         setTimeout(() => fullNameRef.current?.focus(), 150);
       }
     }
-  }, [status, visible, mpin, loading, fullName]);
+  }, [status, visible, fullName, loading]);
 
-  // When MPIN reaches 4 digits, blur and dismiss keyboard exactly once
+  // When MPIN reaches 4 digits in login mode, blur and dismiss keyboard
   useEffect(() => {
     if (status === 'mpin' && mpin.length >= 4 && !didAutoBlurMpinRef.current) {
       didAutoBlurMpinRef.current = true;
@@ -157,6 +185,31 @@ export const MobileLoginModal: React.FC<Props> = ({ visible, onClose, onSuccess 
       didAutoBlurMpinRef.current = false;
     }
   }, [mpin, status]);
+
+  // When MPIN reaches 4 digits in register mode, auto-focus Confirm MPIN
+  useEffect(() => {
+    if (status === 'register' && mpin.length >= 4 && !didAutoFocusConfirmMpinRef.current) {
+      didAutoFocusConfirmMpinRef.current = true;
+      setTimeout(() => {
+        confirmMpinRef.current?.focus();
+      }, 100);
+    }
+    if (mpin.length < 4) {
+      didAutoFocusConfirmMpinRef.current = false;
+    }
+  }, [mpin, status]);
+
+  // When Confirm MPIN reaches 4 digits in register mode, blur and dismiss keyboard
+  useEffect(() => {
+    if (status === 'register' && confirmMpin.length >= 4 && !didAutoBlurConfirmMpinRef.current) {
+      didAutoBlurConfirmMpinRef.current = true;
+      confirmMpinRef.current?.blur();
+      Keyboard.dismiss();
+    }
+    if (confirmMpin.length < 4) {
+      didAutoBlurConfirmMpinRef.current = false;
+    }
+  }, [confirmMpin, status]);
 
   const doLogin = async () => {
     console.log('[MOBILE_LOGIN] doLogin called', { mobile, mpinLength: mpin.length, loading });
@@ -241,6 +294,12 @@ export const MobileLoginModal: React.FC<Props> = ({ visible, onClose, onSuccess 
       console.log('[MOBILE_LOGIN] Invalid MPIN format');
       setError('Set a 4 digit MPIN'); 
       return; 
+    }
+
+    if (mpin !== confirmMpin) {
+      console.log('[MOBILE_LOGIN] MPIN mismatch');
+      setError('MPIN and Confirm MPIN do not match');
+      return;
     }
     
     console.log('[MOBILE_LOGIN] Starting registration process');
@@ -336,25 +395,82 @@ export const MobileLoginModal: React.FC<Props> = ({ visible, onClose, onSuccess 
         )}
         {status !== 'idle' && (
           <>
-            <Text style={styles.mobileHeading}>{mobile}</Text>
+            <View style={styles.mobileRow}>
+              <Text style={styles.mobileHeading}>{mobile}</Text>
+              <TouchableOpacity 
+                style={styles.changeBtn} 
+                onPress={() => {
+                  // Clear phone number and reset to idle state
+                  setMobile('');
+                  setMpin('');
+                  setFullName('');
+                  setStatus('idle');
+                  setError(null);
+                  setRoleName(null);
+                  setIsRegistered(null);
+                  lookedUpRef.current = null;
+                  mpinAutofocusedRef.current = false;
+                  didAutoBlurMpinRef.current = false;
+                  // Focus mobile input after reset
+                  setTimeout(() => mobileRef.current?.focus(), 150);
+                }}
+              >
+                <Text style={styles.changeText}>Change</Text>
+              </TouchableOpacity>
+            </View>
             {roleName && status === 'mpin' && <Text style={styles.roleTag}>{roleName}</Text>}
           </>
         )}
         {status === 'mpin' && (
           <>
-            <Text style={styles.label}>MPIN</Text>
+            {/* Prominent instruction banner */}
+            <View style={styles.mpinBanner}>
+              <Text style={styles.mpinBannerIcon}>🔐</Text>
+              <View style={styles.mpinBannerTextWrap}>
+                <Text style={styles.mpinBannerTitle}>Enter your 4-digit MPIN</Text>
+                <Text style={styles.mpinBannerSubtitle}>Type your secret PIN to login</Text>
+              </View>
+            </View>
+            {/* Custom MPIN boxes with blinking cursor */}
+            <TouchableOpacity 
+              style={styles.mpinBoxesContainer} 
+              activeOpacity={0.9}
+              onPress={() => mpinRef.current?.focus()}
+            >
+              {[0, 1, 2, 3].map((i) => (
+                <View 
+                  key={i} 
+                  style={[
+                    styles.mpinBox,
+                    mpin.length === i && styles.mpinBoxActive,
+                    mpin.length > i && styles.mpinBoxFilled,
+                  ]}
+                >
+                  {mpin.length > i ? (
+                    <Text style={styles.mpinDot}>●</Text>
+                  ) : mpin.length === i ? (
+                    <Animated.View style={[styles.blinkingCursor, { opacity: blinkAnim }]} />
+                  ) : (
+                    <Text style={styles.mpinUnderscore}>_</Text>
+                  )}
+                </View>
+              ))}
+            </TouchableOpacity>
+            {/* Hidden actual input */}
             <TextInput
-              style={styles.input}
-              secureTextEntry
+              style={styles.hiddenInput}
               keyboardType="number-pad"
               maxLength={4}
               value={mpin}
               onChangeText={setMpin}
-              placeholder="Enter MPIN"
               ref={mpinRef}
               editable={!loading}
               blurOnSubmit
               onSubmitEditing={doLogin}
+              onFocus={() => setMpinFocused(true)}
+              onBlur={() => setMpinFocused(false)}
+              autoFocus={false}
+              caretHidden
             />
             <TouchableOpacity style={[styles.primaryBtn, loading && styles.primaryBtnDisabled]} onPress={doLogin} disabled={loading}>
               {loading ? (
@@ -382,14 +498,31 @@ export const MobileLoginModal: React.FC<Props> = ({ visible, onClose, onSuccess 
             />
             <Text style={styles.label}>Set MPIN</Text>
             <TextInput
-              style={styles.input}
+              style={[styles.input, mpinFocused && styles.inputFocused]}
               secureTextEntry
               keyboardType="number-pad"
               maxLength={4}
               value={mpin}
               onChangeText={setMpin}
               placeholder="4 digit MPIN"
+              ref={mpinRef}
               editable={!loading}
+              onFocus={() => setMpinFocused(true)}
+              onBlur={() => setMpinFocused(false)}
+            />
+            <Text style={styles.label}>Confirm MPIN</Text>
+            <TextInput
+              style={[styles.input, confirmMpinFocused && styles.inputFocused]}
+              secureTextEntry
+              keyboardType="number-pad"
+              maxLength={4}
+              value={confirmMpin}
+              onChangeText={setConfirmMpin}
+              placeholder="Re-enter MPIN"
+              ref={confirmMpinRef}
+              editable={!loading}
+              onFocus={() => setConfirmMpinFocused(true)}
+              onBlur={() => setConfirmMpinFocused(false)}
             />
             <TouchableOpacity style={[styles.primaryBtn, loading && styles.primaryBtnDisabled]} onPress={doRegister} disabled={loading}>
               {loading ? (
@@ -430,12 +563,84 @@ const styles = StyleSheet.create({
   title: { fontSize: 18, fontWeight: '600' },
   close: { fontSize: 18 },
   label: { marginTop: 12, marginBottom: 4, fontWeight: '500', fontSize: 13, color: '#333' },
-  input: { backgroundColor: '#f3f4f6', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, fontSize: 15 },
+  input: { backgroundColor: '#f3f4f6', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, fontSize: 15, textAlign: 'left', borderWidth: 2, borderColor: 'transparent' },
+  inputFocused: { borderColor: '#f97316', backgroundColor: '#fffbeb' },
+  labelFocused: { color: '#f97316', fontWeight: '700', fontSize: 14 },
+  mpinLabelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 16, marginBottom: 6 },
+  mpinHint: { fontSize: 11, color: '#f97316', fontWeight: '500' },
+  // Prominent MPIN banner styles
+  mpinBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff7ed',
+    borderWidth: 2,
+    borderColor: '#f97316',
+    borderRadius: 12,
+    padding: 14,
+    marginTop: 16,
+    gap: 12,
+  },
+  mpinBannerIcon: { fontSize: 28 },
+  mpinBannerTextWrap: { flex: 1 },
+  mpinBannerTitle: { fontSize: 16, fontWeight: '700', color: '#c2410c' },
+  mpinBannerSubtitle: { fontSize: 12, color: '#ea580c', marginTop: 2 },
+  // MPIN boxes with blinking cursor
+  mpinBoxesContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 16,
+    paddingVertical: 8,
+  },
+  mpinBox: {
+    width: 56,
+    height: 64,
+    borderRadius: 12,
+    backgroundColor: '#f3f4f6',
+    borderWidth: 2,
+    borderColor: '#e5e7eb',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  mpinBoxActive: {
+    borderColor: '#f97316',
+    backgroundColor: '#fff7ed',
+    borderWidth: 3,
+  },
+  mpinBoxFilled: {
+    backgroundColor: '#fef3c7',
+    borderColor: '#f59e0b',
+  },
+  mpinDot: {
+    fontSize: 28,
+    color: '#1f2937',
+  },
+  mpinUnderscore: {
+    fontSize: 24,
+    color: '#cbd5e1',
+    fontWeight: '300',
+  },
+  blinkingCursor: {
+    width: 3,
+    height: 32,
+    backgroundColor: '#f97316',
+    borderRadius: 2,
+  },
+  hiddenInput: {
+    position: 'absolute',
+    width: 1,
+    height: 1,
+    opacity: 0,
+  },
   primaryBtn: { backgroundColor: '#2563eb', paddingVertical: 12, alignItems: 'center', borderRadius: 8, marginTop: 20 },
   primaryBtnDisabled: { opacity: 0.8 },
   primaryText: { color: '#fff', fontWeight: '600' },
   error: { color: '#dc2626', marginTop: 8 },
-  mobileHeading: { fontSize: 16, fontWeight: '600', marginTop: 4 },
+  mobileRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 12 },
+  mobileHeading: { fontSize: 16, fontWeight: '600' },
+  changeBtn: { backgroundColor: '#e2e8f0', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 6 },
+  changeText: { color: '#2563eb', fontWeight: '600', fontSize: 13 },
   roleTag: { backgroundColor: '#e0f2fe', color: '#075985', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, marginTop: 6, alignSelf: 'flex-start', fontSize: 12 },
   subtle: { color: '#6b7280', marginTop: 4, fontSize: 12 },
   secondaryBtn: { backgroundColor: '#e2e8f0', paddingVertical: 10, alignItems: 'center', borderRadius: 8, marginTop: 12 },

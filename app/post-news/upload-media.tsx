@@ -3,6 +3,7 @@ import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { uploadMedia } from '@/services/api';
 import type { AIRewriteUnifiedResponse, MediaPhoto } from '@/services/aiRewriteUnified';
+import { searchCombinedLocations, type CombinedLocationItem } from '@/services/locations';
 import { submitUnifiedArticle } from '@/services/unifiedArticle';
 import { clearPostNewsAsyncStorage } from '@/state/postNewsDraftStore';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
@@ -57,6 +58,14 @@ export default function PostNewsUploadMediaScreen() {
   const [uploadProgress, setUploadProgress] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+
+  // Location selection
+  const [locationModalVisible, setLocationModalVisible] = useState(false);
+  const [locationQuery, setLocationQuery] = useState('');
+  const [locationResults, setLocationResults] = useState<CombinedLocationItem[]>([]);
+  const [locationSearching, setLocationSearching] = useState(false);
+  const [selectedLocation, setSelectedLocation] = useState<CombinedLocationItem | null>(null);
+  const [tenantId, setTenantId] = useState('');
 
   const totalMediaCount = uploadedPhotos.length + (uploadedVideo ? 1 : 0);
   const canAddMoreMedia = totalMediaCount < MAX_TOTAL_MEDIA;
@@ -114,6 +123,23 @@ export default function PostNewsUploadMediaScreen() {
             setUploadedVideo(parsedVideo);
           }
         } catch {}
+      }
+
+      // Load selected location
+      const storedLocation = await AsyncStorage.getItem('SELECTED_LOCATION');
+      if (storedLocation) {
+        try {
+          const parsedLocation = JSON.parse(storedLocation);
+          if (parsedLocation?.match?.id) {
+            setSelectedLocation(parsedLocation);
+          }
+        } catch {}
+      }
+
+      // Load tenant ID
+      const storedTenantId = await AsyncStorage.getItem('AI_REWRITE_TENANT_ID');
+      if (storedTenantId) {
+        setTenantId(storedTenantId);
       }
     } catch {
       Alert.alert('Error', 'Failed to load article data');
@@ -311,8 +337,47 @@ export default function PostNewsUploadMediaScreen() {
     );
   };
 
+  // Location search function
+  const searchLocation = useCallback(async (query: string) => {
+    if (!query.trim() || !tenantId) return;
+
+    setLocationSearching(true);
+    try {
+      const result = await searchCombinedLocations(query.trim(), 20, tenantId);
+      setLocationResults(result.items || []);
+    } catch (error) {
+      console.error('Location search failed:', error);
+      setLocationResults([]);
+    } finally {
+      setLocationSearching(false);
+    }
+  }, [tenantId]);
+
+  // Location selection handler
+  const onLocationSelect = async (item: CombinedLocationItem) => {
+    setSelectedLocation(item);
+    await AsyncStorage.setItem('SELECTED_LOCATION', JSON.stringify(item));
+    setLocationModalVisible(false);
+    setLocationQuery('');
+    setLocationResults([]);
+  };
+
   const onSubmit = async () => {
     if (!response) return;
+
+    // Check if location is selected (required for submission)
+    const hasLocation = !!(
+      selectedLocation?.state?.id ||
+      selectedLocation?.district?.id ||
+      selectedLocation?.mandal?.id ||
+      selectedLocation?.village?.id
+    );
+
+    if (!hasLocation) {
+      // Open location selection modal
+      setLocationModalVisible(true);
+      return;
+    }
 
     const mustPhotos = response.media_requirements.must_photos || [];
     const mandatoryPhotoIds = mustPhotos.filter((p) => p.mandatory).map((p) => p.id);
@@ -782,6 +847,94 @@ export default function PostNewsUploadMediaScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Location Search Modal */}
+      <Modal visible={locationModalVisible} animationType="slide" transparent>
+        <View style={styles.locationModalOverlay}>
+          <View style={[styles.locationModalContent, { backgroundColor: c.card, borderColor: c.border }]}>
+            <View style={[styles.locationModalHeader, { borderBottomColor: c.border }]}>
+              <View>
+                <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 17 }}>
+                  Select Location
+                </ThemedText>
+                <ThemedText style={{ color: c.muted, fontSize: 12, marginTop: 2 }}>
+                  Location is required for publishing
+                </ThemedText>
+              </View>
+              <Pressable onPress={() => setLocationModalVisible(false)}>
+                <MaterialIcons name="close" size={24} color={c.text} />
+              </Pressable>
+            </View>
+
+            <View style={styles.locationSearchContainer}>
+              <MaterialIcons name="search" size={20} color={c.muted} />
+              <TextInput
+                value={locationQuery}
+                onChangeText={setLocationQuery}
+                onSubmitEditing={() => searchLocation(locationQuery)}
+                placeholder="Search place name..."
+                placeholderTextColor={c.muted}
+                style={[styles.locationSearchInput, { color: c.text }]}
+                autoFocus
+              />
+              {locationSearching && <ActivityIndicator size="small" />}
+            </View>
+
+            <Pressable
+              onPress={() => searchLocation(locationQuery)}
+              style={({ pressed }) => [
+                styles.locationSearchBtn,
+                { backgroundColor: c.tint },
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <ThemedText style={{ color: '#fff', fontWeight: '600' }}>Search</ThemedText>
+            </Pressable>
+
+            <ScrollView style={styles.locationResultsContainer}>
+              {locationResults.length === 0 && locationQuery.trim() && !locationSearching && (
+                <View style={styles.locationEmptyResults}>
+                  <MaterialIcons name="search-off" size={40} color={c.muted} />
+                  <ThemedText style={{ color: c.muted, marginTop: 8, textAlign: 'center' }}>
+                    No locations found
+                  </ThemedText>
+                </View>
+              )}
+              {locationResults.map((item, index) => (
+                <Pressable
+                  key={index}
+                  onPress={() => onLocationSelect(item)}
+                  style={({ pressed }) => [
+                    styles.locationResultItem,
+                    { borderBottomColor: c.border },
+                    pressed && { backgroundColor: c.background },
+                  ]}
+                >
+                  <View style={{ flex: 1 }}>
+                    <ThemedText style={{ color: c.text, fontWeight: '600' }}>
+                      {item.match.name}
+                    </ThemedText>
+                    <ThemedText style={{ color: c.muted, fontSize: 12, marginTop: 2 }}>
+                      {item.type}
+                    </ThemedText>
+                    {item.district && (
+                      <ThemedText style={{ color: c.muted, fontSize: 12 }}>
+                        District: {item.district.name}
+                      </ThemedText>
+                    )}
+                    {item.state && (
+                      <ThemedText style={{ color: c.muted, fontSize: 12 }}>
+                        State: {item.state.name}
+                      </ThemedText>
+                    )}
+                  </View>
+                  <MaterialIcons name="chevron-right" size={20} color={c.muted} />
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1014,5 +1167,61 @@ const styles = StyleSheet.create({
   successSecondaryBtnText: {
     fontSize: 15,
     fontWeight: '600',
+  },
+  locationModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  locationModalContent: {
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    borderWidth: 1,
+    borderBottomWidth: 0,
+    maxHeight: '80%',
+  },
+  locationModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    padding: 16,
+    borderBottomWidth: 1,
+  },
+  locationSearchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    margin: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    backgroundColor: 'rgba(0,0,0,0.05)',
+    borderRadius: 12,
+  },
+  locationSearchInput: {
+    flex: 1,
+    fontSize: 15,
+    padding: 0,
+  },
+  locationSearchBtn: {
+    marginHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  locationResultsContainer: {
+    flex: 1,
+    marginBottom: 20,
+  },
+  locationResultItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+  },
+  locationEmptyResults: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
   },
 });

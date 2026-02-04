@@ -1,7 +1,7 @@
 
 import { Article } from '@/types';
 import React, { useEffect, useMemo } from 'react';
-import { Dimensions, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Dimensions, StyleSheet, useWindowDimensions } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { runOnJS, SharedValue, useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 import { pickLayoutWithInfo } from './articleLayouts/registry';
@@ -80,12 +80,6 @@ const AnimatedArticle: React.FC<AnimatedArticleProps> = ({
   return (
     <GestureDetector gesture={gesture}>
       <Animated.View style={[styles.container, animatedStyle]}>
-        {/* Debug Style Badge */}
-        <View style={styles.debugBadge}>
-          <Text style={styles.debugText}>
-            Style {layoutInfo.styleNumber}: {layoutInfo.styleName}
-          </Text>
-        </View>
         {React.createElement(LayoutComponent, { article, index, totalArticles })}
       </Animated.View>
     </GestureDetector>
@@ -96,23 +90,7 @@ const styles = StyleSheet.create({
   container: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'white',
-  overflow: 'hidden',
-  },
-  debugBadge: {
-    position: 'absolute',
-    top: 50,
-    right: 10,
-    backgroundColor: 'rgba(220, 38, 38, 0.9)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    zIndex: 9999,
-    elevation: 9999,
-  },
-  debugText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '700',
+    overflow: 'hidden',
   },
 });
 

@@ -138,10 +138,24 @@ export type PreferencesData = {
 export async function getUserPreferences(userId?: string): Promise<PreferencesData | null> {
   try {
     let uid = userId?.trim();
+    
+    // Skip API call for guest users
+    if (uid === 'guest') {
+      if (DEBUG_API) console.log('[API] getUserPreferences skipped: guest user');
+      return null;
+    }
+    
     if (!uid) {
       try {
         const t = await loadTokens();
         uid = (t as any)?.user?.id || (t as any)?.user?._id || (t as any)?.user?.userId;
+        
+        // Skip for guest
+        if (uid === 'guest') {
+          if (DEBUG_API) console.log('[API] getUserPreferences skipped: guest user from token');
+          return null;
+        }
+        
         // fallback: try to decode JWT subject
         if (!uid && t?.jwt) {
           try {
@@ -151,6 +165,12 @@ export async function getUserPreferences(userId?: string): Promise<PreferencesDa
               const json = Buffer.from(b64, 'base64').toString('utf8');
               const payload = JSON.parse(json);
               uid = payload?.sub || payload?.userId || payload?.id || payload?.uid || undefined;
+              
+              // Skip for guest
+              if (uid === 'guest') {
+                if (DEBUG_API) console.log('[API] getUserPreferences skipped: guest user from JWT');
+                return null;
+              }
             }
           } catch {}
         }
@@ -2308,7 +2328,7 @@ export type CreateNewspaperArticleInput = {
   mediaUrls?: string[];
   // Required: provide at least one location scope
   location: NewspaperLocationInput;
-  status?: 'draft' | 'published' | string;
+  // NOTE: status is NOT accepted - it's server-controlled based on role & autoPublish
 };
 
 export type CreateNewspaperArticleResponse = {
@@ -2356,7 +2376,7 @@ export async function createNewspaperArticle(input: CreateNewspaperArticleInput)
       ...(Array.isArray(input.videos) && input.videos.length ? { videos: input.videos } : {}),
       ...(Array.isArray(input.mediaUrls) && input.mediaUrls.length ? { mediaUrls: input.mediaUrls } : {}),
       location: input.location,
-      ...(input.status ? { status: input.status } : {}),
+      // NOTE: status is NOT sent - it's server-controlled based on user role & autoPublish setting
     };
 
     // Double-guard: strip forbidden keys if they somehow exist on body.
@@ -2765,4 +2785,70 @@ export async function requestAccountDeletion(): Promise<{ success: boolean; mess
       ticketId: `DEL-${Date.now()}`,
     };
   }
+}
+
+// -------- Digital Papers / E-Paper --------
+
+export interface DigitalPaperEdition {
+  id: string;
+  name: string;
+  slug: string;
+  stateName: string | null;
+}
+
+export interface DigitalPaperTenant {
+  id: string;
+  name: string;
+  nativeName: string;
+  logoUrl: string;
+}
+
+export interface DigitalPaper {
+  id: string;
+  tenant: DigitalPaperTenant;
+  issueDate: string;
+  coverImageUrl: string;
+  pdfUrl: string;
+  pageCount: number;
+  edition: DigitalPaperEdition;
+  subEdition: DigitalPaperEdition | null;
+}
+
+export interface DigitalPapersResponse {
+  papers: DigitalPaper[];
+  meta: {
+    total: number;
+    filterDate: string;
+    timestamp: string;
+    cacheAge: number;
+  };
+}
+
+/**
+ * Fetch all digital papers from all tenants
+ * @param limit Number of papers to fetch (default 50)
+ */
+export async function getDigitalPapers(limit: number = 50): Promise<DigitalPapersResponse> {
+  try {
+    return await request<DigitalPapersResponse>(`/public/digital-papers/all-tenants?limit=${limit}`);
+  } catch (e: any) {
+    console.error('[API] Failed to fetch digital papers:', e?.message);
+    return { papers: [], meta: { total: 0, filterDate: 'today', timestamp: new Date().toISOString(), cacheAge: 0 } };
+  }
+}
+
+/**
+ * Get individual paper page URLs
+ * @param paper The digital paper object
+ * @returns Array of page image URLs
+ */
+export function getDigitalPaperPages(paper: DigitalPaper): string[] {
+  // Pages follow pattern: page-0001.webp, page-0002.webp, etc.
+  const baseUrl = paper.coverImageUrl.replace(/page-\d+\.webp$/, '');
+  const pages: string[] = [];
+  for (let i = 1; i <= paper.pageCount; i++) {
+    const pageNum = String(i).padStart(4, '0');
+    pages.push(`${baseUrl}page-${pageNum}.webp`);
+  }
+  return pages;
 }

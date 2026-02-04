@@ -71,6 +71,11 @@ export default function AccountScreen() {
   const isTenantAdmin = loggedIn && role === 'TENANT_ADMIN';
   const isReporter = loggedIn && (role === 'REPORTER' || role === 'TENANT_REPORTER' || role === 'CITIZEN_REPORTER');
   const isTenantRole = loggedIn && (role === 'TENANT_ADMIN' || role === 'TENANT_REPORTER' || role === 'REPORTER');
+  
+  // Guest users have JWT but role is 'Guest' or empty - they should see Sign In button
+  const isGuest = !role || role.toUpperCase() === 'GUEST';
+  // Proper login means has JWT AND has a real role (not Guest)
+  const isProperLogin = loggedIn && !isGuest;
 
   // Refresh account/profile state from tokens + storage
   const refreshProfile = useCallback(async () => {
@@ -193,6 +198,39 @@ export default function AccountScreen() {
   // Refresh location when coming back from picker
   useFocusEffect(React.useCallback(() => { refreshProfile(); return () => {}; }, [refreshProfile]));
 
+  // Auto-redirect to dashboard for Reporter/TenantAdmin
+  useFocusEffect(
+    React.useCallback(() => {
+      (async () => {
+        try {
+          const t = await loadTokens();
+          
+          // Only redirect if user has valid JWT token
+          if (!t?.jwt) {
+            console.log('[Account] No JWT, staying on account page');
+            return;
+          }
+          
+          const userRole = t?.user?.role || '';
+          const normalizedRole = userRole.toUpperCase().trim();
+          
+          // Tenant Admin -> Tenant Dashboard
+          if (normalizedRole === 'TENANT_ADMIN') {
+            router.replace('/tenant/dashboard');
+            return;
+          }
+          
+          // Reporter (not Citizen Reporter) -> Reporter Dashboard
+          if (normalizedRole === 'REPORTER' || normalizedRole === 'TENANT_REPORTER') {
+            router.replace('/reporter/dashboard');
+            return;
+          }
+        } catch {}
+      })();
+      return () => {};
+    }, [router])
+  );
+
   // Android back: go to News instead of blank route
   useFocusEffect(
     React.useCallback(() => {
@@ -216,10 +254,12 @@ export default function AccountScreen() {
       const jwt = await AsyncStorage.getItem('jwt');
       const mobile = await AsyncStorage.getItem('profile_mobile') || await AsyncStorage.getItem('last_login_mobile') || '';
         if (jwt) { try { await logout(); } catch (e:any) { console.warn('[UI] remote logout failed (continuing)', e?.message); } }
-  // legacy is_guest_session flag no longer in use
-      await softLogout([], mobile || undefined);
+  // Keep language, location, and push notification preferences
+      const keysToKeep = ['selectedLanguage', 'profile_location', 'profile_location_obj', 'push_notifications_enabled'];
+      await softLogout(keysToKeep, mobile || undefined);
       setLoggedIn(false);
-      // Keep role if present but tokens gone; ensures fast MPIN flow next time
+      // Refresh to show guest state
+      await refreshProfile();
     } catch (e) {
       try { console.warn('[UI] logout failed locally', (e as any)?.message); } catch {}
     }
@@ -285,12 +325,12 @@ export default function AccountScreen() {
       </View>
       <ScrollView contentContainerStyle={styles.container}>
         <View style={[styles.profileHeader, { backgroundColor: card, borderColor: border }]}>
-          <Pressable onPress={pickAndUploadAvatar} disabled={!loggedIn || uploadingPhoto} accessibilityLabel="Change profile photo">
+          <Pressable onPress={pickAndUploadAvatar} disabled={!isProperLogin || uploadingPhoto} accessibilityLabel="Change profile photo">
             <View style={styles.avatar}>
-              {photoUrl ? (
+              {photoUrl && isProperLogin ? (
                 <Image source={{ uri: photoUrl }} style={styles.avatarImg} />
               ) : (
-                <Text style={[styles.avatarText, { color: scheme === 'dark' ? '#fff' : Colors.light.primary }]}>{(name || 'G').charAt(0).toUpperCase()}</Text>
+                <Text style={[styles.avatarText, { color: scheme === 'dark' ? '#fff' : Colors.light.primary }]}>{isProperLogin ? (name || 'U').charAt(0).toUpperCase() : '👤'}</Text>
               )}
               {uploadingPhoto ? (
                 <View style={[styles.avatarOverlay, { backgroundColor: scheme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.6)' }]}>
@@ -300,10 +340,10 @@ export default function AccountScreen() {
             </View>
           </Pressable>
           <View style={{ flex: 1 }}>
-            <Text style={[styles.displayName, { color: text }]}>{loggedIn ? name || 'User' : 'Reader'}</Text>
-            <Text style={[styles.subtleText, { color: muted }]}>{loggedIn ? (role || 'Member') : 'Not signed in'}</Text>
+            <Text style={[styles.displayName, { color: text }]}>{isProperLogin ? name || 'User' : 'రీడర్'}</Text>
+            <Text style={[styles.subtleText, { color: muted }]}>{isProperLogin ? (role || 'Member') : 'లాగిన్ చేయలేదు'}</Text>
           </View>
-          {loggedIn ? (
+          {isProperLogin ? (
             <Pressable onPress={doLogout} style={[styles.button, styles.secondary, { width: 100, backgroundColor: card, borderColor: border }]}>
               <Text style={[styles.buttonText, { color: scheme === 'dark' ? '#fff' : Colors.light.primary }]}>Logout</Text>
             </Pressable>
@@ -313,6 +353,27 @@ export default function AccountScreen() {
             </Pressable>
           )}
         </View>
+
+        {/* Sign In Prompt Card for Guests */}
+        {!isProperLogin && (
+          <Pressable 
+            onPress={gotoLogin}
+            style={[styles.card, { backgroundColor: scheme === 'dark' ? '#1e3a5f' : '#EBF5FF', borderColor: scheme === 'dark' ? '#2563eb' : '#93C5FD' }]}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+              <MaterialIcons name="login" size={24} color={Colors.light.primary} />
+              <Text style={{ fontSize: 16, fontWeight: '600', color: text, marginLeft: 10 }}>లాగిన్ చేయండి</Text>
+            </View>
+            <Text style={{ fontSize: 13, color: muted, lineHeight: 20, marginBottom: 12 }}>
+              📱 <Text style={{ fontWeight: '500' }}>Citizen Reporter</Text> - మీ వార్తలు పోస్ట్ చేయండి{'\n'}
+              📰 <Text style={{ fontWeight: '500' }}>Reporter</Text> - AI-powered న్యూస్ రాయండి{'\n'}
+              🏢 <Text style={{ fontWeight: '500' }}>Tenant Admin</Text> - న్యూస్‌పేపర్ మేనేజ్ చేయండి
+            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Text style={{ fontSize: 14, fontWeight: '600', color: Colors.light.primary }}>Sign In / Register →</Text>
+            </View>
+          </Pressable>
+        )}
         {/* Welcome card removed as requested */}
 
         {isTenantRole ? (

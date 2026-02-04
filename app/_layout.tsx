@@ -1,8 +1,10 @@
 import AppLockGate from '@/components/AppLockGate';
 import LoginBottomSheet from '@/components/LoginBottomSheet';
 import Toast from '@/components/Toast';
+import { initCrashlytics } from '@/services/crashlytics';
+import { checkForAppUpdates } from '@/services/appUpdates';
 import { ensureFirebaseAuthAsync, isFirebaseConfigComplete, logFirebaseGoogleAlignment } from '@/services/firebaseClient';
-import { setupNotificationListeners } from '@/services/notifications';
+import { setupNotificationListeners, syncPushTokenOnForeground } from '@/services/notifications';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import * as Linking from 'expo-linking';
@@ -10,7 +12,7 @@ import { Stack, useRouter } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import React from 'react';
-import { LogBox, Platform, StyleSheet, Text, View } from 'react-native';
+import { AppState, LogBox, Platform, StyleSheet, Text, View } from 'react-native';
 // removed duplicate react-native import (merged above)
 import { useAppFonts } from '@/components/fonts';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -30,6 +32,9 @@ SplashScreen.preventAutoHideAsync().catch(() => {});
 // Setup notification listeners early to catch notification clicks
 // even when app is opened from quit state
 setupNotificationListeners();
+
+// Initialize Crashlytics for crash reporting
+initCrashlytics();
 
 // Custom Header Component
 const CustomHeader = () => {
@@ -88,6 +93,35 @@ function ThemedApp() {
   }, []);
 
   // Notifications permission prompt is intentionally deferred until after splash.
+
+  // Sync push token when app comes to foreground
+  // Handles case where user grants permission later from device settings
+  React.useEffect(() => {
+    const appStateRef = React.createRef<string>() as any;
+    appStateRef.current = AppState.currentState;
+
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (appStateRef.current?.match(/inactive|background/) && nextState === 'active') {
+        // App came to foreground - sync push token
+        syncPushTokenOnForeground().catch(() => {});
+      }
+      appStateRef.current = nextState;
+    });
+
+    // Also sync on initial mount
+    syncPushTokenOnForeground().catch(() => {});
+
+    return () => subscription.remove();
+  }, []);
+
+  // Check for OTA updates on app launch
+  React.useEffect(() => {
+    // Small delay to not block initial render
+    const timer = setTimeout(() => {
+      checkForAppUpdates(true).catch(() => {}); // silent check
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, []);
 
   // Deep link & initial URL handling for:
   // - kaburlu://article/<id>
@@ -187,6 +221,22 @@ function ThemedApp() {
                   // iOS modal presentation style
                   presentation: 'modal',
                 }}
+              />
+              <Stack.Screen 
+                name="post-news" 
+                options={{ 
+                  headerShown: false, 
+                  gestureEnabled: true,
+                  animation: 'slide_from_right',
+                }} 
+              />
+              <Stack.Screen 
+                name="congrats" 
+                options={{ 
+                  headerShown: false, 
+                  gestureEnabled: false, // Disable back gesture on success screen
+                  animation: 'fade',
+                }} 
               />
               <Stack.Screen name="+not-found" />
             </Stack>

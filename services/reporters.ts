@@ -15,11 +15,14 @@ export type ReporterStats = {
 
 export type ReporterDesignation = {
   id: string;
+  tenantId: string | null;
+  level: ReporterLevel;
+  levelOrder: number;
+  code: string;
   name: string;
-  code?: string;
-  level?: ReporterLevel;
-  tenantId?: string | null;
-  createdAt?: string;
+  nativeName: string;  // Telugu name (e.g., "మండల రిపోర్టర్")
+  createdAt: string;
+  updatedAt: string;
   updatedAt?: string;
 };
 
@@ -212,28 +215,77 @@ export type GenerateReporterIdCardResponse = {
   pdfUrl?: string | null;
   alreadyExists?: boolean;
   whatsappSent?: boolean;
+  pdfGenerating?: boolean;
+  previousCardNumber?: string;
 };
 
-/** Generate own ID Card (for REPORTER role) - uses /reporters/me/id-card */
+export type RegenerateIdCardInput = {
+  keepCardNumber?: boolean;
+  reason?: string;
+};
+
+export type UpdateIdCardPdfInput = {
+  pdfUrl: string;
+  sendWhatsApp?: boolean;
+};
+
+export type UpdateIdCardPdfResponse = {
+  id: string;
+  cardNumber: string;
+  pdfUrl: string;
+  issuedAt: string;
+  expiresAt: string;
+  whatsappSent?: boolean;
+  whatsappMessageId?: string;
+  whatsappError?: string | null;
+};
+
+export type DeleteIdCardPdfResponse = {
+  success: boolean;
+  message: string;
+};
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * REPORTER Self-Service ID Card APIs (/reporters/me/...)
+ * ───────────────────────────────────────────────────────────────────────────── */
+
+/** Get own ID Card (for REPORTER role) */
+export async function getMyIdCard(): Promise<ReporterIdCard | null> {
+  try {
+    return await request<ReporterIdCard>('/reporters/me/id-card', {
+      method: 'GET',
+    });
+  } catch (err: any) {
+    if (err?.status === 404) return null;
+    throw err;
+  }
+}
+
+/** Generate own ID Card (for REPORTER role) - First time issue */
 export async function generateMyIdCard(): Promise<GenerateReporterIdCardResponse> {
   return await request<GenerateReporterIdCardResponse>('/reporters/me/id-card', {
     method: 'POST',
   });
 }
 
-/** Resend own ID Card via WhatsApp (for REPORTER role) - uses /reporters/me/id-card/resend */
+/** Resend own ID Card via WhatsApp (for REPORTER role) - auto-generates PDF if missing */
 export async function resendMyIdCardToWhatsApp(): Promise<ResendIdCardWhatsAppResponse> {
   return await request<ResendIdCardWhatsAppResponse>('/reporters/me/id-card/resend', {
     method: 'POST',
   });
 }
 
-/** @deprecated Use generateMyIdCard() for reporter's own ID card */
-export async function generateReporterIdCard(tenantId: string, reporterId: string): Promise<GenerateReporterIdCardResponse> {
-  return await request<GenerateReporterIdCardResponse>(`/tenants/${tenantId}/reporters/${reporterId}/id-card`, {
+/** Regenerate own ID Card (for REPORTER role) - new card record optionally */
+export async function regenerateMyIdCard(input?: RegenerateIdCardInput): Promise<GenerateReporterIdCardResponse> {
+  return await request<GenerateReporterIdCardResponse>('/reporters/me/id-card/regenerate', {
     method: 'POST',
+    body: input || { keepCardNumber: true },
   });
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * TENANT_ADMIN ID Card Management APIs (/tenants/{tenantId}/reporters/{reporterId}/...)
+ * ───────────────────────────────────────────────────────────────────────────── */
 
 export type ReporterIdCard = {
   id: string;
@@ -246,13 +298,6 @@ export type ReporterIdCard = {
   updatedAt?: string;
 };
 
-export async function getReporterIdCard(tenantId: string, reporterId: string): Promise<ReporterIdCard> {
-  return await request<ReporterIdCard>(`/tenants/${tenantId}/reporters/${reporterId}/id-card`, {
-    method: 'GET',
-  });
-}
-
-/** Resend ID Card via WhatsApp */
 export type ResendIdCardWhatsAppResponse = {
   success: boolean;
   message: string;
@@ -260,25 +305,60 @@ export type ResendIdCardWhatsAppResponse = {
   sentTo?: string;
 };
 
-/** @deprecated Use resendMyIdCardToWhatsApp() for reporter's own ID card */
+/** Get reporter's ID card (for TENANT_ADMIN) */
+export async function getReporterIdCard(tenantId: string, reporterId: string): Promise<ReporterIdCard | null> {
+  try {
+    return await request<ReporterIdCard>(`/tenants/${tenantId}/reporters/${reporterId}/id-card`, {
+      method: 'GET',
+    });
+  } catch (err: any) {
+    if (err?.status === 404) return null;
+    throw err;
+  }
+}
+
+/** Generate/issue ID card for a reporter (for TENANT_ADMIN) - First time issue */
+export async function generateReporterIdCard(tenantId: string, reporterId: string): Promise<GenerateReporterIdCardResponse> {
+  return await request<GenerateReporterIdCardResponse>(`/tenants/${tenantId}/reporters/${reporterId}/id-card`, {
+    method: 'POST',
+  });
+}
+
+/** Send ID card via WhatsApp (for TENANT_ADMIN) - auto-generates PDF if missing */
 export async function resendIdCardToWhatsApp(tenantId: string, reporterId: string): Promise<ResendIdCardWhatsAppResponse> {
   return await request<ResendIdCardWhatsAppResponse>(`/tenants/${tenantId}/reporters/${reporterId}/id-card/resend`, {
     method: 'POST',
   });
 }
 
-/** Regenerate own ID Card (for REPORTER role) - uses /reporters/me/id-card/regenerate */
-export async function regenerateMyIdCard(keepCardNumber = true): Promise<GenerateReporterIdCardResponse> {
-  return await request<GenerateReporterIdCardResponse>('/reporters/me/id-card/regenerate', {
+/** Regenerate ID card (for TENANT_ADMIN) - full regenerate with new card record optionally */
+export async function regenerateReporterIdCard(
+  tenantId: string, 
+  reporterId: string, 
+  input?: RegenerateIdCardInput
+): Promise<GenerateReporterIdCardResponse> {
+  return await request<GenerateReporterIdCardResponse>(`/tenants/${tenantId}/reporters/${reporterId}/id-card/regenerate`, {
     method: 'POST',
-    body: { keepCardNumber },
+    body: input || { keepCardNumber: true },
   });
 }
 
-/** @deprecated Use regenerateMyIdCard() for reporter's own ID card regeneration */
-export async function regenerateReporterIdCard(tenantId: string, reporterId: string): Promise<GenerateReporterIdCardResponse> {
-  return await request<GenerateReporterIdCardResponse>(`/tenants/${tenantId}/reporters/${reporterId}/id-card/regenerate`, {
-    method: 'POST',
+/** Delete ID card PDF (for TENANT_ADMIN) - clears pdfUrl, next resend will regenerate */
+export async function deleteIdCardPdf(tenantId: string, reporterId: string): Promise<DeleteIdCardPdfResponse> {
+  return await request<DeleteIdCardPdfResponse>(`/tenants/${tenantId}/reporters/${reporterId}/id-card/pdf`, {
+    method: 'DELETE',
+  });
+}
+
+/** Update ID card PDF URL and optionally send via WhatsApp (for TENANT_ADMIN) */
+export async function updateIdCardPdf(
+  tenantId: string, 
+  reporterId: string, 
+  input: UpdateIdCardPdfInput
+): Promise<UpdateIdCardPdfResponse> {
+  return await request<UpdateIdCardPdfResponse>(`/tenants/${tenantId}/reporters/${reporterId}/id-card/pdf`, {
+    method: 'PATCH',
+    body: input,
   });
 }
 
@@ -476,7 +556,7 @@ export async function getReporterMe(): Promise<ReporterMeResponse> {
   return await request<ReporterMeResponse>('/reporters/me');
 }
 
-export type MyIdCardResponse = {
+export type MyIdCardDashboardResponse = {
   reporterId: string;
   tenantId: string;
   idCard: {
@@ -489,8 +569,9 @@ export type MyIdCardResponse = {
   } | null;
 };
 
-export async function getMyIdCard(): Promise<MyIdCardResponse> {
-  return await request<MyIdCardResponse>('/dashboard/my/id-card');
+/** Get ID card info from dashboard (includes additional context) */
+export async function getMyIdCardDashboard(): Promise<MyIdCardDashboardResponse> {
+  return await request<MyIdCardDashboardResponse>('/dashboard/my/id-card');
 }
 
 export type MyPaymentItem = {

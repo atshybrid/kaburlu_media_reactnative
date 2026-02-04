@@ -66,16 +66,23 @@ const LanguageSelectionScreen = () => {
         return;
       }
 
-      // Only check existing permissions - don't request during registration (Play Store policy)
+      // Best Practice: Request notification permission on user action (Play Store compliant)
+      // User clicked language = user-initiated action, so we can request permission here
+      const { ensureNotificationsSetup } = await import('@/services/notifications');
+      const notifResult = await ensureNotificationsSetup();
+      const pushToken = notifResult.fcmToken || notifResult.expoToken || notifResult.deviceToken;
+      console.log('[LANG] Notification permission:', notifResult.status, 'FCM Token:', pushToken ? `${pushToken.slice(0, 20)}...` : 'NOT AVAILABLE');
+
+      // Also get location if already granted (don't request - that's separate)
       const { checkPermissionsOnly } = await import('@/services/permissions');
       const perms = await checkPermissionsOnly();
-      console.log('[LANG] FCM token for registration:', perms.pushToken ? perms.pushToken : 'NOT AVAILABLE');
+
       const authResponse = await registerGuestUser({
         // Backend expects string IDs like "cmfdwhqk80009ugtof37yt8vv"
         languageId: language.id,
         deviceDetails,
         location: perms.coords ? { latitude: perms.coords.latitude, longitude: perms.coords.longitude } : undefined,
-        pushToken: perms.pushToken,
+        pushToken: pushToken,
       });
 
       console.log('Guest user registered:', authResponse);

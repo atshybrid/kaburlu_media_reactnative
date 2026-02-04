@@ -203,9 +203,12 @@ const MpinInput = React.forwardRef<MpinInputHandle, MpinInputProps>(
 export default function LoginScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ mobile?: string; from?: string }>();
+  const params = useLocalSearchParams<{ mobile?: string; from?: string; role?: string }>();
   const colorScheme = useColorScheme();
   const isDark = colorScheme === 'dark';
+  
+  // Role hint from navigation (e.g., CITIZEN_REPORTER from Post tab)
+  const requestedRole = params.role || null;
   
   // State
   const [mobile, setMobile] = useState(params.mobile || '');
@@ -424,12 +427,40 @@ export default function LoginScreen() {
   }, [mpinShake]);
   
   // Navigate after auth
-  const navigateAfterAuth = useCallback(() => {
-    if (params.from === 'post') {
-      router.replace('/explore');
-    } else if (router.canGoBack()) {
-      router.back();
-    } else {
+  const navigateAfterAuth = useCallback(async () => {
+    try {
+      // Get user role from stored tokens
+      const jwt = await AsyncStorage.getItem('jwt');
+      const accessToken = await AsyncStorage.getItem('access_token');
+      
+      if (accessToken) {
+        // Decode access token to get role
+        const payload = JSON.parse(atob(accessToken.split('.')[1]));
+        const role = payload?.role;
+        
+        console.log('[Login] User role:', role);
+        
+        // Route based on role
+        if (role === 'TENANT_ADMIN' || role === 'SUPER_ADMIN') {
+          router.replace('/tenant/dashboard');
+          return;
+        } else if (role === 'REPORTER') {
+          router.replace('/reporter/dashboard');
+          return;
+        }
+      }
+      
+      // Default flow for citizen reporters
+      if (params.from === 'post') {
+        router.replace('/explore');
+      } else if (router.canGoBack()) {
+        router.back();
+      } else {
+        router.replace('/news');
+      }
+    } catch (error) {
+      console.error('[Login] Navigate after auth error:', error);
+      // Fallback to default
       router.replace('/news');
     }
   }, [params.from, router]);

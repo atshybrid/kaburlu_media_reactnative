@@ -13,7 +13,9 @@ let listenersSetup = false;
 let cachedToken: string | undefined;
 
 // Ensure foreground notifications show a banner/toast with sound
-Notifications.setNotificationHandler({
+// Skip on web - notifications not supported
+if (Platform.OS !== 'web') {
+  Notifications.setNotificationHandler({
 	handleNotification: async (notification) => {
 		// Vibrate when notification arrives in foreground
 		Vibration.vibrate([0, 250, 100, 250]);
@@ -29,7 +31,8 @@ Notifications.setNotificationHandler({
 			shouldShowList: true as any,
 		} as any;
 	},
-});
+  });
+}
 
 // Handle notification tap - navigate to article
 function handleNotificationTap(data: any, retryCount = 0) {
@@ -98,6 +101,12 @@ function handleNotificationTap(data: any, retryCount = 0) {
  * This ensures we catch notification clicks even when app opens from quit state
  */
 export function setupNotificationListeners() {
+	// Skip on web - notifications not supported
+	if (Platform.OS === 'web') {
+		console.log('[NOTIF] Skipping notification listeners on web');
+		return;
+	}
+	
 	if (listenersSetup) return;
 	listenersSetup = true;
 	
@@ -275,6 +284,68 @@ export async function getCurrentPushToken(): Promise<string | undefined> {
 	const t = await AsyncStorage.getItem(PUSH_TOKEN_KEY);
 	cachedToken = t || undefined;
 	return cachedToken;
+}
+
+/**
+ * Sync push token on app foreground.
+ * If user grants notification permission later from device settings,
+ * this will get the new token and update backend.
+ */
+export async function syncPushTokenOnForeground(): Promise<void> {
+	try {
+		const Notifications = await import('expo-notifications');
+		const current = await Notifications.getPermissionsAsync();
+		
+		if (current.status !== 'granted') {
+			console.log('[NOTIF] Permission not granted, skipping token sync');
+			return;
+		}
+
+		// Get current FCM token
+		let newToken: string | undefined;
+		try {
+			const device = await Notifications.getDevicePushTokenAsync();
+			newToken = (device as any)?.data || (device as any)?.token;
+		} catch {}
+
+		if (!newToken) {
+			try {
+				const Constants = await import('expo-constants');
+				const projectId = (Constants as any)?.default?.expoConfig?.extra?.eas?.projectId
+					|| (Constants as any)?.expoConfig?.extra?.eas?.projectId;
+				const tokenData = await Notifications.getExpoPushTokenAsync(projectId ? { projectId } as any : undefined as any);
+				newToken = tokenData?.data;
+			} catch {}
+		}
+
+		if (!newToken) {
+			console.log('[NOTIF] No token available');
+			return;
+		}
+
+		// Check if token changed from cached
+		const cachedT = await AsyncStorage.getItem(PUSH_TOKEN_KEY);
+		if (cachedT === newToken) {
+			console.log('[NOTIF] Token unchanged, skipping sync');
+			return;
+		}
+
+		// Token is new or changed - update backend
+		console.log('[NOTIF] Token changed, updating backend...');
+		await AsyncStorage.setItem(PUSH_TOKEN_KEY, newToken);
+		cachedToken = newToken;
+
+		// Update backend preferences
+		try {
+			const { updatePreferences } = await import('./api');
+			await updatePreferences({ pushToken: newToken });
+			console.log('[NOTIF] Token synced to backend');
+		} catch (e) {
+			console.warn('[NOTIF] Token sync to backend failed:', e instanceof Error ? e.message : e);
+		}
+	} catch (e) {
+		console.warn('[NOTIF] syncPushTokenOnForeground failed:', e instanceof Error ? e.message : e);
+	}
 }
 
 export async function scheduleLocalTestNotification(seconds = 3) {

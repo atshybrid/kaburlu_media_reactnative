@@ -25,6 +25,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -55,17 +56,23 @@ function isAllowedLocationForLevel(level: string, item: CombinedLocationItem) {
   const lvl = String(level || '').toUpperCase();
   const type = normalizeLocationType(item.type);
   if (lvl === 'STATE') return type === 'STATE';
-  if (lvl === 'DISTRICT') return type === 'DISTRICT';
-  if (lvl === 'ASSEMBLY') return type === 'ASSEMBLY';
+  // Staff Reporter (DISTRICT level) - select mandal, we use its district
+  if (lvl === 'DISTRICT') return type === 'MANDAL';
+  // Constituency Reporter - can select mandal OR district
+  if (lvl === 'CONSTITUENCY') return type === 'MANDAL' || type === 'DISTRICT';
+  // RC (ASSEMBLY level) - can select mandal OR district
+  if (lvl === 'ASSEMBLY') return type === 'MANDAL' || type === 'DISTRICT';
+  // Mandal Reporter - only mandal
   if (lvl === 'MANDAL') return type === 'MANDAL';
   return false;
 }
 
-const LEVEL_ORDER = ['STATE', 'DISTRICT', 'ASSEMBLY', 'MANDAL'] as const;
+const LEVEL_ORDER = ['STATE', 'DISTRICT', 'CONSTITUENCY', 'ASSEMBLY', 'MANDAL'] as const;
 const LEVEL_LABELS: Record<string, string> = {
   STATE: 'రాష్ట్రం',
   DISTRICT: 'జిల్లా',
-  ASSEMBLY: 'నియోజకవర్గం',
+  CONSTITUENCY: 'నియోజకవర్గం',
+  ASSEMBLY: 'RC స్థాయి',
   MANDAL: 'మండలం',
 };
 
@@ -73,9 +80,25 @@ const LEVEL_LABELS: Record<string, string> = {
 const LEVEL_CONFIG: Record<string, { color: string; bgColor: string; icon: string; emoji: string; avatar: string }> = {
   STATE: { color: '#7C3AED', bgColor: '#7C3AED15', icon: 'flag', emoji: '🏛️', avatar: '🎤' },
   DISTRICT: { color: '#2563EB', bgColor: '#2563EB15', icon: 'location-city', emoji: '🏢', avatar: '📰' },
-  ASSEMBLY: { color: '#059669', bgColor: '#05966915', icon: 'how-to-vote', emoji: '🗳️', avatar: '📝' },
+  CONSTITUENCY: { color: '#059669', bgColor: '#05966915', icon: 'how-to-vote', emoji: '🗳️', avatar: '📊' },
+  ASSEMBLY: { color: '#10B981', bgColor: '#10B98115', icon: 'location-searching', emoji: '📍', avatar: '📝' },
   MANDAL: { color: '#D97706', bgColor: '#D9770615', icon: 'home-work', emoji: '🏘️', avatar: '✍️' },
 };
+
+// Get search hint text based on designation level
+function getSearchHintForLevel(level: string): string {
+  const lvl = String(level || '').toUpperCase();
+  if (lvl === 'STATE') return 'రాష్ట్రం';
+  // Staff Reporter (DISTRICT) - search mandal, we'll use its district
+  if (lvl === 'DISTRICT') return 'మండలం';
+  // Constituency Reporter - search mandal or district
+  if (lvl === 'CONSTITUENCY') return 'మండలం లేదా జిల్లా';
+  // RC (ASSEMBLY) - can search mandal or district
+  if (lvl === 'ASSEMBLY') return 'మండలం లేదా జిల్లా';
+  // Mandal Reporter
+  if (lvl === 'MANDAL') return 'మండలం';
+  return 'ప్రాంతం';
+}
 
 const PRIMARY_COLOR = '#DC2626';
 const SUCCESS_COLOR = '#10B981';
@@ -138,14 +161,25 @@ export default function CreateReporterScreen() {
   /* ── Designation grouped by level ── */
   const designationsByLevel = useMemo(() => {
     const q = desigQuery.trim().toLowerCase();
+    // Filter out TENANT_ADMIN from UI
+    const withoutTenantAdmin = designations.filter(
+      (d) => String(d.code || '').toUpperCase() !== 'TENANT_ADMIN'
+    );
     const filtered = q
-      ? designations.filter((d) => String(d.name || '').toLowerCase().includes(q))
-      : designations;
-    const buckets: Record<string, ReporterDesignation[]> = { STATE: [], DISTRICT: [], ASSEMBLY: [], MANDAL: [] };
+      ? withoutTenantAdmin.filter((d) => 
+          String(d.name || '').toLowerCase().includes(q) || 
+          String(d.nativeName || '').toLowerCase().includes(q)
+        )
+      : withoutTenantAdmin;
+    const buckets: Record<string, ReporterDesignation[]> = { STATE: [], DISTRICT: [], CONSTITUENCY: [], ASSEMBLY: [], MANDAL: [] };
     for (const d of filtered) {
       const lvl = String(d.level || '').toUpperCase();
       if (buckets[lvl]) buckets[lvl].push(d);
     }
+    // Sort each bucket by levelOrder
+    Object.keys(buckets).forEach((lvl) => {
+      buckets[lvl].sort((a, b) => (a.levelOrder || 0) - (b.levelOrder || 0));
+    });
     return buckets;
   }, [designations, desigQuery]);
 
@@ -192,17 +226,50 @@ export default function CreateReporterScreen() {
       try {
         const level = selectedLevel as Exclude<ReporterLevel, null>;
         const payload: any = { designationId: selectedDesig.id, level };
-        if (selectedLevel === 'STATE') payload.stateId = locId;
-        if (selectedLevel === 'DISTRICT') payload.districtId = locId;
-        if (selectedLevel === 'ASSEMBLY') payload.assemblyConstituencyId = locId;
-        if (selectedLevel === 'MANDAL') payload.mandalId = locId;
+        const locType = normalizeLocationType(loc.type);
+        
+        if (selectedLevel === 'STATE') {
+          payload.stateId = locId;
+        } else if (selectedLevel === 'DISTRICT') {
+          // Staff Reporter: selected mandal, use its district
+          payload.districtId = loc.district?.id || locId;
+        } else if (selectedLevel === 'ASSEMBLY') {
+          // RC: can select mandal or district - API uses assemblyConstituencyId
+          // For now, pass the selected location id
+          if (locType === 'MANDAL') {
+            payload.mandalId = locId;
+          } else if (locType === 'DISTRICT') {
+            payload.districtId = locId;
+          }
+        } else if (selectedLevel === 'MANDAL') {
+          payload.mandalId = locId;
+        }
 
-        const res = await checkPublicReporterAvailability(tenantId, payload);
-        setIsAvailable(!!res?.available);
-        if (!res?.available) {
-          setFormError('ఈ ప్రాంతంలో ఇప్పటికే రిపోర్టర్ ఉన్నారు');
-        } else {
-          setFormError(null);
+        // Skip availability check if we don't have the right ID for the level
+        // This handles cases where API expects specific ID types
+        try {
+          const res = await checkPublicReporterAvailability(tenantId, payload);
+          setIsAvailable(!!res?.available);
+          if (!res?.available) {
+            setFormError('ఈ ప్రాంతంలో ఇప్పటికే రిపోర్టర్ ఉన్నారు');
+          } else {
+            setFormError(null);
+          }
+        } catch (apiErr: any) {
+          // If API returns 404, location not found
+          if (apiErr?.status === 404) {
+            console.log('[checkAvailability] API 404 - location not found:', apiErr?.data);
+            setIsAvailable(false);
+            const field = apiErr?.data?.field || 'location';
+            setFormError(`ఎంచుకున్న ${field === 'districtId' ? 'జిల్లా' : field === 'mandalId' ? 'మండలం' : 'ప్రాంతం'} కనుగొనబడలేదు`);
+          } else if (apiErr?.status === 400) {
+            // If API returns 400, assume available (API may not support this combination)
+            console.log('[checkAvailability] API 400 - assuming available for level:', level, 'locType:', locType);
+            setIsAvailable(true);
+            setFormError(null);
+          } else {
+            throw apiErr;
+          }
         }
       } catch (e: any) {
         setFormError(e?.message || 'చెక్ చేయలేకపోయాము');
@@ -229,6 +296,7 @@ export default function CreateReporterScreen() {
     setSubmitting(true);
     try {
       const level = selectedLevel as Exclude<ReporterLevel, null>;
+      const locType = normalizeLocationType(selectedLoc.type);
       const input: CreateTenantReporterInput = {
         fullName: fullName.trim(),
         mobileNumber: digitsOnly(mobileNumber),
@@ -237,16 +305,34 @@ export default function CreateReporterScreen() {
         subscriptionActive: false,
         manualLoginEnabled: true,
         manualLoginDays: 365,
-        autoPublish: false,
+        autoPublish: true,
       };
 
-      if (selectedLevel === 'STATE') input.stateId = selectedLoc.match.id;
-      if (selectedLevel === 'DISTRICT') input.districtId = selectedLoc.match.id;
-      if (selectedLevel === 'ASSEMBLY') input.assemblyConstituencyId = selectedLoc.match.id;
-      if (selectedLevel === 'MANDAL') input.mandalId = selectedLoc.match.id;
+      if (selectedLevel === 'STATE') {
+        input.stateId = selectedLoc.match.id;
+      } else if (selectedLevel === 'DISTRICT') {
+        // Staff Reporter: selected mandal, use its district
+        input.districtId = selectedLoc.district?.id || selectedLoc.match.id;
+      } else if (selectedLevel === 'ASSEMBLY') {
+        // RC: can select mandal or district
+        if (locType === 'MANDAL') {
+          input.mandalId = selectedLoc.match.id;
+        } else if (locType === 'DISTRICT') {
+          input.districtId = selectedLoc.match.id;
+        }
+      } else if (selectedLevel === 'MANDAL') {
+        input.mandalId = selectedLoc.match.id;
+      }
+
+      console.log('[CreateReporter] 📤 Payload being sent:', JSON.stringify(input, null, 2));
+      console.log('[CreateReporter] Tenant ID:', tenantId);
+      console.log('[CreateReporter] Selected Location:', selectedLoc);
+      console.log('[CreateReporter] Selected Level:', selectedLevel);
+      console.log('[CreateReporter] Selected Designation:', selectedDesig);
 
       const created = await createTenantReporter(tenantId, input);
 
+      console.log('[CreateReporter] ✅ Success:', created);
       Alert.alert(
         '✅ రిపోర్టర్ క్రియేట్ అయింది',
         `${created.fullName} విజయవంతంగా జోడించబడ్డారు.\n\nఇప్పుడు వారి ID కార్డ్ జెనరేట్ చేయండి.`,
@@ -408,7 +494,17 @@ export default function CreateReporterScreen() {
                             setSelectedDesig(null); // Toggle off
                           } else {
                             // Create a dummy to set the level
-                            setSelectedDesig({ id: '', name: '', level: lvl as any });
+                            setSelectedDesig({ 
+                              id: '', 
+                              tenantId: null,
+                              name: '', 
+                              nativeName: '',
+                              code: '',
+                              level: lvl as any,
+                              levelOrder: 0,
+                              createdAt: '',
+                              updatedAt: ''
+                            });
                           }
                         }
                       }}
@@ -465,19 +561,24 @@ export default function CreateReporterScreen() {
                             setTimeout(() => setStep(2), 200);
                           }}
                         >
-                          <View style={[styles.desigIcon, { backgroundColor: cfg.bgColor }]}>
-                            <Text style={{ fontSize: 20 }}>{cfg.avatar}</Text>
+                          <View style={[styles.desigIcon, { backgroundColor: cfg.bgColor, alignSelf: 'center' }]}>
+                            <Text style={{ fontSize: 24 }}>{cfg.avatar}</Text>
                           </View>
-                          <Text
-                            style={[
-                              styles.designationName,
-                              { color: c.text },
-                              isSelected && { color: cfg.color, fontWeight: '700' },
-                            ]}
-                            numberOfLines={2}
-                          >
-                            {d.name}
-                          </Text>
+                          <View style={{ flex: 1, alignItems: 'center' }}>
+                            <Text
+                              style={[
+                                styles.designationName,
+                                { color: c.text, textAlign: 'center' },
+                                isSelected && { color: cfg.color, fontWeight: '700' },
+                              ]}
+                              numberOfLines={1}
+                            >
+                              {d.nativeName}
+                            </Text>
+                            <Text style={[styles.designationSubname, { color: secondaryText, textAlign: 'center' }]} numberOfLines={1}>
+                              {d.name}
+                            </Text>
+                          </View>
                           {isSelected && (
                             <View style={styles.selectedCheck}>
                               <Ionicons name="checkmark-circle" size={20} color={SUCCESS_COLOR} />
@@ -498,7 +599,11 @@ export default function CreateReporterScreen() {
                   </Text>
                   <View style={styles.designationGrid}>
                     {designations
-                      .filter((d) => d.name.toLowerCase().includes(desigQuery.toLowerCase()))
+                      .filter((d) => 
+                        String(d.code || '').toUpperCase() !== 'TENANT_ADMIN' &&
+                        (d.name.toLowerCase().includes(desigQuery.toLowerCase()) ||
+                         (d.nativeName || '').toLowerCase().includes(desigQuery.toLowerCase()))
+                      )
                       .map((d) => {
                         const isSelected = selectedDesig?.id === d.id;
                         const lvl = String(d.level || '').toUpperCase();
@@ -517,19 +622,24 @@ export default function CreateReporterScreen() {
                               setTimeout(() => setStep(2), 200);
                             }}
                           >
-                            <View style={[styles.desigIcon, { backgroundColor: cfg.bgColor }]}>
-                              <Text style={{ fontSize: 20 }}>{cfg.avatar}</Text>
+                            <View style={[styles.desigIcon, { backgroundColor: cfg.bgColor, alignSelf: 'center' }]}>
+                              <Text style={{ fontSize: 24 }}>{cfg.avatar}</Text>
                             </View>
-                            <Text
-                              style={[
-                                styles.designationName,
-                                { color: c.text },
-                                isSelected && { color: cfg.color, fontWeight: '700' },
-                              ]}
-                              numberOfLines={2}
-                            >
-                              {d.name}
-                            </Text>
+                            <View style={{ flex: 1, alignItems: 'center' }}>
+                              <Text
+                                style={[
+                                  styles.designationName,
+                                  { color: c.text, textAlign: 'center' },
+                                  isSelected && { color: cfg.color, fontWeight: '700' },
+                                ]}
+                                numberOfLines={1}
+                              >
+                                {d.nativeName}
+                              </Text>
+                              <Text style={[styles.designationSubname, { color: secondaryText, textAlign: 'center' }]} numberOfLines={1}>
+                                {d.name}
+                              </Text>
+                            </View>
                           </Pressable>
                         );
                       })}
@@ -549,7 +659,7 @@ export default function CreateReporterScreen() {
                   <MaterialIcons name="location-on" size={32} color="#fff" />
                 </View>
                 <Text style={[styles.stepTitle, { color: c.text }]}>
-                  {LEVEL_LABELS[selectedLevel] || 'ప్రాంతం'} ఎంచుకోండి
+                  {getSearchHintForLevel(selectedLevel)} ఎంచుకోండి
                 </Text>
                 <Text style={[styles.stepSubtitle, { color: secondaryText }]}>
                   {selectedDesig?.name} కోసం పని ప్రాంతం
@@ -559,7 +669,9 @@ export default function CreateReporterScreen() {
               {/* Selected Designation Chip */}
               <View style={[styles.selectedChip, { backgroundColor: c.card, borderColor: c.border }]}>
                 <MaterialIcons name="badge" size={18} color={PRIMARY_COLOR} />
-                <Text style={[styles.selectedChipText, { color: c.text }]}>{selectedDesig?.name}</Text>
+                <Text style={[styles.selectedChipText, { color: c.text }]}>
+                  {selectedDesig?.nativeName || selectedDesig?.name}
+                </Text>
                 <Pressable onPress={() => setStep(1)} style={styles.changeBtn}>
                   <Text style={styles.changeBtnText}>మార్చు</Text>
                 </Pressable>
@@ -570,7 +682,7 @@ export default function CreateReporterScreen() {
                 <Ionicons name="search" size={20} color={secondaryText} />
                 <TextInput
                   style={[styles.searchInput, { color: c.text }]}
-                  placeholder={`🔍 ${LEVEL_LABELS[selectedLevel] || 'ప్రాంతం'} పేరు టైప్ చేయండి...`}
+                  placeholder={`🔍 ${getSearchHintForLevel(selectedLevel)} పేరు టైప్ చేయండి...`}
                   placeholderTextColor={secondaryText}
                   value={locQuery}
                   onChangeText={setLocQuery}
@@ -588,7 +700,9 @@ export default function CreateReporterScreen() {
                 <ActivityIndicator size="small" color={PRIMARY_COLOR} style={{ padding: 30 }} />
               ) : locItems.length > 0 ? (
                 <View style={styles.locationList}>
-                  {locItems.map((item, idx) => (
+                  {locItems.map((item, idx) => {
+                    const locType = normalizeLocationType(item.type);
+                    return (
                     <Pressable
                       key={item.match?.id || idx}
                       style={[
@@ -597,6 +711,7 @@ export default function CreateReporterScreen() {
                         selectedLoc?.match?.id === item.match?.id && styles.locationItemSelected,
                       ]}
                       onPress={() => {
+                        Keyboard.dismiss();
                         setSelectedLoc(item);
                         setFormError(null);
                         checkAvailability(item);
@@ -607,11 +722,15 @@ export default function CreateReporterScreen() {
                       </View>
                       <View style={styles.locInfo}>
                         <Text style={[styles.locName, { color: c.text }]}>{item.match?.name || 'Unknown'}</Text>
-                        {item.district?.name && (
-                          <Text style={[styles.locSub, { color: secondaryText }]}>
-                            {[item.district?.name, item.state?.name].filter(Boolean).join(', ')}
-                          </Text>
-                        )}
+                        {/* Show district name for mandal, or type indicator */}
+                        <Text style={[styles.locSub, { color: secondaryText }]}>
+                          {locType === 'MANDAL' && item.district?.name 
+                            ? `${item.district.name}${item.state?.name ? `, ${item.state.name}` : ''}`
+                            : locType === 'DISTRICT' 
+                              ? `జిల్లా${item.state?.name ? ` • ${item.state.name}` : ''}`
+                              : [item.district?.name, item.state?.name].filter(Boolean).join(', ')
+                          }
+                        </Text>
                       </View>
                       {selectedLoc?.match?.id === item.match?.id && (
                         <>
@@ -625,7 +744,7 @@ export default function CreateReporterScreen() {
                         </>
                       )}
                     </Pressable>
-                  ))}
+                  );})}
                 </View>
               ) : locQuery.length >= 2 ? (
                 <Text style={[styles.noResults, { color: secondaryText }]}>ఫలితాలు లేవు</Text>
@@ -633,7 +752,7 @@ export default function CreateReporterScreen() {
                 <View style={styles.hintBox}>
                   <MaterialIcons name="info-outline" size={20} color={secondaryText} />
                   <Text style={[styles.hintText, { color: secondaryText }]}>
-                    {LEVEL_LABELS[selectedLevel] || 'ప్రాంతం'} పేరు టైప్ చేయండి (2+ అక్షరాలు)
+                    {getSearchHintForLevel(selectedLevel)} పేరు టైప్ చేయండి (2+ అక్షరాలు)
                   </Text>
                 </View>
               )}
@@ -646,15 +765,8 @@ export default function CreateReporterScreen() {
                 </View>
               )}
 
-              {/* Next Button */}
-              <Pressable
-                style={[styles.primaryBtn, !canGoToStep3 && styles.btnDisabled]}
-                onPress={() => setStep(3)}
-                disabled={!canGoToStep3}
-              >
-                <Text style={styles.primaryBtnText}>తదుపరి</Text>
-                <Ionicons name="arrow-forward" size={20} color="#fff" />
-              </Pressable>
+              {/* Spacer for fixed bottom button */}
+              <View style={{ height: 80 }} />
             </View>
           )}
 
@@ -713,7 +825,13 @@ export default function CreateReporterScreen() {
                     placeholder="9876543210"
                     placeholderTextColor={secondaryText}
                     value={mobileNumber}
-                    onChangeText={(t) => setMobileNumber(digitsOnly(t))}
+                    onChangeText={(t) => {
+                      const digits = digitsOnly(t);
+                      setMobileNumber(digits);
+                      if (digits.length === 10) {
+                        Keyboard.dismiss();
+                      }
+                    }}
                     keyboardType="phone-pad"
                     maxLength={10}
                   />
@@ -757,6 +875,20 @@ export default function CreateReporterScreen() {
             </View>
           )}
         </ScrollView>
+
+        {/* Fixed Bottom Button for Step 2 */}
+        {step === 2 && (
+          <View style={[styles.fixedBottomBtn, { backgroundColor: c.background, borderTopColor: c.border }]}>
+            <Pressable
+              style={[styles.primaryBtn, !canGoToStep3 && styles.btnDisabled, { marginBottom: 0 }]}
+              onPress={() => setStep(3)}
+              disabled={!canGoToStep3}
+            >
+              <Text style={styles.primaryBtnText}>తదుపరి</Text>
+              <Ionicons name="arrow-forward" size={20} color="#fff" />
+            </Pressable>
+          </View>
+        )}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -899,9 +1031,7 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderRadius: 14,
     padding: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
+    gap: 8,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
@@ -909,7 +1039,8 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
   desigIcon: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
-  designationName: { fontSize: 13, flex: 1, fontWeight: '500' },
+  designationName: { fontSize: 13, flex: 1, fontWeight: '600' },
+  designationSubname: { fontSize: 10, color: '#9CA3AF', marginTop: 2 },
   selectedCheck: { position: 'absolute', top: 6, right: 6 },
 
   selectedChip: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10 },
@@ -951,4 +1082,13 @@ const styles = StyleSheet.create({
   submitBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: SUCCESS_COLOR, paddingVertical: 16, borderRadius: 12, marginTop: 8 },
   submitBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
   btnDisabled: { opacity: 0.5 },
+  fixedBottomBtn: { 
+    position: 'absolute', 
+    bottom: 0, 
+    left: 0, 
+    right: 0, 
+    paddingHorizontal: 20, 
+    paddingVertical: 12, 
+    borderTopWidth: 1,
+  },
 });

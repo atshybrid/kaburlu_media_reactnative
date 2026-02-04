@@ -197,12 +197,19 @@ export default function AccountScreen() {
         text: 'Logout',
         style: 'destructive',
         onPress: async () => {
-          await softLogout();
-          router.replace('/language');
+          // Get mobile before clearing tokens
+          const mobile = await AsyncStorage.getItem('profile_mobile') || await AsyncStorage.getItem('last_login_mobile') || '';
+          
+          // Soft logout but keep language, location, and push notification preferences
+          const keysToKeep = ['selectedLanguage', 'profile_location', 'profile_location_obj', 'push_notifications_enabled'];
+          await softLogout(keysToKeep, mobile || undefined);
+          
+          // Refresh to show guest state
+          await fetchPrefs();
         },
       },
     ]);
-  }, []);
+  }, [fetchPrefs]);
 
   const roleLabel = (() => {
     const r = String(userRole || '').toUpperCase();

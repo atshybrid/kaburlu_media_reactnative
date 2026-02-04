@@ -36,6 +36,8 @@ export default function Toast() {
 
   useEffect(() => {
     const unsubscribeHttp = onHttpError((err) => {
+      // Skip 404 errors - don't show toast
+      if ((err as any)?.status === 404) return;
       const msg = (err as any)?.message || 'Network error';
       show(String(msg));
     });

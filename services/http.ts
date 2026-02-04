@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import { Platform } from 'react-native';
+import { logError, logMessage } from './crashlytics';
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
@@ -60,7 +61,21 @@ export class HttpError extends Error {
 type ErrorListener = (error: Error | HttpError, context: { path: string; method: HttpMethod }) => void;
 const listeners = new Set<ErrorListener>();
 export function onHttpError(listener: ErrorListener) { listeners.add(listener); return () => listeners.delete(listener); }
-function emitError(err: Error | HttpError, context: { path: string; method: HttpMethod }) { listeners.forEach(l => l(err, context)); }
+function emitError(err: Error | HttpError, context: { path: string; method: HttpMethod }) {
+  // Log to Crashlytics (production only)
+  if (!__DEV__) {
+    const status = (err as HttpError)?.status || 0;
+    // Skip 404 errors from Crashlytics
+    if (status !== 404) {
+      logError(err instanceof Error ? err : new Error(String(err)), {
+        path: context.path,
+        method: context.method,
+        status: String(status),
+      });
+    }
+  }
+  listeners.forEach(l => l(err, context));
+}
 
 async function withTimeout<T>(p: Promise<T>, ms = TIMEOUT_MS): Promise<T> {
   return new Promise<T>((resolve, reject) => {

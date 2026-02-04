@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
+    BackHandler,
     Keyboard,
     KeyboardAvoidingView,
     Modal,
@@ -46,6 +47,41 @@ const POST_NEWS_TENANT_PRIMARY_COLOR_KEY = 'post_news_tenant_primary_color';
 function isValidHexColor(s: string): boolean {
   const v = String(s || '').trim();
   return /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(v);
+}
+
+/**
+ * Safe navigation back based on user role
+ * Prevents tenant admin from landing on reporter dashboard (403 error)
+ */
+async function navigateBack(router: ReturnType<typeof useRouter>) {
+  try {
+    const tokens = await loadTokens();
+    const role = tokens?.decodedAccessToken?.role;
+    
+    // Check if we can go back in the navigation stack
+    if (router.canGoBack()) {
+      router.back();
+      return;
+    }
+    
+    // If no back history, route to appropriate dashboard
+    if (role === 'TENANT_ADMIN' || role === 'SUPER_ADMIN') {
+      router.replace('/tenant/dashboard' as any);
+    } 
+    else if (role === 'REPORTER') {
+      router.replace('/reporter/dashboard' as any);
+    }
+    else {
+      router.replace('/news' as any);
+    }
+  } catch (e) {
+    console.error('[navigateBack] Error:', e);
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/news' as any);
+    }
+  }
 }
 
 function escapeRegExp(s: string): string {
@@ -378,6 +414,24 @@ export default function PostNewsScreen() {
     } catch {}
   }, [introAudioMuted]);
 
+  // Handle back button - role-based navigation
+  const handleGoBack = useCallback(() => {
+    navigateBack(router);
+  }, [router]);
+
+  // Handle Android hardware back button
+  useFocusEffect(
+    useCallback(() => {
+      const onBackPress = () => {
+        handleGoBack();
+        return true; // Prevent default behavior
+      };
+
+      const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+      return () => subscription.remove();
+    }, [handleGoBack])
+  );
+
   // Play intro audio on each page visit (max 3 times per day)
   useFocusEffect(
     useCallback(() => {
@@ -630,6 +684,8 @@ export default function PostNewsScreen() {
       const globalMuted = await AsyncStorage.getItem('app_sound_muted');
       const shouldMute = globalMuted === 'true' || aiAudioMuted;
       
+      console.log('[AI Audio] Starting audio check...', { globalMuted, aiAudioMuted, shouldMute });
+      
       if (!shouldMute) {
         // Configure audio mode for playback
         await Audio.setAudioModeAsync({
@@ -638,6 +694,7 @@ export default function PostNewsScreen() {
           shouldDuckAndroid: true,
         });
         
+        console.log('[AI Audio] Loading audio file...');
         const { sound: audioSound } = await Audio.Sound.createAsync(
           require('../assets/audio/newsai_te.mp3'),
           { isLooping: true, shouldPlay: true, volume: 0.7 }
@@ -646,9 +703,12 @@ export default function PostNewsScreen() {
         
         // Ensure audio starts playing
         await audioSound.playAsync();
+        console.log('[AI Audio] ✅ Audio playing successfully');
+      } else {
+        console.log('[AI Audio] Audio muted, skipping playback');
       }
     } catch (audioErr) {
-      console.log('Audio playback failed:', audioErr);
+      console.error('[AI Audio] ❌ Audio playback failed:', audioErr);
     }
     
     try {
@@ -658,6 +718,7 @@ export default function PostNewsScreen() {
       // Get tenant info
       const tenant = session?.tenant;
       const tenantId = String(tenant?.id || '').trim();
+      const domainId = String(session?.domainId || session?.domainSettings?.id || '').trim();
       const newspaperName = String(tenant?.nativeName || tenant?.name || '').trim() || 'Daily News';
       
       // Get language info
@@ -669,8 +730,8 @@ export default function PostNewsScreen() {
         region: languageCode === 'te' ? 'Telangana' : null,
       };
 
-      // Get categories
-      const categories = await getCategoryNamesForAI(tenantId);
+      // Get categories (pass domainId if available)
+      const categories = await getCategoryNamesForAI(tenantId, domainId || undefined);
       if (!categories || categories.length === 0) {
         Alert.alert('Error', 'Failed to load categories. Please try again.');
         return;
@@ -678,6 +739,7 @@ export default function PostNewsScreen() {
 
       console.log('=== POST NEWS AI CALL DEBUG ===');
       console.log('Tenant ID:', tenantId);
+      console.log('Domain ID:', domainId);
       console.log('Newspaper Name:', newspaperName);
       console.log('Language Code:', languageCode);
       console.log('Language Object:', JSON.stringify(language, null, 2));
@@ -694,7 +756,7 @@ export default function PostNewsScreen() {
         newspaperName,
         language,
         temperature: 0.2,
-        model: '5.2',
+        model: '4o mini',  // Match swagger model name
       });
 
       // Store response in AsyncStorage for review screen
@@ -747,7 +809,7 @@ export default function PostNewsScreen() {
     <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['top', 'bottom']}>
       <View style={[styles.appBar, { borderBottomColor: c.border, backgroundColor: c.background }]}>
         <Pressable
-          onPress={() => router.back()}
+          onPress={handleGoBack}
           style={({ pressed }) => [
             styles.iconBtn,
             { borderColor: c.border, backgroundColor: c.card },
@@ -1661,7 +1723,7 @@ export default function PostNewsScreen() {
     <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['top', 'bottom']}>
       <View style={[styles.appBar, { borderBottomColor: c.border, backgroundColor: c.background }]}>
         <Pressable
-          onPress={() => router.back()}
+          onPress={() => navigateBack(router)}
           style={({ pressed }) => [
             styles.iconBtn,
             { borderColor: c.border, backgroundColor: c.card },
@@ -1712,7 +1774,7 @@ export default function PostNewsScreen() {
 
         <View style={[styles.bottomBar, { borderTopColor: c.border, backgroundColor: c.background }]}>
           <Pressable
-            onPress={() => router.back()}
+            onPress={() => navigateBack(router)}
             style={({ pressed }) => [
               styles.bottomBtn,
               { borderColor: c.border, backgroundColor: c.card },

@@ -11,7 +11,8 @@
 import ShareableArticleImage, { type ShareableArticleData, type ShareableArticleImageRef } from '@/components/ShareableArticleImage';
 import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
-import { loadTokens } from '@/services/auth';
+import { loadTokens, softLogout } from '@/services/auth';
+import { logout } from '@/services/api';
 import {
   getMyNewspaperArticles,
   getReporterMe,
@@ -32,6 +33,7 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  BackHandler,
   FlatList,
   Linking,
   Modal,
@@ -171,6 +173,7 @@ export default function ReporterDashboard() {
   const shareImageRef = useRef<ShareableArticleImageRef>(null);
   const [shareArticle, setShareArticle] = useState<ShareableArticleData | null>(null);
   const [isSharing, setIsSharing] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
 
   // Audio ref for first login
   const audioRef = useRef<Audio.Sound | null>(null);
@@ -331,10 +334,24 @@ export default function ReporterDashboard() {
       if (!data.profilePhotoUrl) {
         setTimeout(() => setShowPhotoModal(true), 500);
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error('[Dashboard] Load reporter failed:', e);
+      
+      // Handle 401/404 - session expired or not a reporter
+      if (e?.status === 401 || e?.status === 404) {
+        Alert.alert(
+          e?.status === 404 ? 'రిపోర్టర్ కాదు' : 'సెషన్ ముగిసింది',
+          e?.status === 404 
+            ? 'మీరు రిపోర్టర్ కాదు. దయచేసి సరైన ఖాతాతో లాగిన్ చేయండి.'
+            : 'మీ లాగిన్ సెషన్ ముగిసింది. దయచేసి మళ్లీ లాగిన్ చేయండి.',
+          [{
+            text: 'సరే',
+            onPress: () => router.replace('/splash')
+          }]
+        );
+      }
     }
-  }, []);
+  }, [router]);
 
   const loadArticles = useCallback(async (cursor?: string | null, refresh = false) => {
     try {
@@ -359,20 +376,44 @@ export default function ReporterDashboard() {
 
       setNextCursor(res.nextCursor || null);
       setHasMore(!!res.nextCursor);
-    } catch (e) {
+    } catch (e: any) {
       console.error('[Dashboard] Load articles failed:', e);
+      
+      // Handle 401 - token expired
+      if (e?.status === 401) {
+        Alert.alert(
+          'సెషన్ ముగిసింది',
+          'మీ లాగిన్ సెషన్ ముగిసింది. దయచేసి మళ్లీ లాగిన్ చేయండి.',
+          [{
+            text: 'సరే',
+            onPress: () => router.replace('/splash')
+          }]
+        );
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
       setLoadingMore(false);
     }
-  }, [activeTab]);
+  }, [activeTab, router]);
 
   useFocusEffect(
     useCallback(() => {
       loadReporter();
       loadArticles(null, true);
     }, [loadReporter, loadArticles])
+  );
+
+  // Hardware back button: go to news page
+  useFocusEffect(
+    useCallback(() => {
+      const onBack = () => {
+        router.replace('/news');
+        return true;
+      };
+      const sub = BackHandler.addEventListener('hardwareBackPress', onBack);
+      return () => sub.remove();
+    }, [router])
   );
 
   const onRefresh = useCallback(() => {
@@ -443,6 +484,39 @@ export default function ReporterDashboard() {
   }, [reporter?.id, tenantId, loadReporter]);
 
   /* ─────────────────────  Share as Image  ───────────────────── */
+
+  const handleLogout = useCallback(async () => {
+    Alert.alert(
+      'లాగ్అవుట్',
+      'మీరు లాగ్అవుట్ చేయాలనుకుంటున్నారా?',
+      [
+        { text: 'రద్దు', style: 'cancel' },
+        {
+          text: 'లాగ్అవుట్',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setLoggingOut(true);
+              const jwt = await AsyncStorage.getItem('jwt');
+              const mobile = await AsyncStorage.getItem('profile_mobile') || await AsyncStorage.getItem('last_login_mobile') || '';
+              if (jwt) { try { await logout(); } catch (e: any) { console.warn('[Dashboard] remote logout failed', e?.message); } }
+              
+              // Keep language, location, and push notification preferences
+              const keysToKeep = ['selectedLanguage', 'profile_location', 'profile_location_obj', 'push_notifications_enabled'];
+              await softLogout(keysToKeep, mobile || undefined);
+              
+              // Go to account tab
+              router.replace('/tech');
+            } catch (e: any) {
+              console.error('[Dashboard] Logout failed:', e);
+            } finally {
+              setLoggingOut(false);
+            }
+          },
+        },
+      ]
+    );
+  }, [router]);
 
   const handleShareAsImage = useCallback(async (article: MyNewspaperArticle) => {
     const shareData: ShareableArticleData = {
@@ -722,13 +796,23 @@ export default function ReporterDashboard() {
 
       {/* Header */}
       <LinearGradient colors={[primaryColor, '#0891b2']} style={[styles.header, { paddingTop: insets.top + 12 }]}>
-        {/* Top row - back only */}
+        {/* Top row - back and logout */}
         <View style={styles.headerTopRow}>
-          <Pressable style={styles.headerIconBtn} onPress={() => router.back()}>
+          <Pressable style={styles.headerIconBtn} onPress={() => router.replace('/news')}>
             <Ionicons name="arrow-back" size={22} color="#FFF" />
           </Pressable>
           <Text style={styles.headerTitle}>రిపోర్టర్ డాష్‌బోర్డ్</Text>
-          <View style={{ width: 40 }} />
+          <Pressable 
+            style={styles.headerIconBtn} 
+            onPress={handleLogout}
+            disabled={loggingOut}
+          >
+            {loggingOut ? (
+              <ActivityIndicator size="small" color="#FFF" />
+            ) : (
+              <Ionicons name="log-out-outline" size={22} color="#FFF" />
+            )}
+          </Pressable>
         </View>
 
         {/* Profile row */}

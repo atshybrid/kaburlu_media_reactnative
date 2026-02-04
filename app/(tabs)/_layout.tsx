@@ -14,7 +14,7 @@ import {
     useTabBarVisibility,
 } from '@/context/TabBarVisibilityContext';
 import { useColorScheme } from '@/hooks/useColorScheme';
-import { LolzIcon, NewsIcon, PostArticleIcon, ProfileIcon } from '@/icons';
+import { LolzIcon, NewsIcon, NewspaperIcon, PostArticleIcon, ProfileIcon } from '@/icons';
 import { CategoryItem, getCategories } from '@/services/api';
 import { log } from '@/services/logger';
 import { canAccessPostNewsByRole, getCachedProfileRole } from '@/services/roles';
@@ -88,11 +88,11 @@ function InnerLayout() {
       <Tabs.Screen
         name="donations"
         options={{
-          title: 'LOLz',
+          title: 'Digital Daily',
           tabBarIcon: ({ color, focused }) => (
-            <LolzIcon size={focused ? 34 : 28} color={color} active={focused} />
+            <NewspaperIcon size={focused ? 28 : 24} color={color} active={focused} />
           ),
-          tabBarLabelStyle: { fontSize: 11 },
+          tabBarLabelStyle: { fontSize: 10 },
         }}
       />
       {/* Hide the old Category tab */}

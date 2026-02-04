@@ -34,5 +34,40 @@ export async function searchCombinedLocations(q: string, limit = 20, tenantId?: 
   sp.set('q', q);
   sp.set('limit', String(limit));
   if (tenantId) sp.set('tenantId', String(tenantId));
-  return await request<SearchCombinedLocationsResponse>(`/locations/search-combined?${sp.toString()}`);
+  
+  try {
+    return await request<SearchCombinedLocationsResponse>(`/locations/search-combined?${sp.toString()}`);
+  } catch (e: any) {
+    // Handle 404 gracefully - location not found, return empty results
+    if (e?.status === 404) {
+      console.log('[Locations] No results found for:', q);
+      return {
+        q,
+        count: 0,
+        items: [],
+      };
+    }
+    // Re-throw other errors
+    throw e;
+  }
+}
+
+/**
+ * Request to add a new location to the database
+ * This creates a request for admin to review and add the location
+ */
+export async function requestAddLocation(
+  placeName: string,
+  tenantId: string,
+  languageCode?: string
+): Promise<{ success: boolean; message?: string }> {
+  return await request<{ success: boolean; message?: string }>('/locations/request-add', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      placeName,
+      tenantId,
+      languageCode: languageCode || 'te',
+    }),
+  });
 }

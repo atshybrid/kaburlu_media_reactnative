@@ -299,7 +299,8 @@ export async function submitUnifiedArticle(): Promise<SubmitResult> {
         lead: response.web_article.lead,
         sections: webSections,
         seo: {
-          slug: response.web_article.seo.url_slug,
+          // Add timestamp + random suffix to ensure unique slug
+          slug: `${response.web_article.seo.url_slug}-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
           metaTitle: response.web_article.seo.meta_title,
           metaDescription: response.web_article.seo.meta_description,
           keywords: response.web_article.seo.keywords,
@@ -442,7 +443,7 @@ export async function submitUnifiedArticle(): Promise<SubmitResult> {
           ...(loc.mandalId ? { mandalId: loc.mandalId } : {}),
           ...(loc.villageId ? { villageId: loc.villageId } : {}),
         },
-        status: 'draft',
+        // NOTE: status is NOT sent - it's server-controlled
       });
 
       if (__DEV__ && DEBUG_FULL) {

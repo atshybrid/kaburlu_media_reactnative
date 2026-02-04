@@ -14,12 +14,12 @@
 import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { loadTokens } from '@/services/auth';
+import { getBaseUrl } from '@/services/http';
 import { uploadProfilePhoto } from '@/services/media';
 import {
   generateReporterIdCard,
   getReporterIdCard,
   getTenantReporter,
-  regenerateReporterIdCard,
   resendIdCardToWhatsApp,
   updateReporterAutoPublish,
   updateReporterProfilePhoto,
@@ -29,8 +29,13 @@ import {
   type TenantReporter,
 } from '@/services/reporters';
 import { Ionicons, MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import * as FileSystem from 'expo-file-system';
+import * as LegacyFileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import * as Sharing from 'expo-sharing';
 import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -110,16 +115,23 @@ export default function TenantReporterDetailsScreen() {
 
   // Action states
   const [updating, setUpdating] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Subscription Modal State
   const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
   const [monthlyAmount, setMonthlyAmount] = useState('');
   const [idCardCharge, setIdCardCharge] = useState('');
+  const [subscriptionStartDate, setSubscriptionStartDate] = useState<Date | null>(null);
+  const [showStartDatePicker, setShowStartDatePicker] = useState(false);
 
   // Manual Login Days Modal
   const [showLoginDaysModal, setShowLoginDaysModal] = useState(false);
   const [loginDays, setLoginDays] = useState('365');
+
+  // Photo Upload Prompt Modal
+  const [showPhotoPrompt, setShowPhotoPrompt] = useState(false);
+  const [photoPromptShown, setPhotoPromptShown] = useState(false);
 
   /* ── Load session ── */
   useEffect(() => {
@@ -150,6 +162,12 @@ export default function TenantReporterDetailsScreen() {
           setIdCard(card?.cardNumber ? card : null);
         } catch {
           setIdCard(null);
+        }
+
+        // Show photo upload prompt if no photo (only once)
+        if (!r.profilePhotoUrl && !photoPromptShown) {
+          setPhotoPromptShown(true);
+          setTimeout(() => setShowPhotoPrompt(true), 500);
         }
       } catch (e: any) {
         setError(e?.message || 'లోడ్ కాలేదు');
@@ -224,6 +242,7 @@ export default function TenantReporterDetailsScreen() {
         // Show modal to get subscription amounts
         setMonthlyAmount(String(reporter.monthlySubscriptionAmount || '500'));
         setIdCardCharge(String(reporter.idCardCharge || '500'));
+        setSubscriptionStartDate(null); // Reset to immediate activation
         setShowSubscriptionModal(true);
       } else {
         // Turn off subscription, enable manual login
@@ -270,23 +289,47 @@ export default function TenantReporterDetailsScreen() {
       return;
     }
 
+    // Validate start date if provided
+    if (subscriptionStartDate) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const startDate = new Date(subscriptionStartDate);
+      startDate.setHours(0, 0, 0, 0);
+      
+      if (startDate < today) {
+        Alert.alert('Invalid Date', 'Start date గతంలో ఉండకూడదు');
+        return;
+      }
+    }
+
     setShowSubscriptionModal(false);
     setUpdating('subscription');
     try {
-      const updated = await updateTenantReporter(tenantId, reporter.id, {
+      const body: any = {
         subscriptionActive: true,
         manualLoginEnabled: false,
         monthlySubscriptionAmount: amount,
         idCardCharge: cardCharge, // 0 is valid
-      });
+      };
+      
+      // Add start date if specified (for scheduled activation)
+      if (subscriptionStartDate) {
+        body.subscriptionStartDate = subscriptionStartDate.toISOString();
+      }
+      
+      const updated = await updateTenantReporter(tenantId, reporter.id, body);
       setReporter((prev) => (prev ? { ...prev, ...updated } : prev));
-      showMessage('success', `Subscription ON ✓ (₹${amount}/నెల)`);
+      
+      const dateStr = subscriptionStartDate 
+        ? ` (${subscriptionStartDate.toLocaleDateString('te-IN')} నుండి)`
+        : '';
+      showMessage('success', `Subscription ON ✓${dateStr} (₹${amount}/నెల)`);
     } catch (e: any) {
       showMessage('error', e?.message || 'అప్డేట్ కాలేదు');
     } finally {
       setUpdating(null);
     }
-  }, [tenantId, reporter, monthlyAmount, idCardCharge, showMessage]);
+  }, [tenantId, reporter, monthlyAmount, idCardCharge, subscriptionStartDate, showMessage]);
 
   /* ── Toggle Manual Login ── */
   const handleManualLoginToggle = useCallback(
@@ -471,7 +514,7 @@ export default function TenantReporterDetailsScreen() {
 
     Alert.alert(
       '🔄 ID కార్డ్ రీజెనరేట్',
-      'కొత్త PDF తయారు చేసి WhatsApp కి పంపాలా?',
+      'కొత్త PDF తయారు చేసి WhatsApp కి పంపాలా?\n\nNote: Backend automatically regenerates PDF when sending.',
       [
         { text: 'వద్దు', style: 'cancel' },
         {
@@ -479,12 +522,15 @@ export default function TenantReporterDetailsScreen() {
           onPress: async () => {
             setUpdating('idCard');
             try {
-              await regenerateReporterIdCard(tenantId, reporter.id);
+              // Backend auto-regenerates PDF when resending
+              await resendIdCardToWhatsApp(tenantId, reporter.id);
+              
+              // Fetch updated card details
               await new Promise((r) => setTimeout(r, 1000));
               const card = await getReporterIdCard(tenantId, reporter.id);
               if (card?.cardNumber) {
                 setIdCard(card);
-                showMessage('success', 'ID కార్డ్ రీజెనరేట్ అయింది ✓');
+                showMessage('success', 'ID కార్డ్ రీజెనరేట్ చేసి WhatsApp కి పంపబడింది ✓');
               }
             } catch (e: any) {
               showMessage('error', e?.message || 'రీజెనరేట్ కాలేదు');
@@ -511,16 +557,108 @@ export default function TenantReporterDetailsScreen() {
     console.log('[WhatsApp] Sending ID card:', { tenantId, reporterId: reporter.id, cardNumber: idCard.cardNumber });
     setUpdating('whatsapp');
     try {
+      // Backend automatically regenerates PDF if missing, just call resend
       const result = await resendIdCardToWhatsApp(tenantId, reporter.id);
       console.log('[WhatsApp] Success:', result);
       showMessage('success', 'WhatsApp కు పంపబడింది ✓');
     } catch (e: any) {
       console.error('[WhatsApp] Error:', { status: e?.status, message: e?.message, body: e?.body });
-      showMessage('error', e?.message || 'పంపలేకపోయాము');
+      if (e?.body?.error?.includes('not found')) {
+        showMessage('error', 'ID కార్డ్ కనిపించలేదు. మళ్ళీ జెనరేట్ చేయండి.');
+      } else if (e?.body?.error?.includes('Mobile')) {
+        showMessage('error', 'మొబైల్ నంబర్ అవసరం.');
+      } else {
+        showMessage('error', e?.message || 'పంపలేకపోయాము');
+      }
     } finally {
       setUpdating(null);
     }
   }, [tenantId, reporter, idCard, showMessage]);
+
+  /* ── Download ID Card PDF ── */
+  const handleDownloadPdf = useCallback(async () => {
+    if (!reporter?.id) return;
+    setDownloading(true);
+
+    try {
+      const t = await loadTokens();
+      const jwt = t?.jwt;
+      if (!jwt) throw new Error('దయచేసి మళ్ళీ లాగిన్ చేయండి');
+
+      const base = getBaseUrl().replace(/\/$/, '');
+      const url = `${base}/id-cards/pdf?reporterId=${encodeURIComponent(reporter.id)}`;
+      const cacheRoot = (LegacyFileSystem as any).cacheDirectory as string | null;
+      if (!cacheRoot) throw new Error('Storage అందుబాటులో లేదు');
+
+      const cacheDir = cacheRoot.endsWith('/') ? cacheRoot : `${cacheRoot}/`;
+      const target = `${cacheDir}id-card-${reporter.id}.pdf`;
+
+      console.log('[PDF Download] Starting download:', url);
+      const result = await LegacyFileSystem.downloadAsync(url, target, {
+        headers: { Accept: 'application/pdf', Authorization: `Bearer ${jwt}` },
+      });
+
+      if ((result as any)?.status && Number((result as any).status) !== 200) {
+        throw new Error(`డౌన్‌లోడ్ విఫలమైంది (HTTP ${(result as any).status})`);
+      }
+
+      const info = await LegacyFileSystem.getInfoAsync(result.uri).catch(() => null as any);
+      if (!info?.exists) throw new Error('PDF ఫైల్ కనుగొనబడలేదు');
+
+      // Copy to documents
+      const docRoot = (LegacyFileSystem as any).documentDirectory as string | null;
+      if (!docRoot) throw new Error('డాక్యుమెంట్ డైరెక్టరీ లేదు');
+      const downloadsDir = docRoot + 'downloads/';
+      const downDirInfo = await LegacyFileSystem.getInfoAsync(downloadsDir).catch(() => ({ exists: false } as any));
+      if (!downDirInfo?.exists) {
+        await LegacyFileSystem.makeDirectoryAsync(downloadsDir, { intermediates: true }).catch(() => {});
+      }
+      const persisted = `${downloadsDir}id-card-${reporter.id}.pdf`;
+      await LegacyFileSystem.copyAsync({ from: result.uri, to: persisted });
+
+      // Android: Save to Downloads folder
+      if (Platform.OS === 'android' && (FileSystem as any)?.StorageAccessFramework) {
+        const SAF = (FileSystem as any).StorageAccessFramework;
+        const DIR_KEY = 'saf_downloads_dir_uri';
+        let directoryUri = await AsyncStorage.getItem(DIR_KEY);
+        if (!directoryUri) {
+          const perm = await SAF.requestDirectoryPermissionsAsync();
+          if (!perm?.granted) throw new Error('అనుమతి నిరాకరించబడింది');
+          await AsyncStorage.setItem(DIR_KEY, String(perm.directoryUri || ''));
+          directoryUri = perm.directoryUri;
+        }
+        if (directoryUri) {
+          const filename = `id-card-${idCard?.cardNumber || reporter.id}.pdf`;
+          const base64 = await LegacyFileSystem.readAsStringAsync(persisted, {
+            encoding: (LegacyFileSystem as any).EncodingType.Base64,
+          });
+          const destUri = await SAF.createFileAsync(directoryUri, filename, 'application/pdf');
+          await FileSystem.writeAsStringAsync(destUri, base64, {
+            encoding: (FileSystem as any).EncodingType.Base64,
+          });
+          showMessage('success', '✅ Downloads లో సేవ్ అయింది');
+        }
+        // Also offer to share
+        const canShare = await Sharing.isAvailableAsync();
+        if (canShare) {
+          await Sharing.shareAsync(persisted, { mimeType: 'application/pdf', dialogTitle: 'ID Card PDF' } as any);
+        }
+        return;
+      }
+
+      // iOS: Share
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) {
+        await Sharing.shareAsync(persisted, { mimeType: 'application/pdf', dialogTitle: 'ID Card PDF' } as any);
+        showMessage('success', '✅ PDF సిద్ధంగా ఉంది');
+      }
+    } catch (e: any) {
+      console.error('[PDF Download] Failed:', e);
+      showMessage('error', e?.message || 'డౌన్‌లోడ్ విఫలమైంది');
+    } finally {
+      setDownloading(false);
+    }
+  }, [reporter?.id, idCard?.cardNumber, showMessage]);
 
   /* ── Computed Values ── */
   const kycStatus = String(reporter?.kycStatus || '').toUpperCase() as keyof typeof KYC_LABELS;
@@ -534,6 +672,10 @@ export default function TenantReporterDetailsScreen() {
   const subscriptionActive = reporter?.subscriptionActive === true;
   const manualLoginEnabled = reporter?.manualLoginEnabled === true;
   const autoPublish = reporter?.autoPublish === true;
+  
+  // Check if subscription is scheduled for future
+  const activationDate = reporter?.subscriptionActivationDate ? new Date(reporter.subscriptionActivationDate) : null;
+  const isScheduled = activationDate && activationDate > new Date() && !subscriptionActive;
   
   // Payment due check - subscription active but current month payment not paid
   const currentMonthPaymentStatus = reporter?.stats?.subscriptionPayment?.currentMonth?.status;
@@ -675,6 +817,44 @@ export default function TenantReporterDetailsScreen() {
                   />
                 </View>
 
+                {/* Start Date (Optional) */}
+                <View style={styles.inputGroup}>
+                  <Text style={[styles.inputLabel, { color: c.text }]}>📅 స్టార్ట్ తేదీ (ఐచ్ఛికం)</Text>
+                  <Pressable
+                    style={[styles.input, { color: c.text, borderColor: c.border, backgroundColor: c.card, justifyContent: 'center' }]}
+                    onPress={() => setShowStartDatePicker(true)}
+                  >
+                    <Text style={{ color: subscriptionStartDate ? c.text : secondaryText }}>
+                      {subscriptionStartDate 
+                        ? subscriptionStartDate.toLocaleDateString('te-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+                        : 'ఇప్పుడే ప్రారంభించు'}
+                    </Text>
+                  </Pressable>
+                  {subscriptionStartDate && (
+                    <Pressable
+                      style={{ marginTop: 4, alignSelf: 'flex-start' }}
+                      onPress={() => setSubscriptionStartDate(null)}
+                    >
+                      <Text style={{ color: PRIMARY_COLOR, fontSize: 13 }}>✕ Clear (ఇప్పుడే ప్రారంభించు)</Text>
+                    </Pressable>
+                  )}
+                </View>
+
+                {showStartDatePicker && (
+                  <DateTimePicker
+                    value={subscriptionStartDate || new Date()}
+                    mode="date"
+                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                    minimumDate={new Date()}
+                    onChange={(event, selectedDate) => {
+                      setShowStartDatePicker(Platform.OS === 'ios');
+                      if (selectedDate) {
+                        setSubscriptionStartDate(selectedDate);
+                      }
+                    }}
+                  />
+                )}
+
                 <View style={[styles.infoBox, { backgroundColor: INFO_COLOR + '15' }]}>
                   <Ionicons name="information-circle" size={18} color={INFO_COLOR} />
                   <Text style={[styles.infoText, { color: INFO_COLOR }]}>
@@ -781,6 +961,48 @@ export default function TenantReporterDetailsScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
+      {/* Photo Upload Prompt Modal */}
+      <Modal
+        visible={showPhotoPrompt}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowPhotoPrompt(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <Pressable style={styles.modalDismiss} onPress={() => setShowPhotoPrompt(false)} />
+          <View style={[styles.modalContent, { backgroundColor: c.background, padding: 24 }]}>
+            <View style={{ alignItems: 'center', marginBottom: 16 }}>
+              <View style={[styles.actionIcon, { backgroundColor: WARNING_COLOR + '20', width: 60, height: 60, borderRadius: 30, marginBottom: 12 }]}>
+                <MaterialIcons name="add-a-photo" size={30} color={WARNING_COLOR} />
+              </View>
+              <Text style={[styles.modalTitle, { color: c.text, textAlign: 'center' }]}>📸 ప్రొఫైల్ ఫోటో అవసరం</Text>
+              <Text style={[styles.infoText, { color: secondaryText, textAlign: 'center', marginTop: 8 }]}>
+                ID కార్డ్ జెనరేట్ చేయడానికి ముందుగా రిపోర్టర్ ఫోటో అప్‌లోడ్ చేయండి
+              </Text>
+            </View>
+
+            <View style={styles.modalFooter}>
+              <Pressable
+                style={[styles.modalBtn, { backgroundColor: '#E5E7EB' }]}
+                onPress={() => setShowPhotoPrompt(false)}
+              >
+                <Text style={[styles.modalBtnText, { color: '#374151' }]}>తర్వాత</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.modalBtn, { backgroundColor: PRIMARY_COLOR }]}
+                onPress={() => {
+                  setShowPhotoPrompt(false);
+                  handleUploadPhoto();
+                }}
+              >
+                <MaterialIcons name="add-a-photo" size={18} color="#fff" style={{ marginRight: 6 }} />
+                <Text style={styles.modalBtnText}>ఫోటో అప్‌లోడ్</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
@@ -795,19 +1017,25 @@ export default function TenantReporterDetailsScreen() {
         {/* Row 1: Subscription & Manual Login */}
         <View style={styles.actionRow}>
           {/* Subscription Toggle */}
-          <View style={[styles.actionCard, { backgroundColor: c.card, borderColor: c.border }]}>
+          <View style={[styles.actionCard, { backgroundColor: c.card, borderColor: paymentDue ? '#DC2626' : c.border }]}>
             <View style={styles.actionCardHeader}>
-              <View style={[styles.actionIcon, { backgroundColor: subscriptionActive ? SUCCESS_COLOR + '20' : '#9CA3AF20' }]}>
-                <MaterialIcons
-                  name="subscriptions"
+              <View style={[styles.actionIcon, { backgroundColor: subscriptionActive ? (paymentDue ? '#DC262620' : SUCCESS_COLOR + '20') : isScheduled ? WARNING_COLOR + '20' : '#9CA3AF20' }]}>
+                <MaterialCommunityIcons
+                  name={subscriptionActive ? 'credit-card-check' : isScheduled ? 'calendar-clock' : 'credit-card-off'}
                   size={20}
-                  color={subscriptionActive ? SUCCESS_COLOR : '#9CA3AF'}
+                  color={subscriptionActive ? (paymentDue ? '#DC2626' : SUCCESS_COLOR) : isScheduled ? WARNING_COLOR : '#9CA3AF'}
                 />
               </View>
               <View style={styles.actionCardInfo}>
                 <Text style={[styles.actionCardTitle, { color: c.text }]}>Subscription</Text>
-                <Text style={[styles.actionCardSubtitle, { color: secondaryText }]}>
-                  {subscriptionActive ? `₹${reporter.monthlySubscriptionAmount || 0}/నెల` : 'OFF'}
+                <Text style={[styles.actionCardSubtitle, { color: subscriptionActive ? (paymentDue ? '#DC2626' : SUCCESS_COLOR) : isScheduled ? WARNING_COLOR : secondaryText }]}>
+                  {subscriptionActive 
+                    ? paymentDue 
+                      ? `⚠️ పేమెంట్ పెండింగ్` 
+                      : `₹${reporter.monthlySubscriptionAmount || 0}/నెల` 
+                    : isScheduled && activationDate
+                    ? `⏰ షెడ్యూల్డ్ (${activationDate.toLocaleDateString('te-IN', { day: '2-digit', month: 'short' })})`
+                    : 'OFF'}
                 </Text>
               </View>
             </View>
@@ -815,10 +1043,11 @@ export default function TenantReporterDetailsScreen() {
               <ActivityIndicator size="small" color={PRIMARY_COLOR} />
             ) : (
               <Switch
-                value={subscriptionActive}
+                value={subscriptionActive || isScheduled}
                 onValueChange={handleSubscriptionToggle}
-                trackColor={{ false: '#D1D5DB', true: SUCCESS_COLOR + '60' }}
-                thumbColor={subscriptionActive ? SUCCESS_COLOR : '#f4f3f4'}
+                disabled={isScheduled}
+                trackColor={{ false: '#D1D5DB', true: isScheduled ? WARNING_COLOR + '60' : paymentDue ? '#DC262660' : SUCCESS_COLOR + '60' }}
+                thumbColor={(subscriptionActive || isScheduled) ? (paymentDue ? '#DC2626' : isScheduled ? WARNING_COLOR : SUCCESS_COLOR) : '#f4f3f4'}
               />
             )}
           </View>
@@ -942,6 +1171,22 @@ export default function TenantReporterDetailsScreen() {
               </View>
 
               <View style={styles.idCardActions}>
+                {/* Download PDF */}
+                <Pressable
+                  style={[styles.idCardBtn, { backgroundColor: PRIMARY_COLOR }]}
+                  onPress={handleDownloadPdf}
+                  disabled={downloading}
+                >
+                  {downloading ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <>
+                      <MaterialIcons name="picture-as-pdf" size={18} color="#fff" />
+                      <Text style={styles.idCardBtnText}>PDF</Text>
+                    </>
+                  )}
+                </Pressable>
+
                 {/* WhatsApp */}
                 <Pressable
                   style={[styles.idCardBtn, { backgroundColor: WHATSAPP_COLOR }]}
@@ -980,18 +1225,57 @@ export default function TenantReporterDetailsScreen() {
               <View style={styles.noIdCard}>
                 <MaterialCommunityIcons name="card-bulleted-off-outline" size={40} color="#9CA3AF" />
                 <Text style={[styles.noIdCardText, { color: secondaryText }]}>ID కార్డ్ ఇంకా లేదు</Text>
-                {!hasPhoto && (
-                  <Text style={[styles.noIdCardHint, { color: WARNING_COLOR }]}>
-                    ⚠️ ముందుగా ప్రొఫైల్ ఫోటో అవసరం
-                  </Text>
-                )}
-                {paymentDue && (
-                  <Text style={[styles.noIdCardHint, { color: '#DC2626' }]}>
-                    ⚠️ పేమెంట్ పెండింగ్ - ముందుగా పేమెంట్ చేయాలి
-                  </Text>
-                )}
+                
+                {/* Step indicators */}
+                <View style={{ marginTop: 12, alignItems: 'flex-start', width: '100%' }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
+                    <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: hasPhoto ? SUCCESS_COLOR : WARNING_COLOR, alignItems: 'center', justifyContent: 'center', marginRight: 8 }}>
+                      {hasPhoto ? <Ionicons name="checkmark" size={14} color="#fff" /> : <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>1</Text>}
+                    </View>
+                    <Text style={{ color: hasPhoto ? SUCCESS_COLOR : WARNING_COLOR, fontSize: 13 }}>
+                      {hasPhoto ? '✓ ఫోటో అప్‌లోడ్ అయింది' : 'ముందుగా ఫోటో అప్‌లోడ్ చేయండి'}
+                    </Text>
+                  </View>
+                  
+                  {subscriptionActive && (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
+                      <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: !paymentDue ? SUCCESS_COLOR : '#DC2626', alignItems: 'center', justifyContent: 'center', marginRight: 8 }}>
+                        {!paymentDue ? <Ionicons name="checkmark" size={14} color="#fff" /> : <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>2</Text>}
+                      </View>
+                      <Text style={{ color: !paymentDue ? SUCCESS_COLOR : '#DC2626', fontSize: 13 }}>
+                        {!paymentDue ? '✓ పేమెంట్ పూర్తయింది' : 'రిపోర్టర్ పేమెంట్ చేయాలి'}
+                      </Text>
+                    </View>
+                  )}
+                  
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: '#9CA3AF', alignItems: 'center', justifyContent: 'center', marginRight: 8 }}>
+                      <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>{subscriptionActive ? '3' : '2'}</Text>
+                    </View>
+                    <Text style={{ color: '#9CA3AF', fontSize: 13 }}>ID కార్డ్ జెనరేట్ చేయండి</Text>
+                  </View>
+                </View>
               </View>
 
+              {/* Photo upload button if no photo */}
+              {!hasPhoto && (
+                <Pressable
+                  style={[styles.generateBtn, { backgroundColor: WARNING_COLOR, marginBottom: 8 }]}
+                  onPress={handleUploadPhoto}
+                  disabled={updating === 'photo'}
+                >
+                  {updating === 'photo' ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <>
+                      <MaterialIcons name="add-a-photo" size={20} color="#fff" />
+                      <Text style={styles.generateBtnText}>ఫోటో అప్‌లోడ్ చేయండి</Text>
+                    </>
+                  )}
+                </Pressable>
+              )}
+
+              {/* ID Card generate button */}
               <Pressable
                 style={[
                   styles.generateBtn,
@@ -1006,7 +1290,11 @@ export default function TenantReporterDetailsScreen() {
                   <>
                     <MaterialCommunityIcons name="card-account-details" size={20} color="#fff" />
                     <Text style={styles.generateBtnText}>
-                      {paymentDue ? 'పేమెంట్ పెండింగ్' : 'ID కార్డ్ జెనరేట్ చేయండి'}
+                      {!hasPhoto 
+                        ? 'ముందుగా ఫోటో అవసరం' 
+                        : paymentDue 
+                          ? 'రిపోర్టర్ పేమెంట్ తర్వాత' 
+                          : 'ID కార్డ్ జెనరేట్ చేయండి'}
                     </Text>
                   </>
                 )}
