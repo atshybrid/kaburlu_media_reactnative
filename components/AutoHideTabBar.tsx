@@ -43,7 +43,7 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
   React.useEffect(() => {
     Animated.timing(animatedRef.current, {
       toValue: shouldShow ? 1 : 0,
-      duration: 220,
+      duration: 200,
       useNativeDriver: true,
     }).start();
     if (shouldShow) {
@@ -54,7 +54,12 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
         useNativeDriver: true,
       }).start();
     } else {
-      scaleRef.current.setValue(0.98);
+      // Ensure complete hide by setting scale to 0
+      Animated.timing(scaleRef.current, {
+        toValue: 0,
+        duration: 200,
+        useNativeDriver: true,
+      }).start();
     }
   }, [shouldShow]);
 
@@ -114,25 +119,24 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
   // Debounce map for tab presses
   // removed debounce map (was used for career sheet)
 
-  // Notch dimensions
-  const NOTCH_WIDTH = 76;
-  const NOTCH_HEIGHT = 38;
-  const NOTCH_RADIUS = 38;
+  // Notch dimensions - adjusted for half-circle FAB integration
+  const NOTCH_WIDTH = 80;
+  const NOTCH_HEIGHT = 32;
+  const NOTCH_RADIUS = 40;
 
-  // Generate notched background path
+  // Generate notched background path - semicircular cutout for FAB
   const generateNotchPath = (width: number) => {
     const centerX = width / 2;
-    const notchLeft = centerX - NOTCH_WIDTH / 2;
-    const notchRight = centerX + NOTCH_WIDTH / 2;
+    const radius = 32; // Half of FAB width (56/2 = 28) + some padding
+    const notchDepth = 4; // How deep the notch goes into the bar
     
     return `
-      M 0 ${NOTCH_HEIGHT}
-      L ${notchLeft - NOTCH_RADIUS} ${NOTCH_HEIGHT}
-      C ${notchLeft - NOTCH_RADIUS / 2} ${NOTCH_HEIGHT} ${notchLeft} ${NOTCH_HEIGHT / 2} ${notchLeft} 0
-      C ${notchLeft} ${-NOTCH_HEIGHT * 0.3} ${notchLeft + NOTCH_WIDTH * 0.15} ${-NOTCH_HEIGHT * 0.5} ${centerX} ${-NOTCH_HEIGHT * 0.5}
-      C ${notchRight - NOTCH_WIDTH * 0.15} ${-NOTCH_HEIGHT * 0.5} ${notchRight} ${-NOTCH_HEIGHT * 0.3} ${notchRight} 0
-      C ${notchRight} ${NOTCH_HEIGHT / 2} ${notchRight + NOTCH_RADIUS / 2} ${NOTCH_HEIGHT} ${notchRight + NOTCH_RADIUS} ${NOTCH_HEIGHT}
-      L ${width} ${NOTCH_HEIGHT}
+      M 0 0
+      L ${centerX - radius} 0
+      Q ${centerX - radius} ${notchDepth} ${centerX - radius * 0.7} ${notchDepth}
+      A ${radius} ${radius} 0 0 0 ${centerX + radius * 0.7} ${notchDepth}
+      Q ${centerX + radius} ${notchDepth} ${centerX + radius} 0
+      L ${width} 0
       L ${width} 100
       L 0 100
       Z
@@ -156,7 +160,7 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
         {/* Notched background SVG */}
         {containerWidth > 0 && (
           <View style={styles.notchSvgContainer}>
-            <Svg width={containerWidth} height={100 + NOTCH_HEIGHT} style={{ position: 'absolute', top: -NOTCH_HEIGHT }}>
+            <Svg width={containerWidth} height={100} style={{ position: 'absolute', top: 0 }}>
               <Path
                 d={generateNotchPath(containerWidth)}
                 fill={theme.card}
@@ -181,7 +185,10 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
               accessibilityLabel="Ka Chat"
               style={({ pressed }) => [
                 styles.centerFab,
-                { backgroundColor: onKaChat ? theme.tint : theme.secondary },
+                { 
+                  backgroundColor: onKaChat ? theme.tint : theme.secondary,
+                  borderColor: colorScheme === 'dark' ? theme.card : '#fff',
+                },
                 pressed && styles.fabPressed,
               ]}
               android_ripple={{ color: 'rgba(255,255,255,0.2)', borderless: true }}
@@ -205,7 +212,7 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
             styles.inner,
             {
               backgroundColor: 'transparent',
-              paddingBottom: insets.bottom,
+              paddingBottom: Math.max(insets.bottom, 4),
             },
           ]}
           onLayout={onContainerLayout}
@@ -355,17 +362,18 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingTop: 8,
     paddingHorizontal: 2,
+    paddingBottom: 4,
   },
   tabItem: {
     flex: 1,
     alignItems: 'center',
-    paddingVertical: 8,
+    paddingVertical: 6,
     paddingHorizontal: 2,
   },
   centerTabItem: {
     flex: 1,
     alignItems: 'center',
-    paddingVertical: 8,
+    paddingVertical: 6,
     paddingHorizontal: 2,
     marginTop: 4,
   },
@@ -384,7 +392,7 @@ const styles = StyleSheet.create({
   centerFabWrap: {
     position: 'absolute',
     alignSelf: 'center',
-    top: -28,
+    top: -20,
     zIndex: 10,
   },
   centerFab: {
@@ -398,7 +406,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     shadowRadius: 8,
     overflow: 'hidden',
-    borderWidth: 3,
+    borderWidth: 4,
     borderColor: '#fff',
   },
   fabPressed: { opacity: 0.9, transform: [{ scale: 0.95 }] },

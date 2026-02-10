@@ -172,7 +172,6 @@ export default function ReporterDashboard() {
   // Share state
   const shareImageRef = useRef<ShareableArticleImageRef>(null);
   const [shareArticle, setShareArticle] = useState<ShareableArticleData | null>(null);
-  const [isSharing, setIsSharing] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
 
   // Audio ref for first login
@@ -536,19 +535,18 @@ export default function ReporterDashboard() {
     };
     setShareArticle(shareData);
 
-    setTimeout(async () => {
-      if (shareImageRef.current) {
-        setIsSharing(true);
-        try {
-          await shareImageRef.current.captureAndShare();
-        } catch {
-          Alert.alert('Error', 'షేర్ విఫలమైంది');
-        } finally {
-          setIsSharing(false);
-          setShareArticle(null);
-        }
+    // Call captureAndShare directly - it will show style picker
+    if (shareImageRef.current) {
+      try {
+        await shareImageRef.current.captureAndShare();
+      } catch (e) {
+        console.error('[Dashboard] Share failed:', e);
+        Alert.alert('Error', 'షేర్ విఫలమైంది');
       }
-    }, 800);
+    } else {
+      console.error('[Dashboard] shareImageRef is null');
+      Alert.alert('Error', 'దయచేసి మళ్ళీ ప్రయత్నించండి');
+    }
   }, [reporter]);
 
   /* ─────────────────────  Navigation  ───────────────────── */
@@ -631,20 +629,17 @@ export default function ReporterDashboard() {
     <View style={[styles.container, { backgroundColor: c.background }]}>
       <StatusBar barStyle="light-content" backgroundColor={primaryColor} />
 
-      {/* Share Image Component (hidden) */}
-      {shareArticle && (
-        <ShareableArticleImage ref={shareImageRef} article={shareArticle} tenantName={tenantName} visible />
-      )}
-
-      {/* Sharing Overlay */}
-      {isSharing && (
-        <View style={styles.sharingOverlay}>
-          <View style={styles.sharingBox}>
-            <ActivityIndicator size="large" color={primaryColor} />
-            <Text style={styles.sharingText}>ఇమేజ్ తయారవుతుంది...</Text>
-          </View>
-        </View>
-      )}
+      {/* Share Image Component - Always rendered for ref to be valid */}
+      <ShareableArticleImage
+        ref={shareImageRef}
+        article={shareArticle || {
+          id: '',
+          title: '',
+        }}
+        tenantName={tenantName}
+        tenantPrimaryColor={primaryColor}
+        visible={!!shareArticle}
+      />
 
       {/* Profile Photo Modal */}
       <Modal visible={showPhotoModal} transparent animationType="fade">

@@ -881,7 +881,10 @@ export default function PostNewsDetailsScreen() {
       </Modal>
 
       <Modal visible={locationModalVisible} transparent animationType="fade" onRequestClose={() => setLocationModalVisible(false)}>
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView 
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
           <View style={[StyleSheet.absoluteFill, { backgroundColor: c.text, opacity: 0.25 }]} />
           <View style={[styles.modalCard, { backgroundColor: c.card, borderColor: c.border }]}>
             <View style={styles.rowBetween}>
@@ -947,7 +950,7 @@ export default function PostNewsDetailsScreen() {
               ) : null}
             </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Fullscreen Body Modal */}

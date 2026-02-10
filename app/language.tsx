@@ -27,14 +27,34 @@ const LanguageSelectionScreen = () => {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [storedLanguage, setStoredLanguage] = useState<Language | null>(null);
+  const [hasTokens, setHasTokens] = useState(false);
+
+  React.useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem('selectedLanguage');
+        if (raw) setStoredLanguage(JSON.parse(raw));
+      } catch {}
+      try {
+        const existingJwt = await AsyncStorage.getItem('jwt');
+        const existingRefresh = await AsyncStorage.getItem('refreshToken');
+        setHasTokens(!!(existingJwt && existingRefresh));
+      } catch {}
+    })();
+  }, []);
 
   React.useEffect(() => {
     (async () => {
       try {
         const list = await getLanguages();
         setLanguages(list);
-        // Show the first API item as top full-width card; preserve backend order
-        if (list?.length) setSelectedLanguage(list[0]);
+        // Prefer previously chosen language if it exists
+        if (list?.length) {
+          const byId = storedLanguage?.id ? list.find((l) => l.id === storedLanguage.id) : undefined;
+          const byCode = !byId && storedLanguage?.code ? list.find((l) => l.code === storedLanguage.code) : undefined;
+          setSelectedLanguage(byId || byCode || list[0]);
+        }
         setLoadError(null);
       } catch {
         setLoadError('Failed to load languages');
@@ -42,7 +62,7 @@ const LanguageSelectionScreen = () => {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [storedLanguage?.id, storedLanguage?.code]);
 
   const handleLanguageSelect = async (language: Language) => {
     if (submitting || loading) return;
@@ -108,9 +128,20 @@ const LanguageSelectionScreen = () => {
         console.warn('[AUTH] Guest registration failed', rawMsg);
       } catch {}
 
-      const friendlyMsg = /\(500\)/.test(rawMsg)
-        ? 'Server error (500). Please try again in a moment.'
-        : rawMsg || 'Failed to register. Please try again.';
+      const lower = String(rawMsg || '').toLowerCase();
+      const statusMatch = String(rawMsg || '').match(/\((\d{3})\)/) || String(rawMsg || '').match(/http\s*(\d{3})/i);
+      const statusCode = statusMatch ? Number(statusMatch[1]) : undefined;
+      const isCloudflare = lower.includes('cloudflare') || lower.includes('just a moment') || lower.includes('/cdn-cgi/');
+
+      const friendlyMsg = (statusCode === 429)
+        ? 'Too many requests right now. Please wait 10 seconds and try again.'
+        : (statusCode === 503)
+          ? 'Service temporarily unavailable (503). Please try again in a minute.'
+        : isCloudflare
+          ? 'Service is temporarily blocked by protection (Cloudflare). Please try again later.'
+          : /\(500\)/.test(rawMsg)
+            ? 'Server error (500). Please try again in a moment.'
+            : rawMsg || 'Failed to register. Please try again.';
 
       setSubmitError(friendlyMsg);
     } finally {
@@ -211,6 +242,19 @@ const LanguageSelectionScreen = () => {
       )}
       {!loading && !loadError && (
         <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContainer}>
+          {hasTokens && storedLanguage && (
+            <View style={styles.continueBox}>
+              <Text style={styles.continueText} numberOfLines={2}>
+                Continue with {storedLanguage.nativeName || storedLanguage.name}
+              </Text>
+              <TouchableOpacity
+                onPress={() => router.replace('/news')}
+                style={styles.continueBtn}
+              >
+                <Text style={{ color: '#fff', fontWeight: '700' }}>Continue</Text>
+              </TouchableOpacity>
+            </View>
+          )}
           {selectedLanguage && renderLanguageItem(selectedLanguage, true)}
           <View style={styles.gridContainer}>
             {otherLanguages.map((item) => renderLanguageItem(item, false))}
@@ -245,6 +289,31 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#fcfcff',
+  },
+  continueBox: {
+    marginHorizontal: 14,
+    marginTop: 10,
+    marginBottom: 14,
+    padding: 12,
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(2, 60, 105, 0.12)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  continueText: {
+    flex: 1,
+    color: '#1a1a1a',
+    fontWeight: '600',
+  },
+  continueBtn: {
+    backgroundColor: '#023c69',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
   },
   scrollView: {
     flex: 1,

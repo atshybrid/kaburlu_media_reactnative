@@ -23,6 +23,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
+  Keyboard,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -160,8 +161,12 @@ export default function ReporterPaymentScreen() {
           setError('Invalid payment data. Please try logging in again.');
         }
       } else {
-        console.error('[PAYMENT SCREEN] No razorpayData in params');
-        setError('Payment data not provided. Please try logging in again.');
+        console.error('[PAYMENT SCREEN] No razorpayData in params - redirecting to login');
+        // Redirect back to login if payment data is missing
+        setTimeout(() => {
+          router.replace('/auth/login');
+        }, 100);
+        return;
       }
       
       if (params.breakdownData) {
@@ -338,8 +343,9 @@ export default function ReporterPaymentScreen() {
     setMpinError(null);
     
     try {
-      // For new reporters, old MPIN is last 4 digits of phone (auto-set by backend)
-      const oldMpin = last4;
+      // Use current MPIN from login credentials as old MPIN
+      // Fall back to last 4 digits only if no MPIN is available
+      const oldMpin = effectiveMpin || last4;
       
       await changeMpin({
         mobileNumber,
@@ -549,10 +555,18 @@ export default function ReporterPaymentScreen() {
                 ref={newMpinRef}
                 style={[styles.mpinTextInput, { backgroundColor: isDark ? '#1e293b' : '#f1f5f9', color: textColor, borderColor }]}
                 value={newMpin}
-                onChangeText={(t) => { setNewMpin(t.replace(/\D/g, '').slice(0, 4)); setMpinError(null); }}
+                onChangeText={(t) => { 
+                  const cleaned = t.replace(/\D/g, '').slice(0, 4);
+                  setNewMpin(cleaned); 
+                  setMpinError(null);
+                  // Auto-move to confirm after 4 digits
+                  if (cleaned.length === 4) {
+                    setTimeout(() => confirmMpinRef.current?.focus(), 100);
+                  }
+                }}
                 keyboardType="number-pad"
                 maxLength={4}
-                placeholder="••••"
+                placeholder=""
                 placeholderTextColor={mutedColor}
                 secureTextEntry
                 autoFocus
@@ -568,10 +582,24 @@ export default function ReporterPaymentScreen() {
                 ref={confirmMpinRef}
                 style={[styles.mpinTextInput, { backgroundColor: isDark ? '#1e293b' : '#f1f5f9', color: textColor, borderColor }]}
                 value={confirmMpin}
-                onChangeText={(t) => { setConfirmMpin(t.replace(/\D/g, '').slice(0, 4)); setMpinError(null); }}
+                onChangeText={(t) => { 
+                  const cleaned = t.replace(/\D/g, '').slice(0, 4);
+                  setConfirmMpin(cleaned); 
+                  setMpinError(null);
+                  // Auto-submit after 4 digits - validate directly before submit
+                  if (cleaned.length === 4 && newMpin.length === 4) {
+                    // Check match immediately with actual values
+                    if (cleaned !== newMpin) {
+                      setMpinError('MPIN లు సరిపోలడం లేదు');
+                      return;
+                    }
+                    Keyboard.dismiss();
+                    setTimeout(() => handleChangeMpin(), 300);
+                  }
+                }}
                 keyboardType="number-pad"
                 maxLength={4}
-                placeholder="••••"
+                placeholder=""
                 placeholderTextColor={mutedColor}
                 secureTextEntry
                 returnKeyType="done"
@@ -1066,7 +1094,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     fontSize: 24,
     fontWeight: '700',
-    textAlign: 'center',
+    textAlign: 'left',
     letterSpacing: 8,
   },
 });

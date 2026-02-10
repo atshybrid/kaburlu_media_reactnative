@@ -2,6 +2,7 @@ import { ThemedText } from '@/components/ThemedText';
 import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { uploadMedia } from '@/services/api';
+import { loadTokens } from '@/services/auth';
 import type { AIRewriteUnifiedResponse, MediaPhoto } from '@/services/aiRewriteUnified';
 import { searchCombinedLocations, type CombinedLocationItem } from '@/services/locations';
 import { submitUnifiedArticle } from '@/services/unifiedArticle';
@@ -20,6 +21,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   TextInput,
   View,
 } from 'react-native';
@@ -42,6 +44,13 @@ type UploadedVideo = {
 
 const MAX_TOTAL_MEDIA = 5;
 
+// Helper to extract Telugu text from multilingual fields
+const getTeluguText = (field: string | Record<string, string> | undefined): string => {
+  if (!field) return '';
+  if (typeof field === 'string') return field;
+  return field.te || field.en || Object.values(field)[0] || '';
+};
+
 export default function PostNewsUploadMediaScreen() {
   const scheme = useColorScheme() ?? 'light';
   const c = Colors[scheme];
@@ -58,6 +67,7 @@ export default function PostNewsUploadMediaScreen() {
   const [uploadProgress, setUploadProgress] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [noImagesAvailable, setNoImagesAvailable] = useState(false);
 
   // Location selection
   const [locationModalVisible, setLocationModalVisible] = useState(false);
@@ -83,34 +93,44 @@ export default function PostNewsUploadMediaScreen() {
       const parsed: AIRewriteUnifiedResponse = JSON.parse(storedResponse);
       setResponse(parsed);
 
-      // Load previously uploaded photos if any (for back navigation)
+      // Check if photos belong to THIS article by matching photo IDs
       const storedPhotos = await AsyncStorage.getItem('UPLOADED_PHOTOS');
       if (storedPhotos) {
         try {
           const parsedPhotos = JSON.parse(storedPhotos);
           if (Array.isArray(parsedPhotos) && parsedPhotos.length > 0) {
-            // Validate photos - only keep ones with valid uri and url
+            // Get current article's photo IDs
+            const currentPhotoIds = new Set(
+              [...(parsed.media_requirements?.must_photos || []), ...(parsed.media_requirements?.support_photos || [])].map((p: MediaPhoto) => p.id)
+            );
+            
+            // Only keep uploaded photos that match current article's photo requirements
             const validPhotos = parsedPhotos.filter(
               (p: UploadedPhoto) => 
                 p && 
                 typeof p.uri === 'string' && 
                 p.uri.trim().length > 0 && 
                 typeof p.url === 'string' && 
-                p.url.trim().length > 0
+                p.url.trim().length > 0 &&
+                (p.isExtra || currentPhotoIds.has(p.photoId)) // Keep extra photos or matched required photos
             );
-            setUploadedPhotos(validPhotos);
-            // Update storage with only valid photos
-            if (validPhotos.length !== parsedPhotos.length) {
-              if (validPhotos.length > 0) {
+            
+            // If no valid photos match this article, clear storage
+            if (validPhotos.length === 0) {
+              await AsyncStorage.removeItem('UPLOADED_PHOTOS');
+              setUploadedPhotos([]);
+            } else {
+              setUploadedPhotos(validPhotos);
+              // Update storage with only valid photos
+              if (validPhotos.length !== parsedPhotos.length) {
                 await AsyncStorage.setItem('UPLOADED_PHOTOS', JSON.stringify(validPhotos));
-              } else {
-                await AsyncStorage.removeItem('UPLOADED_PHOTOS');
               }
             }
           }
         } catch {
           // Invalid data, clear it
           await AsyncStorage.removeItem('UPLOADED_PHOTOS');
+          setUploadedPhotos([]);
         }
       }
 
@@ -195,9 +215,15 @@ export default function PostNewsUploadMediaScreen() {
         folder: 'posts',
       });
 
-      const langCode = await AsyncStorage.getItem('AI_REWRITE_LANGUAGE');
-      const caption = photo.caption_suggestion?.[langCode || 'te'] || photo.scene || '';
-      const alt = photo.alt_suggestion?.en || photo.scene || '';
+      // Extract Telugu text from multilingual fields
+      const getTeluguText = (field: string | Record<string, string> | undefined): string => {
+        if (!field) return '';
+        if (typeof field === 'string') return field;
+        return field.te || field.en || Object.values(field)[0] || '';
+      };
+      
+      const caption = getTeluguText(photo.caption_suggestion) || getTeluguText(photo.scene) || '';
+      const alt = getTeluguText(photo.alt_suggestion) || getTeluguText(photo.scene) || '';
 
       const newPhoto: UploadedPhoto = {
         photoId: photo.id,
@@ -379,14 +405,29 @@ export default function PostNewsUploadMediaScreen() {
       return;
     }
 
-    const mustPhotos = response.media_requirements.must_photos || [];
-    const mandatoryPhotoIds = mustPhotos.filter((p) => p.mandatory).map((p) => p.id);
-    const uploadedMandatoryIds = uploadedPhotos.filter((p) => p.mandatory).map((p) => p.photoId);
-
-    const missingMandatory = mandatoryPhotoIds.filter((id) => !uploadedMandatoryIds.includes(id));
-    if (missingMandatory.length > 0) {
-      Alert.alert('Required Photos Missing', 'Please upload all mandatory photos before submitting');
+    // Check if at least 1 image is uploaded OR noImagesAvailable toggle is ON
+    const hasAtLeastOneImage = uploadedPhotos.length > 0;
+    
+    if (!hasAtLeastOneImage && !noImagesAvailable) {
+      Alert.alert(
+        'No Images',
+        'Please upload at least 1 image or enable "No Images Available" option to proceed.',
+        [{ text: 'OK' }]
+      );
       return;
+    }
+
+    // If images are available, validate mandatory photos
+    if (!noImagesAvailable) {
+      const mustPhotos = response.media_requirements.must_photos || [];
+      const mandatoryPhotoIds = mustPhotos.filter((p) => p.mandatory).map((p) => p.id);
+      const uploadedMandatoryIds = uploadedPhotos.filter((p) => p.mandatory).map((p) => p.photoId);
+
+      const missingMandatory = mandatoryPhotoIds.filter((id) => !uploadedMandatoryIds.includes(id));
+      if (missingMandatory.length > 0) {
+        Alert.alert('Required Photos Missing', 'Please upload all mandatory photos before submitting');
+        return;
+      }
     }
 
     await AsyncStorage.setItem('UPLOADED_PHOTOS', JSON.stringify(uploadedPhotos));
@@ -403,14 +444,26 @@ export default function PostNewsUploadMediaScreen() {
         await clearPostNewsAsyncStorage();
 
         setShowSuccess(true);
+        
+        // Load user role from tokens before timeout
+        const tokens = await loadTokens();
+        const userRole = tokens?.user?.role;
+        
+        // Determine dashboard route based on user role
+        let dashboardRoute: string;
+        if (userRole === 'TENANT_REPORTER' || userRole === 'REPORTER') {
+          dashboardRoute = '/reporter/dashboard';
+        } else if (userRole === 'TENANT_ADMIN') {
+          dashboardRoute = '/tenant/dashboard';
+        } else {
+          dashboardRoute = '/(tabs)';
+        }
+        
+        // Auto-navigate to appropriate dashboard after 2 seconds
         setTimeout(() => {
-          // Navigate to dashboard and reset entire navigation stack
-          // Using while loop to pop all screens then replace to home
-          while (router.canGoBack()) {
-            router.back();
-          }
-          router.replace('/(tabs)' as any);
-        }, 2500);
+          setShowSuccess(false);
+          router.replace(dashboardRoute as any);
+        }, 2000);
       } else {
         Alert.alert('Submission Failed', result.message || 'Failed to create article');
       }
@@ -426,7 +479,7 @@ export default function PostNewsUploadMediaScreen() {
       <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['top', 'bottom']}>
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" />
-          <ThemedText style={{ marginTop: 12, color: c.muted }}>Loading...</ThemedText>
+          <ThemedText style={{ marginTop: 12, color: c.muted }}>లోడ్ అవుతోంది...</ThemedText>
         </View>
       </SafeAreaView>
     );
@@ -452,7 +505,7 @@ export default function PostNewsUploadMediaScreen() {
           <MaterialIcons name="arrow-back" size={22} color={c.text} />
         </Pressable>
         <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 17 }}>
-          Upload Photos
+          ఫోటోలు అప్‌లోడ్ చేయండి
         </ThemedText>
         <View style={{ width: 40 }} />
       </View>
@@ -464,7 +517,7 @@ export default function PostNewsUploadMediaScreen() {
             <View style={styles.sectionHeader}>
               <MaterialIcons name="photo-camera" size={22} color={c.text} />
               <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 16 }}>
-                Required Photos
+                తప్పనిసరి ఫోటోలు
               </ThemedText>
             </View>
 
@@ -472,23 +525,23 @@ export default function PostNewsUploadMediaScreen() {
               const uploaded = uploadedPhotos.find((p) => p.photoId === photo.id);
 
               return (
-                <View key={photo.id} style={[styles.photoCard, { backgroundColor: c.card, borderColor: c.border }]}>
+                <View key={`must_${photo.id}_${index}`} style={[styles.photoCard, { backgroundColor: c.card, borderColor: c.border }]}>
                   <View style={styles.photoHeader}>
                     <View style={{ flex: 1 }}>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                         <ThemedText style={{ color: c.text, fontWeight: '600' }}>
-                          Photo {index + 1}: {photo.photo_type}
+                          ఫోటో {index + 1}: {photo.photo_type}
                         </ThemedText>
                         {photo.mandatory && (
                           <View style={[styles.mandatoryBadge, { backgroundColor: '#EF4444' }]}>
                             <ThemedText style={{ color: '#fff', fontSize: 10, fontWeight: '600' }}>
-                              REQUIRED
+                              తప్పనిసరి
                             </ThemedText>
                           </View>
                         )}
                       </View>
                       <ThemedText style={{ color: c.muted, fontSize: 13, marginTop: 4 }}>
-                        {photo.scene}
+                        {getTeluguText(photo.scene)}
                       </ThemedText>
                     </View>
                   </View>
@@ -504,7 +557,7 @@ export default function PostNewsUploadMediaScreen() {
                       <TextInput
                         value={uploaded.caption}
                         onChangeText={(text) => updateCaption(photo.id, text)}
-                        placeholder="Caption"
+                        placeholder={getTeluguText(photo.caption_suggestion) || photo.scene || 'Caption'}
                         placeholderTextColor={c.muted}
                         style={[styles.captionInput, { borderColor: c.border, color: c.text }]}
                         multiline
@@ -527,7 +580,7 @@ export default function PostNewsUploadMediaScreen() {
                         ]}
                       >
                         <MaterialIcons name="delete" size={16} color="#fff" />
-                        <ThemedText style={{ color: '#fff', fontSize: 13 }}>Remove</ThemedText>
+                        <ThemedText style={{ color: '#fff', fontSize: 13 }}>తీసివేయి</ThemedText>
                       </Pressable>
                     </View>
                   ) : (
@@ -559,7 +612,7 @@ export default function PostNewsUploadMediaScreen() {
             <View style={styles.sectionHeader}>
               <MaterialIcons name="photo-library" size={22} color={c.text} />
               <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 16 }}>
-                Support Photos (Optional)
+                సహాయక ఫోటోలు (ఐచ్ఛికం)
               </ThemedText>
             </View>
 
@@ -567,14 +620,14 @@ export default function PostNewsUploadMediaScreen() {
               const uploaded = uploadedPhotos.find((p) => p.photoId === photo.id);
 
               return (
-                <View key={photo.id} style={[styles.photoCard, { backgroundColor: c.card, borderColor: c.border }]}>
+                <View key={`support_${photo.id}_${index}`} style={[styles.photoCard, { backgroundColor: c.card, borderColor: c.border }]}>
                   <View style={styles.photoHeader}>
                     <View style={{ flex: 1 }}>
                       <ThemedText style={{ color: c.text, fontWeight: '600' }}>
-                        Support Photo {index + 1}: {photo.photo_type}
+                        సహాయక ఫోటో {index + 1}: {photo.photo_type}
                       </ThemedText>
                       <ThemedText style={{ color: c.muted, fontSize: 13, marginTop: 4 }}>
-                        {photo.scene}
+                        {getTeluguText(photo.scene)}
                       </ThemedText>
                     </View>
                   </View>
@@ -590,7 +643,7 @@ export default function PostNewsUploadMediaScreen() {
                       <TextInput
                         value={uploaded.caption}
                         onChangeText={(text) => updateCaption(photo.id, text)}
-                        placeholder="Caption"
+                        placeholder={getTeluguText(photo.caption_suggestion) || photo.scene || 'Caption'}
                         placeholderTextColor={c.muted}
                         style={[styles.captionInput, { borderColor: c.border, color: c.text }]}
                         multiline
@@ -613,7 +666,7 @@ export default function PostNewsUploadMediaScreen() {
                         ]}
                       >
                         <MaterialIcons name="delete" size={16} color="#fff" />
-                        <ThemedText style={{ color: '#fff', fontSize: 13 }}>Remove</ThemedText>
+                        <ThemedText style={{ color: '#fff', fontSize: 13 }}>తీసివేయి</ThemedText>
                       </Pressable>
                     </View>
                   ) : (
@@ -629,7 +682,7 @@ export default function PostNewsUploadMediaScreen() {
                     >
                       <MaterialIcons name="add-photo-alternate" size={24} color={c.muted} />
                       <ThemedText style={{ color: c.muted, fontWeight: '600' }}>
-                        {uploading ? 'Uploading...' : 'Upload Photo (Optional)'}
+                        {uploading ? 'అప్‌లోడ్ అవుతోంది...' : 'ఫోటో అప్‌లోడ్ చేయండి (ఐచ్ఛికం)'}
                       </ThemedText>
                     </Pressable>
                   )}
@@ -644,7 +697,7 @@ export default function PostNewsUploadMediaScreen() {
           <View style={styles.sectionHeader}>
             <MaterialIcons name="add-photo-alternate" size={22} color={c.tint} />
             <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 16 }}>
-              Extra Photos
+              అదనపు ఫోటోలు
             </ThemedText>
             <View style={[styles.countBadge, { backgroundColor: c.tint + '20' }]}>
               <ThemedText style={{ color: c.tint, fontSize: 11, fontWeight: '600' }}>
@@ -654,14 +707,14 @@ export default function PostNewsUploadMediaScreen() {
           </View>
 
           {/* Show extra uploaded images */}
-          {uploadedPhotos.filter(p => p.isExtra).map((photo, index) => (
+          {uploadedPhotos.filter(p => p.isExtra).map((photo) => (
             <View key={photo.photoId} style={[styles.extraPhotoCard, { backgroundColor: c.card, borderColor: c.border }]}>
               <Image source={{ uri: photo.uri }} style={styles.extraImage} contentFit="cover" />
               <View style={styles.extraPhotoInfo}>
                 <TextInput
                   value={photo.caption}
                   onChangeText={(text) => updateCaption(photo.photoId, text)}
-                  placeholder="Add caption..."
+                  placeholder="శీర్షిక జోడించండి..."
                   placeholderTextColor={c.muted}
                   style={[styles.extraCaptionInput, { borderColor: c.border, color: c.text, backgroundColor: c.background }]}
                 />
@@ -685,18 +738,50 @@ export default function PostNewsUploadMediaScreen() {
             >
               <MaterialIcons name="add" size={24} color={c.tint} />
               <ThemedText style={{ color: c.tint, fontWeight: '600' }}>
-                Add Extra Photo
+                అదనపు ఫోటో జోడించండి
               </ThemedText>
             </Pressable>
           )}
         </View>
+
+        {/* No Images Available Toggle */}
+        {uploadedPhotos.length === 0 && (
+          <View style={[styles.noImagesSection, { backgroundColor: c.card, borderColor: c.border }]}>
+            <View style={{ flex: 1 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <MaterialIcons name="info-outline" size={20} color={c.tint} />
+                <ThemedText style={{ color: c.text, fontWeight: '600', fontSize: 15 }}>
+                  చిత్రాలు అందుబాటులో లేవా?
+                </ThemedText>
+              </View>
+              <ThemedText style={{ color: c.muted, fontSize: 13, lineHeight: 18 }}>
+                ఈ వార్తకు చిత్రాలు అందుబాటులో లేకపోతే దీన్ని ఆన్ చేయండి. మీరు ఫోటోలు లేకుండా కూడా పోస్ట్ చేయవచ్చు.
+              </ThemedText>
+            </View>
+            <Switch
+              value={noImagesAvailable}
+              onValueChange={(value) => {
+                setNoImagesAvailable(value);
+                if (value) {
+                  Alert.alert(
+                    'No Images Mode',
+                    'You can proceed without uploading images. The article will be posted without photos.',
+                    [{ text: 'OK' }]
+                  );
+                }
+              }}
+              trackColor={{ false: c.border, true: c.tint + '80' }}
+              thumbColor={noImagesAvailable ? c.tint : c.muted}
+            />
+          </View>
+        )}
 
         {/* Video Upload Section */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <MaterialIcons name="videocam" size={22} color={c.text} />
             <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 16 }}>
-              Video (Optional)
+              వీడియో (ఐచ్ఛికం)
             </ThemedText>
           </View>
 
@@ -704,7 +789,7 @@ export default function PostNewsUploadMediaScreen() {
             <View style={[styles.videoCard, { backgroundColor: c.card, borderColor: c.border }]}>
               <View style={styles.videoPreview}>
                 <MaterialIcons name="videocam" size={40} color={c.tint} />
-                <ThemedText style={{ color: c.text, marginTop: 8 }}>Video uploaded</ThemedText>
+                <ThemedText style={{ color: c.text, marginTop: 8 }}>వీడియో అప్‌లోడ్ అయింది</ThemedText>
               </View>
               <Pressable
                 onPress={removeVideo}
@@ -715,7 +800,7 @@ export default function PostNewsUploadMediaScreen() {
                 ]}
               >
                 <MaterialIcons name="delete" size={16} color="#fff" />
-                <ThemedText style={{ color: '#fff', fontSize: 13 }}>Remove Video</ThemedText>
+                <ThemedText style={{ color: '#fff', fontSize: 13 }}>వీడియో తీసివేయి</ThemedText>
               </Pressable>
             </View>
           ) : canAddMoreMedia ? (
@@ -731,13 +816,13 @@ export default function PostNewsUploadMediaScreen() {
             >
               <MaterialIcons name="videocam" size={24} color={c.muted} />
               <ThemedText style={{ color: c.muted, fontWeight: '600' }}>
-                Upload Video (Optional)
+                వీడియో అప్‌లోడ్ చేయండి (ఐచ్ఛికం)
               </ThemedText>
             </Pressable>
           ) : (
             <View style={[styles.limitReached, { backgroundColor: c.card, borderColor: c.border }]}>
               <ThemedText style={{ color: c.muted, textAlign: 'center' }}>
-                Media limit reached ({MAX_TOTAL_MEDIA} max)
+                మీడియా పరిమితి చేరుకుంది (గరిష్టం {MAX_TOTAL_MEDIA})
               </ThemedText>
             </View>
           )}
@@ -748,6 +833,14 @@ export default function PostNewsUploadMediaScreen() {
 
       {/* Submit Button */}
       <View style={[styles.bottomBar, { borderTopColor: c.border, backgroundColor: c.background }]}>
+        {noImagesAvailable && uploadedPhotos.length === 0 && (
+          <View style={[styles.noImagesWarning, { backgroundColor: '#FEF3C7' }]}>
+            <MaterialIcons name="warning" size={18} color="#F59E0B" />
+            <ThemedText style={{ color: '#92400E', fontSize: 13, flex: 1, lineHeight: 18 }}>
+              వార్త చిత్రాలు లేకుండా పోస్ట్ చేయబడుతుంది
+            </ThemedText>
+          </View>
+        )}
         <Pressable
           onPress={onSubmit}
           disabled={submitting || uploading}
@@ -762,14 +855,14 @@ export default function PostNewsUploadMediaScreen() {
             <>
               <ActivityIndicator color="#fff" />
               <ThemedText style={{ color: '#fff', fontSize: 16, fontWeight: '600' }}>
-                Publishing...
+                ప్రచురిస్తోంది...
               </ThemedText>
             </>
           ) : (
             <>
               <MaterialIcons name="publish" size={20} color="#fff" />
               <ThemedText style={{ color: '#fff', fontSize: 16, fontWeight: '600' }}>
-                Submit Article
+                {noImagesAvailable && uploadedPhotos.length === 0 ? 'చిత్రాలు లేకుండా ప్రచురించు' : 'వార్త సమర్పించండి'}
               </ThemedText>
             </>
           )}
@@ -795,10 +888,10 @@ export default function PostNewsUploadMediaScreen() {
           <View style={[styles.publishModalContent, { backgroundColor: c.background }]}>
             <LottieView source={newsIconAnim} autoPlay loop style={{ width: 180, height: 180 }} />
             <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 20, marginTop: 16 }}>
-              Publishing your article...
+              మీ వార్తను ప్రచురిస్తోంది...
             </ThemedText>
             <ThemedText style={{ color: c.muted, marginTop: 8, textAlign: 'center' }}>
-              Please wait while we publish your news article
+              మీ వార్తను ప్రచురిస్తే వరకు దయచేసి వేచి ఉండండి
             </ThemedText>
             <ActivityIndicator style={{ marginTop: 20 }} size="large" color={c.tint} />
           </View>
@@ -816,34 +909,6 @@ export default function PostNewsUploadMediaScreen() {
             <ThemedText style={{ color: c.muted, marginTop: 8, textAlign: 'center' }}>
               మీ ఆర్టికల్ విజయవంతంగా సబ్మిట్ చేయబడింది
             </ThemedText>
-            
-            {/* Action Buttons */}
-            <View style={styles.successActions}>
-              <Pressable 
-                style={[styles.successPrimaryBtn, { backgroundColor: c.tint }]} 
-                onPress={() => {
-                  setShowSuccess(false);
-                  setTimeout(() => {
-                    router.replace('/post-news');
-                  }, 100);
-                }}
-              >
-                <MaterialIcons name="edit" size={18} color="#fff" />
-                <ThemedText style={styles.successPrimaryBtnText}>మరో న్యూస్ పోస్ట్ చేయండి</ThemedText>
-              </Pressable>
-              <Pressable 
-                style={[styles.successSecondaryBtn, { borderColor: c.tint }]} 
-                onPress={() => {
-                  setShowSuccess(false);
-                  setTimeout(() => {
-                    router.replace('/reporter/dashboard');
-                  }, 100);
-                }}
-              >
-                <MaterialIcons name="dashboard" size={18} color={c.tint} />
-                <ThemedText style={[styles.successSecondaryBtnText, { color: c.tint }]}>డ్యాష్‌బోర్డ్ చూడండి</ThemedText>
-              </Pressable>
-            </View>
           </View>
         </View>
       </Modal>
@@ -855,10 +920,10 @@ export default function PostNewsUploadMediaScreen() {
             <View style={[styles.locationModalHeader, { borderBottomColor: c.border }]}>
               <View>
                 <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 17 }}>
-                  Select Location
+                  లొకేషన్ ఎంచుకోండి
                 </ThemedText>
                 <ThemedText style={{ color: c.muted, fontSize: 12, marginTop: 2 }}>
-                  Location is required for publishing
+                  ప్రచురణకు లొకేషన్ తప్పనిసరి
                 </ThemedText>
               </View>
               <Pressable onPress={() => setLocationModalVisible(false)}>
@@ -872,7 +937,7 @@ export default function PostNewsUploadMediaScreen() {
                 value={locationQuery}
                 onChangeText={setLocationQuery}
                 onSubmitEditing={() => searchLocation(locationQuery)}
-                placeholder="Search place name..."
+                placeholder="ప్రదేశం పేరు వేతకండి..."
                 placeholderTextColor={c.muted}
                 style={[styles.locationSearchInput, { color: c.text }]}
                 autoFocus
@@ -888,21 +953,20 @@ export default function PostNewsUploadMediaScreen() {
                 pressed && { opacity: 0.85 },
               ]}
             >
-              <ThemedText style={{ color: '#fff', fontWeight: '600' }}>Search</ThemedText>
-            </Pressable>
+              <ThemedText style={{ color: '#fff', fontWeight: '600' }}>వేతకండి</ThemedText>
 
             <ScrollView style={styles.locationResultsContainer}>
               {locationResults.length === 0 && locationQuery.trim() && !locationSearching && (
                 <View style={styles.locationEmptyResults}>
                   <MaterialIcons name="search-off" size={40} color={c.muted} />
                   <ThemedText style={{ color: c.muted, marginTop: 8, textAlign: 'center' }}>
-                    No locations found
+                    లోకేషన్లు కనపడలేదు
                   </ThemedText>
                 </View>
               )}
-              {locationResults.map((item, index) => (
+              {locationResults.map((item) => (
                 <Pressable
-                  key={index}
+                  key={`${item.type}_${item.match.id}`}
                   onPress={() => onLocationSelect(item)}
                   style={({ pressed }) => [
                     styles.locationResultItem,
@@ -1223,5 +1287,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 40,
+  },
+  noImagesSection: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    marginBottom: 20,
+  },
+  noImagesWarning: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 12,
+    borderRadius: 10,
+    marginBottom: 12,
   },
 });

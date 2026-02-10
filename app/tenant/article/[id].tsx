@@ -8,6 +8,7 @@ import ShareableArticleImage, {
     ShareableArticleImageRef,
 } from '@/components/ShareableArticleImage';
 import { loadTokens } from '@/services/auth';
+import { uploadMedia } from '@/services/api';
 import {
     approveNewspaperArticle,
     getNewspaperArticle,
@@ -21,6 +22,7 @@ import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
+import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -218,9 +220,13 @@ export default function TenantArticleDetail() {
   const [editContent, setEditContent] = useState('');
   const [saving, setSaving] = useState(false);
   
-  // Delete confirmation
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  // Image upload in edit mode
+  const [newCoverImage, setNewCoverImage] = useState<{ uri: string; url?: string } | null>(null);
+  const [uploadingImage, setUploadingImage] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  
+  // Delete modal state
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
   
   // Approve/Reject loading
   const [actionLoading, setActionLoading] = useState<'approve' | 'reject' | null>(null);
@@ -232,7 +238,6 @@ export default function TenantArticleDetail() {
   // Share as image
   const shareImageRef = useRef<ShareableArticleImageRef>(null);
   const [shareArticle, setShareArticle] = useState<ShareableArticleData | null>(null);
-  const [isSharing, setIsSharing] = useState(false);
   
   // Toast for copy feedback
   const [showCopiedToast, setShowCopiedToast] = useState(false);
@@ -427,27 +432,20 @@ export default function TenantArticleDetail() {
     };
     setShareArticle(shareData);
     
-    // Wait for component to render and images to load, then capture
-    setTimeout(async () => {
-      if (shareImageRef.current) {
-        setIsSharing(true);
-        try {
-          console.log('[TenantArticleDetail] Starting image capture...');
-          await shareImageRef.current.captureAndShare();
-          console.log('[TenantArticleDetail] Image capture completed');
-        } catch (e) {
-          console.error('[TenantArticleDetail] Share image failed:', e);
-          Alert.alert('షేర్ విఫలమైంది', 'ఇమేజ్ తయారు చేయడంలో సమస్య. మళ్ళీ ప్రయత్నించండి.');
-        } finally {
-          setIsSharing(false);
-          setShareArticle(null);
-        }
-      } else {
-        console.error('[TenantArticleDetail] shareImageRef is null');
-        setIsSharing(false);
-        setShareArticle(null);
+    // Call captureAndShare directly - it will show style picker
+    if (shareImageRef.current) {
+      try {
+        console.log('[TenantArticleDetail] Starting image share...');
+        await shareImageRef.current.captureAndShare();
+        console.log('[TenantArticleDetail] Share completed');
+      } catch (e) {
+        console.error('[TenantArticleDetail] Share failed:', e);
+        Alert.alert('షేర్ విఫలమైంది', 'షేర్ చేయడంలో సమస్య. మళ్ళీ ప్రయత్నించండి.');
       }
-    }, 800);
+    } else {
+      console.error('[TenantArticleDetail] shareImageRef is null');
+      Alert.alert('షేర్ విఫలమైంది', 'దయచేసి మళ్ళీ ప్రయత్నించండి.');
+    }
   };
 
   // Open web article
@@ -469,7 +467,45 @@ export default function TenantArticleDetail() {
     setEditTitle(article?.title || '');
     setEditSubtitle(article?.subTitle || '');
     setEditContent(article?.content || '');
+    setNewCoverImage(null);
     setEditMode(false);
+  };
+  
+  // Pick image for edit
+  const handlePickImage = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('అనుమతి కావాలి', 'దయచేసి ఫోటో లైబ్రరీ అనుమతి ఇవ్వండి');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      quality: 0.8,
+    });
+
+    if (result.canceled) return;
+
+    setUploadingImage(true);
+    try {
+      const uploaded = await uploadMedia({
+        uri: result.assets[0].uri,
+        type: 'image',
+        folder: 'articles',
+      });
+      
+      setNewCoverImage({
+        uri: result.assets[0].uri,
+        url: uploaded.url,
+      });
+      
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (e: any) {
+      Alert.alert('అప్‌లోడ్ విఫలమైంది', e?.message || 'చిత్రం అప్‌లోడ్ చేయడంలో విఫలమైంది');
+    } finally {
+      setUploadingImage(false);
+    }
   };
 
   // Save edit
@@ -488,10 +524,17 @@ export default function TenantArticleDetail() {
         content: editContent.trim() || undefined,
       };
       
+      // Only add cover image if a new image was uploaded successfully
+      // If no new image, don't send coverImageUrl to preserve existing image
+      if (newCoverImage?.url) {
+        (payload as any).coverImageUrl = newCoverImage.url;
+      }
+      
       await updateNewspaperArticle(id, payload);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Alert.alert('విజయం! ✅', 'ఆర్టికల్ అప్‌డేట్ అయింది');
       setEditMode(false);
+      setNewCoverImage(null); // Clear the new image state
       loadArticle(); // Reload to get updated data
     } catch (e: any) {
       console.error('[TenantArticleDetail] Update failed:', e);
@@ -568,26 +611,18 @@ export default function TenantArticleDetail() {
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor={primaryColor} translucent={false} />
 
-      {/* Share Image Component (Off-screen for capture) */}
-      {shareArticle && (
-        <ShareableArticleImage
-          ref={shareImageRef}
-          article={shareArticle}
-          tenantName={session?.tenant?.name}
-          visible={true}
-        />
-      )}
+      {/* Share Image Component - Always rendered for ref to be valid */}
+      <ShareableArticleImage
+        ref={shareImageRef}
+        article={shareArticle || {
+          id: '',
+          title: '',
+        }}
+        tenantName={session?.tenant?.name}
+        tenantPrimaryColor={primaryColor}
+        visible={!!shareArticle}
+      />
 
-      {/* Sharing overlay */}
-      {isSharing && (
-        <View style={styles.sharingOverlay}>
-          <View style={styles.sharingBox}>
-            <ActivityIndicator size="large" color={primaryColor} />
-            <Text style={styles.sharingText}>ఇమేజ్ తయారవుతోంది...</Text>
-            <Text style={styles.sharingSubtext}>దయచేసి వేచి ఉండండి</Text>
-          </View>
-        </View>
-      )}
       
       {/* Copied Toast */}
       {showCopiedToast && (
@@ -715,6 +750,57 @@ export default function TenantArticleDetail() {
                 multiline
                 textAlignVertical="top"
               />
+              
+              {/* Image Upload Section */}
+              <Text style={styles.inputLabel}>కవర్ ఇమేజ్ (ఐచ్ఛికం)</Text>
+              {newCoverImage?.uri || article.coverImageUrl ? (
+                <View style={styles.imagePreviewContainer}>
+                  <Image
+                    source={{ uri: newCoverImage?.uri || article.coverImageUrl }}
+                    style={styles.imagePreview}
+                    contentFit="cover"
+                  />
+                  {newCoverImage && (
+                    <View style={styles.newImageBadge}>
+                      <Text style={styles.newImageBadgeText}>కొత్తది</Text>
+                    </View>
+                  )}
+                  <TouchableOpacity
+                    style={styles.changeImageBtn}
+                    onPress={handlePickImage}
+                    disabled={uploadingImage}
+                  >
+                    <Ionicons name="camera-outline" size={16} color="#FFF" />
+                    <Text style={styles.changeImageText}>
+                      {uploadingImage ? 'అప్‌లోడ్ అవుతోంది...' : 'మార్చండి'}
+                    </Text>
+                  </TouchableOpacity>
+                  {newCoverImage && (
+                    <TouchableOpacity
+                      style={styles.removeImageBtn}
+                      onPress={() => setNewCoverImage(null)}
+                    >
+                      <Ionicons name="close-circle" size={24} color="#DC2626" />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              ) : (
+                <TouchableOpacity
+                  style={styles.uploadImageBtn}
+                  onPress={handlePickImage}
+                  disabled={uploadingImage}
+                >
+                  {uploadingImage ? (
+                    <ActivityIndicator size="small" color="#6B7280" />
+                  ) : (
+                    <>
+                      <Ionicons name="cloud-upload-outline" size={32} color="#6B7280" />
+                      <Text style={styles.uploadImageText}>చిత్రం అప్‌లోడ్ చేయండి</Text>
+                      <Text style={styles.uploadImageHint}>ఫోటో లైబ్రరీ నుండి ఎంచుకోండి</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              )}
               
               <View style={styles.editHelpBox}>
                 <Ionicons name="information-circle-outline" size={18} color="#6B7280" />
@@ -1394,6 +1480,81 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 13,
     color: '#0369A1',
+  },
+  
+  // Image Upload Styles
+  imagePreviewContainer: {
+    position: 'relative',
+    width: '100%',
+    height: 220,
+    borderRadius: 12,
+    overflow: 'hidden',
+    marginBottom: 16,
+    backgroundColor: '#F3F4F6',
+  },
+  imagePreview: {
+    width: '100%',
+    height: '100%',
+  },
+  newImageBadge: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    backgroundColor: '#10B981',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  newImageBadgeText: {
+    color: '#FFF',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  changeImageBtn: {
+    position: 'absolute',
+    bottom: 12,
+    right: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  changeImageText: {
+    color: '#FFF',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  removeImageBtn: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    backgroundColor: '#FFF',
+    borderRadius: 20,
+  },
+  uploadImageBtn: {
+    borderWidth: 2,
+    borderStyle: 'dashed',
+    borderColor: '#D1D5DB',
+    borderRadius: 12,
+    padding: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F9FAFB',
+    marginBottom: 16,
+  },
+  uploadImageText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#374151',
+    marginTop: 12,
+  },
+  uploadImageHint: {
+    fontSize: 13,
+    color: '#9CA3AF',
+    marginTop: 4,
   },
 
   // Action Bar

@@ -367,7 +367,21 @@ export async function submitUnifiedArticle(): Promise<SubmitResult> {
     // Submit to unified API (preferred). If backend has 404/500, fall back to legacy endpoint.
     let result: any;
     try {
+      console.log('═══════════════════════════════════════════════════════════════');
       console.log('[PostNews] 🌐 Submitting to /articles/unified...');
+      console.log('[PostNews] Validating payload before submit:');
+      console.log('  ✓ baseArticle:', !!payload.baseArticle);
+      console.log('  ✓ baseArticle.languageCode:', payload.baseArticle?.languageCode);
+      console.log('  ✓ baseArticle.category.categoryId:', payload.baseArticle?.category?.categoryId);
+      console.log('  ✓ location:', !!payload.location);
+      console.log('  ✓ location.resolved:', !!payload.location?.resolved);
+      console.log('  ✓ location.resolved.state:', !!payload.location?.resolved?.state);
+      console.log('  ✓ location.resolved.district:', !!payload.location?.resolved?.district);
+      console.log('  ✓ printArticle:', !!payload.printArticle);
+      console.log('  ✓ printArticle.headline:', payload.printArticle?.headline?.substring(0, 50));
+      console.log('  ✓ printArticle.body length:', payload.printArticle?.body?.length);
+      console.log('  ✓ media.images length:', payload.media?.images?.length);
+      console.log('═══════════════════════════════════════════════════════════════');
       const submitStartTime = Date.now();
       
       result = await request<any>('/articles/unified', {
@@ -390,6 +404,8 @@ export async function submitUnifiedArticle(): Promise<SubmitResult> {
 
       console.error('═══════════════════════════════════════════════════════════════');
       console.error('[PostNews] ❌ /articles/unified FAILED:');
+      console.error('[PostNews] HTTP Status:', status);
+      console.error('[PostNews] Error Type:', isHttp ? 'HttpError' : 'Other');
       console.error('═══════════════════════════════════════════════════════════════');
       console.error('[PostNews] Error details:', {
         status,
@@ -400,17 +416,29 @@ export async function submitUnifiedArticle(): Promise<SubmitResult> {
       if (fullBody) {
         console.error('[PostNews] Full error body:', JSON.stringify(fullBody, null, 2));
       }
+      console.error('[PostNews] Error stack:', e?.stack);
+      console.error('═══════════════════════════════════════════════════════════════');
 
       console.warn('[unifiedArticle] /articles/unified failed:', { status, details, message: e?.message });
 
       // Fallback to legacy endpoint on 404 (not deployed) or 500 (backend bug)
+      // DO NOT fallback on 400 - that means our payload is wrong and we should fix it
       const shouldFallback = status === 404 || status === 500;
       if (!shouldFallback) {
-        console.error('[PostNews] ❌ Not falling back - throwing error. Status:', status);
+        console.error('[PostNews] ❌ Not falling back - status is', status);
+        if (status === 400) {
+          console.error('[PostNews] 400 Bad Request - payload validation failed');
+          console.error('[PostNews] This indicates a frontend payload structure issue');
+          console.error('[PostNews] Check the error details above for which field is missing/invalid');
+        }
+        console.error('[PostNews] Throwing error instead of falling back');
         throw e;
       }
 
+      console.log('═══════════════════════════════════════════════════════════════');
       console.log('[PostNews] 🔄 Falling back to /articles/newspaper endpoint...');
+      console.log('[PostNews] Fallback reason: unified returned', status);
+      console.log('═══════════════════════════════════════════════════════════════');
       console.warn('[unifiedArticle] /articles/unified failed, falling back to /articles/newspaper', {
         status,
         details,

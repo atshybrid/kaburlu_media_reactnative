@@ -1,10 +1,13 @@
 
 import { Article } from '@/types';
 import React, { useEffect, useMemo } from 'react';
-import { Dimensions, StyleSheet, useWindowDimensions } from 'react-native';
+import { Dimensions, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { runOnJS, SharedValue, useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 import { pickLayoutWithInfo } from './articleLayouts/registry';
+
+// DEBUG MODE: Set to true to show style labels on articles
+const SHOW_STYLE_LABELS = false;
 
 interface AnimatedArticleProps {
   article: Article;
@@ -81,6 +84,15 @@ const AnimatedArticle: React.FC<AnimatedArticleProps> = ({
     <GestureDetector gesture={gesture}>
       <Animated.View style={[styles.container, animatedStyle]}>
         {React.createElement(LayoutComponent, { article, index, totalArticles })}
+        
+        {/* DEBUG: Show style label */}
+        {SHOW_STYLE_LABELS && (
+          <View style={styles.debugLabel}>
+            <Text style={styles.debugText}>
+              Style {layoutInfo.styleNumber}: {layoutInfo.styleName}
+            </Text>
+          </View>
+        )}
       </Animated.View>
     </GestureDetector>
   );
@@ -91,6 +103,21 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'white',
     overflow: 'hidden',
+  },
+  debugLabel: {
+    position: 'absolute',
+    top: 60,
+    right: 10,
+    backgroundColor: 'rgba(255, 0, 0, 0.8)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    zIndex: 9999,
+  },
+  debugText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
   },
 });
 

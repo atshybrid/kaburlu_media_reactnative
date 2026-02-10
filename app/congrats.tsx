@@ -14,7 +14,7 @@ export default function CongratsScreen() {
 
   useEffect(() => {
     loadTokens().then(tokens => {
-      const role = tokens?.decodedAccessToken?.role || '';
+      const role = tokens?.user?.role || '';
       console.log('[Congrats] User role loaded:', role);
       setUserRole(role);
     }).catch(err => {
@@ -29,9 +29,12 @@ export default function CongratsScreen() {
       resetDraft(); // Clear previous article data
       console.log('[Congrats] Draft reset complete');
       
-      // Direct navigation
-      router.replace('/post-news');
-      console.log('[Congrats] Navigation to post-news initiated');
+      // Use push with reset to clear navigation stack
+      router.dismiss(); // Dismiss current modal/screen
+      setTimeout(() => {
+        router.push('/post-news');
+        console.log('[Congrats] Navigation to post-news initiated');
+      }, 100);
     } catch (error) {
       console.error('[Congrats] Error in handlePostAnother:', error);
       Alert.alert('Navigation Error', String(error));
@@ -41,21 +44,24 @@ export default function CongratsScreen() {
   const handleViewDashboard = () => {
     console.log('[Congrats] Dashboard clicked, role:', userRole);
     try {
-      let targetRoute = '/news'; // Default fallback
+      let targetRoute = '/(tabs)'; // Default fallback to tabs
       
       // Route based on user role
       if (userRole === 'TENANT_ADMIN' || userRole === 'SUPER_ADMIN') {
         console.log('[Congrats] Navigating to tenant dashboard');
         targetRoute = '/tenant/dashboard';
-      } else if (userRole === 'REPORTER') {
+      } else if (userRole === 'REPORTER' || userRole === 'TENANT_REPORTER') {
         console.log('[Congrats] Navigating to reporter dashboard');
         targetRoute = '/reporter/dashboard';
       } else {
-        console.log('[Congrats] Unknown role, going to news');
+        console.log('[Congrats] Default role, going to tabs');
       }
       
-      router.replace(targetRoute);
-      console.log('[Congrats] Navigation to', targetRoute, 'initiated');
+      router.dismiss(); // Dismiss congrats screen
+      setTimeout(() => {
+        router.replace(targetRoute);
+        console.log('[Congrats] Navigation to', targetRoute, 'initiated');
+      }, 100);
     } catch (error) {
       console.error('[Congrats] Error in handleViewDashboard:', error);
       Alert.alert('Navigation Error', String(error));

@@ -74,7 +74,6 @@ export async function openRazorpayCheckout(
 
   const options = {
     description: 'Reporter Subscription Payment',
-    image: 'https://app.kaburlumedia.com/logo.png', // App logo
     currency: razorpayData.currency || 'INR',
     key: razorpayData.keyId,
     amount: Number(razorpayData.amount), // Ensure it's a number, in paise

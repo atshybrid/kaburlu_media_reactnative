@@ -133,10 +133,14 @@ export default function NewsApprovalScreen() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [previewArticle, setPreviewArticle] = useState<NewspaperArticle | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  
+  // Sort state
+  type SortType = 'newest' | 'oldest' | 'views';
+  const [sortBy, setSortBy] = useState<SortType>('newest');
+  const [showSortMenu, setShowSortMenu] = useState(false);
 
   // Share state
   const [shareArticle, setShareArticle] = useState<ShareableArticleData | null>(null);
-  const [isSharing, setIsSharing] = useState(false);
   const shareImageRef = useRef<ShareableArticleImageRef>(null);
 
   // Branding
@@ -198,6 +202,30 @@ export default function NewsApprovalScreen() {
       void loadArticles(null);
     }, [loadBranding, loadArticles])
   );
+
+  // Sort articles based on selection
+  const sortedArticles = useMemo(() => {
+    const sorted = [...articles];
+    switch (sortBy) {
+      case 'newest':
+        sorted.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+        break;
+      case 'oldest':
+        sorted.sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
+        break;
+      case 'views':
+        sorted.sort((a, b) => (b.viewCount || 0) - (a.viewCount || 0));
+        break;
+    }
+    return sorted;
+  }, [articles, sortBy]);
+
+  // Sort options
+  const sortOptions: { key: SortType; label: string; icon: keyof typeof MaterialIcons.glyphMap }[] = [
+    { key: 'newest', label: 'Newest First', icon: 'arrow-downward' },
+    { key: 'oldest', label: 'Oldest First', icon: 'arrow-upward' },
+    { key: 'views', label: 'Most Viewed', icon: 'visibility' },
+  ];
 
   // Tab change
   const handleTabChange = useCallback((tab: TabType) => {
@@ -322,26 +350,18 @@ export default function NewsApprovalScreen() {
     };
     setShareArticle(shareData);
     
-    // Wait for component to render then capture
-    setTimeout(async () => {
-      if (shareImageRef.current) {
-        setIsSharing(true);
-        try {
-          console.log('[NewsApproval] Starting image capture...');
-          await shareImageRef.current.captureAndShare();
-          console.log('[NewsApproval] Image capture completed');
-        } catch (e) {
-          console.error('[NewsApproval] Share image failed:', e);
-        } finally {
-          setIsSharing(false);
-          setShareArticle(null);
-        }
-      } else {
-        console.error('[NewsApproval] shareImageRef is null');
-        setIsSharing(false);
-        setShareArticle(null);
+    // Call captureAndShare directly - it will show style picker
+    if (shareImageRef.current) {
+      try {
+        console.log('[NewsApproval] Starting image share...');
+        await shareImageRef.current.captureAndShare();
+        console.log('[NewsApproval] Share completed');
+      } catch (e) {
+        console.error('[NewsApproval] Share failed:', e);
       }
-    }, 800);
+    } else {
+      console.error('[NewsApproval] shareImageRef is null');
+    }
   }, []);
 
   /* ─────────────────────────────  Render  ───────────────────────────── */
@@ -407,10 +427,77 @@ export default function NewsApprovalScreen() {
               {total} {activeTab === 'ALL' ? 'total' : activeTab.toLowerCase()} article{total !== 1 ? 's' : ''}
             </ThemedText>
           </View>
-          <Pressable onPress={onRefresh} hitSlop={12}>
-            <MaterialIcons name="refresh" size={24} color="#fff" />
-          </Pressable>
+          <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center' }}>
+            {/* Sort Button */}
+            <Pressable 
+              onPress={() => setShowSortMenu(!showSortMenu)} 
+              hitSlop={12}
+              style={{ 
+                flexDirection: 'row', 
+                alignItems: 'center', 
+                backgroundColor: 'rgba(255,255,255,0.15)', 
+                paddingHorizontal: 10,
+                paddingVertical: 6,
+                borderRadius: 16,
+                gap: 4,
+              }}
+            >
+              <MaterialIcons name="sort" size={18} color="#fff" />
+              <ThemedText style={{ color: '#fff', fontSize: 12, fontWeight: '600' }}>Sort</ThemedText>
+            </Pressable>
+            
+            {/* Refresh Button */}
+            <Pressable onPress={onRefresh} hitSlop={12}>
+              <MaterialIcons name="refresh" size={24} color="#fff" />
+            </Pressable>
+          </View>
         </View>
+        
+        {/* Sort Menu - Dropdown */}
+        {showSortMenu && (
+          <View style={[
+            styles.sortMenu, 
+            { 
+              backgroundColor: c.card, 
+              borderColor: c.border,
+              shadowColor: '#000',
+            }
+          ]}>
+            {sortOptions.map((option) => (
+              <Pressable
+                key={option.key}
+                onPress={() => {
+                  setSortBy(option.key);
+                  setShowSortMenu(false);
+                }}
+                style={({ pressed }) => [
+                  styles.sortMenuItem,
+                  { backgroundColor: pressed ? alphaBg(primary, 0.05, c.background) : 'transparent' },
+                  sortBy === option.key && { backgroundColor: alphaBg(primary, 0.1, c.background) },
+                ]}
+              >
+                <MaterialIcons 
+                  name={option.icon} 
+                  size={18} 
+                  color={sortBy === option.key ? primary : c.muted} 
+                />
+                <ThemedText 
+                  style={{ 
+                    flex: 1,
+                    color: sortBy === option.key ? primary : c.text,
+                    fontWeight: sortBy === option.key ? '600' : '400',
+                    marginLeft: 10,
+                  }}
+                >
+                  {option.label}
+                </ThemedText>
+                {sortBy === option.key && (
+                  <MaterialIcons name="check" size={18} color={primary} />
+                )}
+              </Pressable>
+            ))}
+          </View>
+        )}
 
         {/* Tabs */}
         <ScrollView
@@ -446,16 +533,16 @@ export default function NewsApprovalScreen() {
       </LinearGradient>
 
       {/* Content */}
-      {loading && articles.length === 0 ? (
+      {loading && sortedArticles.length === 0 ? (
         <SkeletonList c={c} />
       ) : (
         <FlatList
-          data={articles}
+          data={sortedArticles}
           keyExtractor={(item) => item.id}
           renderItem={renderArticle}
           ListEmptyComponent={ListEmptyComponent}
           ListFooterComponent={ListFooterComponent}
-          contentContainerStyle={[styles.listContent, articles.length === 0 && { flex: 1 }]}
+          contentContainerStyle={[styles.listContent, sortedArticles.length === 0 && { flex: 1 }]}
           onEndReached={onLoadMore}
           onEndReachedThreshold={0.3}
           refreshControl={
@@ -464,24 +551,16 @@ export default function NewsApprovalScreen() {
         />
       )}
 
-      {/* Share Image Component (hidden, for capture) */}
-      {shareArticle && (
-        <ShareableArticleImage
-          ref={shareImageRef}
-          article={shareArticle}
-          visible={true}
-        />
-      )}
-
-      {/* Sharing overlay */}
-      {isSharing && (
-        <View style={styles.sharingOverlay}>
-          <View style={styles.sharingBox}>
-            <ActivityIndicator size="large" color={primary} />
-            <ThemedText style={{ color: c.text, marginTop: 12, fontSize: 14 }}>Generating image...</ThemedText>
-          </View>
-        </View>
-      )}
+      {/* Share Image Component - Always rendered for ref to be valid */}
+      <ShareableArticleImage
+        ref={shareImageRef}
+        article={shareArticle || {
+          id: '',
+          title: '',
+        }}
+        tenantPrimaryColor={primary}
+        visible={!!shareArticle}
+      />
 
       {/* Preview Modal */}
       {previewArticle && (
@@ -529,86 +608,125 @@ function ArticleCard({
     || (article.baseArticle?.contentJson as any)?.raw?.images?.[0]
     || null;
 
+  const isPublished = article.status === 'PUBLISHED';
+  const isRejected = article.status === 'REJECTED';
+  
   return (
     <Pressable
       onPress={onPreview}
       style={({ pressed }) => [
         styles.card,
         { backgroundColor: c.card, borderColor: c.border },
+        isPublished && styles.cardPublished,
+        isRejected && styles.cardRejected,
         pressed && { opacity: 0.95 },
       ]}
     >
-      {/* Image + Status badge */}
-      <View style={styles.cardImageWrap}>
+      {/* Image Section - Full width with better aspect ratio */}
+      <View style={styles.cardImageContainer}>
         {coverImage ? (
-          <Image source={{ uri: coverImage }} style={styles.cardImage} contentFit="cover" />
+          <Image source={{ uri: coverImage }} style={styles.cardImageLarge} contentFit="cover" />
         ) : (
-          <View style={[styles.cardImage, styles.cardNoImage, { backgroundColor: alphaBg(c.muted, 0.1, c.background) }]}>
-            <MaterialIcons name="article" size={32} color={c.muted} />
+          <View style={[styles.cardImageLarge, styles.cardNoImage, { backgroundColor: alphaBg(c.muted, 0.1, c.background) }]}>
+            <MaterialIcons name="article" size={48} color={c.muted} />
           </View>
         )}
-        <View style={[styles.statusBadge, { backgroundColor: statusColors.bg, borderColor: statusColors.border }]}>
-          <ThemedText style={[styles.statusText, { color: statusColors.text }]}>{article.status}</ThemedText>
+        
+        {/* Status Badge with Icon - Top Left */}
+        <View style={[styles.statusBadgeEnhanced, { backgroundColor: statusColors.bg, borderColor: statusColors.border }]}>
+          <MaterialIcons 
+            name={isPending ? 'schedule' : isPublished ? 'check-circle' : isRejected ? 'cancel' : 'draft'} 
+            size={12} 
+            color={statusColors.text} 
+          />
+          <ThemedText style={[styles.statusTextEnhanced, { color: statusColors.text }]}>{article.status}</ThemedText>
         </View>
+        
+        {/* View count badge - Top Right (if available) */}
+        {isPublished && article.viewCount !== undefined && (
+          <View style={[styles.viewCountBadge, { backgroundColor: 'rgba(0,0,0,0.65)' }]}>
+            <MaterialIcons name="visibility" size={12} color="#fff" />
+            <ThemedText style={styles.viewCountText}>{article.viewCount}</ThemedText>
+          </View>
+        )}
       </View>
 
-      {/* Content */}
-      <View style={styles.cardContent}>
-        {/* Title */}
-        <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 14, lineHeight: 20 }} numberOfLines={2}>
+      {/* Content Section */}
+      <View style={styles.cardContentEnhanced}>
+        {/* Title - Larger, more prominent */}
+        <ThemedText 
+          type="defaultSemiBold" 
+          style={{ color: c.text, fontSize: 15, lineHeight: 22, letterSpacing: 0.2 }} 
+          numberOfLines={2}
+        >
           {article.title}
         </ThemedText>
 
-        {/* Subtitle */}
+        {/* Subtitle - Better spacing */}
         {article.subTitle && (
-          <ThemedText style={{ color: c.muted, fontSize: 12, marginTop: 2 }} numberOfLines={1}>
+          <ThemedText style={{ color: c.muted, fontSize: 13, marginTop: 4, lineHeight: 18 }} numberOfLines={2}>
             {article.subTitle}
           </ThemedText>
         )}
 
-        {/* Meta row */}
-        <View style={styles.cardMeta}>
-          {/* Author */}
+        {/* Meta Information - Enhanced Layout */}
+        <View style={styles.cardMetaEnhanced}>
+          {/* Author with Avatar Placeholder */}
           {article.author?.profile?.fullName && (
-            <View style={styles.metaItem}>
-              <MaterialIcons name="person" size={12} color={c.muted} />
-              <ThemedText style={[styles.metaText, { color: c.muted }]} numberOfLines={1}>
+            <View style={styles.metaItemEnhanced}>
+              <View style={[styles.avatarPlaceholder, { backgroundColor: alphaBg(primary, 0.15, c.background) }]}>
+                <ThemedText style={{ color: primary, fontSize: 10, fontWeight: '600' }}>
+                  {article.author.profile.fullName.charAt(0).toUpperCase()}
+                </ThemedText>
+              </View>
+              <ThemedText style={[styles.metaTextEnhanced, { color: c.text }]} numberOfLines={1}>
                 {article.author.profile.fullName}
               </ThemedText>
             </View>
           )}
+          
+          {/* Separator */}
+          {article.author?.profile?.fullName && article.placeName && (
+            <View style={[styles.metaSeparator, { backgroundColor: c.muted }]} />
+          )}
+          
           {/* Place */}
           {article.placeName && (
-            <View style={styles.metaItem}>
-              <MaterialIcons name="location-on" size={12} color={c.muted} />
-              <ThemedText style={[styles.metaText, { color: c.muted }]} numberOfLines={1}>
+            <View style={styles.metaItemEnhanced}>
+              <MaterialIcons name="location-on" size={14} color={primary} />
+              <ThemedText style={[styles.metaTextEnhanced, { color: c.text }]} numberOfLines={1}>
                 {article.placeName}
               </ThemedText>
             </View>
           )}
         </View>
 
-        {/* Time */}
-        <ThemedText style={{ color: c.muted, fontSize: 11, marginTop: 4 }}>
-          {timeAgo(article.createdAt)}
-        </ThemedText>
-
-        {/* Action button - Read & Review for pending, View for others */}
-        <View style={styles.cardActions}>
-          <Pressable
-            onPress={onPreview}
-            style={[
-              styles.actionBtn, 
-              isPending 
-                ? [styles.reviewBtn, { backgroundColor: primary }]
-                : { backgroundColor: alphaBg(primary, 0.1, c.background), borderColor: alphaBg(primary, 0.2, c.border) }
-            ]}
-          >
-            <MaterialIcons name={isPending ? 'rate-review' : 'visibility'} size={16} color={isPending ? '#fff' : primary} />
-            <ThemedText style={[styles.actionText, { color: isPending ? '#fff' : primary, fontWeight: isPending ? '600' : '400' }]}>
-              {isPending ? 'Read & Review' : 'View'}
-            </ThemedText>
-          </Pressable>
+        {/* Bottom Row - Time & Actions */}
+        <View style={styles.cardFooter}>
+          <ThemedText style={{ color: c.muted, fontSize: 11 }}>
+            {timeAgo(article.createdAt)}
+          </ThemedText>
+          
+          {/* Action Buttons - Conditional based on status */}
+          <View style={styles.cardActionsEnhanced}>
+            {isPending ? (
+              <Pressable
+                onPress={onPreview}
+                style={[styles.actionBtnEnhanced, { backgroundColor: primary }]}
+              >
+                <MaterialIcons name="rate-review" size={16} color="#fff" />
+                <ThemedText style={{ color: '#fff', fontSize: 12, fontWeight: '600', marginLeft: 4 }}>Review</ThemedText>
+              </Pressable>
+            ) : (
+              <Pressable
+                onPress={onPreview}
+                style={[styles.actionBtnOutline, { borderColor: alphaBg(primary, 0.3, c.border) }]}
+              >
+                <MaterialIcons name="visibility" size={16} color={primary} />
+                <ThemedText style={{ color: primary, fontSize: 12, marginLeft: 4 }}>View</ThemedText>
+              </Pressable>
+            )}
+          </View>
         </View>
       </View>
     </Pressable>
@@ -882,6 +1000,31 @@ const styles = StyleSheet.create({
   backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' },
   headerTitle: { color: '#fff', fontSize: 20, fontWeight: '700' },
   headerSubtitle: { color: 'rgba(255,255,255,0.8)', fontSize: 13, marginTop: 2 },
+  
+  // Sort Menu
+  sortMenu: {
+    position: 'absolute',
+    top: 50,
+    right: 60,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingVertical: 8,
+    minWidth: 180,
+    zIndex: 1000,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  sortMenuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  
+  // Tabs
   tabsScroll: { marginTop: 12 },
   tabsContainer: { flexDirection: 'row', gap: 8, paddingRight: 16 },
   tabBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20 },
@@ -892,11 +1035,161 @@ const styles = StyleSheet.create({
   emptyIcon: { width: 96, height: 96, borderRadius: 48, alignItems: 'center', justifyContent: 'center' },
   footerLoader: { paddingVertical: 20, alignItems: 'center' },
 
-  // Card
-  card: { flexDirection: 'row', padding: 12, borderRadius: 12, borderWidth: 1, marginBottom: 12 },
+  // Enhanced Card Styles
+  card: { 
+    flexDirection: 'column', 
+    borderRadius: 16, 
+    borderWidth: 1, 
+    marginBottom: 16,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  cardPublished: { 
+    borderLeftWidth: 4,
+    borderLeftColor: '#059669',
+  },
+  cardRejected: { 
+    borderLeftWidth: 4,
+    borderLeftColor: '#DC2626',
+  },
+  
+  // Image Container - Full width with better aspect ratio
+  cardImageContainer: { 
+    position: 'relative', 
+    width: '100%',
+  },
+  cardImageLarge: { 
+    width: '100%', 
+    height: 180, 
+  },
+  cardNoImage: { 
+    alignItems: 'center', 
+    justifyContent: 'center',
+  },
+  
+  // Enhanced Status Badge with Icon
+  statusBadgeEnhanced: { 
+    position: 'absolute', 
+    top: 12, 
+    left: 12, 
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10, 
+    paddingVertical: 5, 
+    borderRadius: 20, 
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.15,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  statusTextEnhanced: { 
+    fontSize: 10, 
+    fontWeight: '700',
+  },
+  
+  // View Count Badge - Top Right
+  viewCountBadge: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  viewCountText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  
+  // Enhanced Content Section
+  cardContentEnhanced: { 
+    padding: 14,
+  },
+  
+  // Enhanced Meta Section
+  cardMetaEnhanced: { 
+    flexDirection: 'row', 
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 10, 
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(0,0,0,0.05)',
+  },
+  metaItemEnhanced: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    gap: 6,
+    maxWidth: '45%',
+  },
+  metaTextEnhanced: { 
+    fontSize: 12,
+    flex: 1,
+  },
+  
+  // Avatar Placeholder
+  avatarPlaceholder: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  
+  // Meta Separator Dot
+  metaSeparator: {
+    width: 3,
+    height: 3,
+    borderRadius: 1.5,
+    opacity: 0.4,
+  },
+  
+  // Card Footer - Time & Actions
+  cardFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 12,
+  },
+  
+  // Enhanced Actions
+  cardActionsEnhanced: { 
+    flexDirection: 'row', 
+    gap: 8,
+  },
+  actionBtnEnhanced: { 
+    flexDirection: 'row', 
+    alignItems: 'center',
+    paddingHorizontal: 14, 
+    paddingVertical: 7, 
+    borderRadius: 8,
+    gap: 4,
+  },
+  actionBtnOutline: {
+    flexDirection: 'row', 
+    alignItems: 'center',
+    paddingHorizontal: 12, 
+    paddingVertical: 6, 
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 4,
+  },
+  
+  // Old styles for backwards compatibility
   cardImageWrap: { position: 'relative' },
   cardImage: { width: 100, height: 100, borderRadius: 8 },
-  cardNoImage: { alignItems: 'center', justifyContent: 'center' },
   statusBadge: { position: 'absolute', top: 4, left: 4, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, borderWidth: 1 },
   statusText: { fontSize: 9, fontWeight: '700' },
   cardContent: { flex: 1, paddingLeft: 12 },

@@ -20,6 +20,7 @@ import {
   generateReporterIdCard,
   getReporterIdCard,
   getTenantReporter,
+  regenerateReporterIdCard,
   resendIdCardToWhatsApp,
   updateReporterAutoPublish,
   updateReporterProfilePhoto,
@@ -503,7 +504,7 @@ export default function TenantReporterDetailsScreen() {
     }
   }, [tenantId, reporter, showMessage]);
 
-  /* ── Regenerate ID Card (new PDF) ── */
+  /* ── Regenerate ID Card (full regenerate) ── */
   const handleRegenerateIdCard = useCallback(async () => {
     if (!tenantId || !reporter) return;
 
@@ -514,7 +515,7 @@ export default function TenantReporterDetailsScreen() {
 
     Alert.alert(
       '🔄 ID కార్డ్ రీజెనరేట్',
-      'కొత్త PDF తయారు చేసి WhatsApp కి పంపాలా?\n\nNote: Backend automatically regenerates PDF when sending.',
+      'ID కార్డ్‌ను పూర్తిగా రీజెనరేట్ చేయాలా?',
       [
         { text: 'వద్దు', style: 'cancel' },
         {
@@ -522,15 +523,14 @@ export default function TenantReporterDetailsScreen() {
           onPress: async () => {
             setUpdating('idCard');
             try {
-              // Backend auto-regenerates PDF when resending
-              await resendIdCardToWhatsApp(tenantId, reporter.id);
+              await regenerateReporterIdCard(tenantId, reporter.id);
               
               // Fetch updated card details
               await new Promise((r) => setTimeout(r, 1000));
               const card = await getReporterIdCard(tenantId, reporter.id);
               if (card?.cardNumber) {
                 setIdCard(card);
-                showMessage('success', 'ID కార్డ్ రీజెనరేట్ చేసి WhatsApp కి పంపబడింది ✓');
+                showMessage('success', 'ID కార్డ్ రీజెనరేట్ అయింది ✓');
               }
             } catch (e: any) {
               showMessage('error', e?.message || 'రీజెనరేట్ కాలేదు');

@@ -389,27 +389,20 @@ export default function ReporterArticleDetail() {
     };
     setShareArticle(shareData);
     
-    // Wait for component to render and images to load, then capture
-    setTimeout(async () => {
-      if (shareImageRef.current) {
-        setIsSharing(true);
-        try {
-          console.log('[ArticleDetail] Starting image capture...');
-          await shareImageRef.current.captureAndShare();
-          console.log('[ArticleDetail] Image capture completed');
-        } catch (e) {
-          console.error('[ArticleDetail] Share image failed:', e);
-          Alert.alert('షేర్ విఫలమైంది', 'ఇమేజ్ తయారు చేయడంలో సమస్య. మళ్ళీ ప్రయత్నించండి.');
-        } finally {
-          setIsSharing(false);
-          setShareArticle(null);
-        }
-      } else {
-        console.error('[ArticleDetail] shareImageRef is null');
-        setIsSharing(false);
-        setShareArticle(null);
+    // Call captureAndShare directly - it will show style picker
+    if (shareImageRef.current) {
+      try {
+        console.log('[ArticleDetail] Starting image share...');
+        await shareImageRef.current.captureAndShare();
+        console.log('[ArticleDetail] Share completed');
+      } catch (e) {
+        console.error('[ArticleDetail] Share failed:', e);
+        Alert.alert('షేర్ విఫలమైంది', 'షేర్ చేయడంలో సమస్య. మళ్ళీ ప్రయత్నించండి.');
       }
-    }, 800);
+    } else {
+      console.error('[ArticleDetail] shareImageRef is null');
+      Alert.alert('షేర్ విఫలమైంది', 'దయచేసి మళ్ళీ ప్రయత్నించండి.');
+    }
   };
 
   // Open web article
@@ -545,15 +538,17 @@ export default function ReporterArticleDetail() {
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor={primaryColor} translucent={false} />
 
-      {/* Share Image Component (Modal-based) */}
-      {shareArticle && (
-        <ShareableArticleImage
-          ref={shareImageRef}
-          article={shareArticle}
-          tenantName={session?.tenant?.name}
-          visible={true}
-        />
-      )}
+      {/* Share Image Component - Always rendered for ref to be valid */}
+      <ShareableArticleImage
+        ref={shareImageRef}
+        article={shareArticle || {
+          id: '',
+          title: '',
+        }}
+        tenantName={session?.tenant?.name}
+        tenantPrimaryColor={primaryColor}
+        visible={!!shareArticle}
+      />
 
       {/* Sharing overlay */}
       {isSharing && (

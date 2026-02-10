@@ -23,6 +23,16 @@ prepare_react_native_project!
 target 'kaburlu' do
   use_expo_modules!
 
+  # Firebase pods include Swift targets that depend on non-modular Objective-C pods.
+  # Enable modular headers only for those transitive deps to avoid global modulemap conflicts.
+  pod 'FirebaseCore', :modular_headers => true
+  pod 'FirebaseCoreExtension', :modular_headers => true
+  pod 'FirebaseCoreInternal', :modular_headers => true
+  pod 'FirebaseInstallations', :modular_headers => true
+  pod 'GoogleUtilities', :modular_headers => true
+  pod 'GoogleDataTransport', :modular_headers => true
+  pod 'nanopb', :modular_headers => true
+
   if ENV['EXPO_USE_COMMUNITY_AUTOLINKING'] == '1'
     config_command = ['node', '-e', "process.argv=['', '', 'config'];require('@react-native-community/cli').run()"];
   else

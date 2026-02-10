@@ -92,6 +92,8 @@ export type CreateTenantReporterInput = {
   // Exactly one is required depending on `level`
   stateId?: string;
   districtId?: string;
+  divisionId?: string;
+  constituencyId?: string;
   assemblyConstituencyId?: string;
   mandalId?: string;
 
@@ -132,8 +134,11 @@ export async function getTenantReporter(tenantId: string, reporterId: string): P
   return await request<TenantReporter>(`/tenants/${tenantId}/reporters/${reporterId}`);
 }
 
-export async function getReporterDesignations(): Promise<ReporterDesignation[]> {
-  return await request<ReporterDesignation[]>(`/reporter-designations`);
+export async function getReporterDesignations(tenantId?: string): Promise<ReporterDesignation[]> {
+  const url = tenantId 
+    ? `/reporter-designations?tenantId=${tenantId}`
+    : `/reporter-designations`;
+  return await request<ReporterDesignation[]>(url);
 }
 
 export async function createTenantReporter(tenantId: string, input: CreateTenantReporterInput): Promise<TenantReporter> {
@@ -199,6 +204,82 @@ export async function updateReporterAutoPublish(
   return await request<UpdateReporterAutoPublishResponse>(`/tenants/${tenantId}/reporters/${reporterId}/auto-publish`, {
     method: 'PATCH',
     body: { autoPublish },
+  });
+}
+
+/* ─────────────────────────────  Reporter Management  ───────────────────────────── */
+
+export type DeleteReporterResponse = {
+  success: boolean;
+  deletedReporterId: string;
+  releasedMobileNumber: string | null;
+  message?: string;
+};
+
+/**
+ * Delete a reporter (soft delete - scrubs user data, mobile number is released).
+ * Cannot delete own reporter profile.
+ * Consider using toggleReporterActive instead to preserve history.
+ */
+export async function deleteReporter(
+  tenantId: string,
+  reporterId: string,
+): Promise<DeleteReporterResponse> {
+  return await request<DeleteReporterResponse>(`/tenants/${tenantId}/reporters/${reporterId}`, {
+    method: 'DELETE',
+  });
+}
+
+export type ToggleReporterActiveResponse = {
+  success: boolean;
+  reporterId: string;
+  active: boolean;
+};
+
+/**
+ * Activate or deactivate a reporter. Preferred over deletion to preserve history.
+ */
+export async function toggleReporterActive(
+  tenantId: string,
+  reporterId: string,
+  active: boolean,
+): Promise<ToggleReporterActiveResponse> {
+  return await request<ToggleReporterActiveResponse>(`/tenants/${tenantId}/reporters/${reporterId}/active`, {
+    method: 'PATCH',
+    body: { active },
+  });
+}
+
+export type TransferReporterAssignmentInput = {
+  designationId?: string;
+  level?: Exclude<ReporterLevel, null>;
+  stateId?: string;
+  districtId?: string;
+  divisionId?: string;
+  constituencyId?: string;
+  assemblyConstituencyId?: string;
+  mandalId?: string;
+};
+
+export type TransferReporterAssignmentResponse = {
+  success: boolean;
+  reporterId: string;
+  updatedFields: string[];
+};
+
+/**
+ * Transfer a reporter's designation and/or location.
+ * Cannot change own assignment.
+ * Will validate against tenant reporter limits (may return 409 if limit reached).
+ */
+export async function transferReporterAssignment(
+  tenantId: string,
+  reporterId: string,
+  assignment: TransferReporterAssignmentInput,
+): Promise<TransferReporterAssignmentResponse> {
+  return await request<TransferReporterAssignmentResponse>(`/tenants/${tenantId}/reporters/${reporterId}/assignment`, {
+    method: 'PATCH',
+    body: assignment,
   });
 }
 
@@ -360,6 +441,30 @@ export async function updateIdCardPdf(
     method: 'PATCH',
     body: input,
   });
+}
+
+/**
+ * Get ID card PDF download URL (PUBLIC API - works for both TENANT_ADMIN and REPORTER)
+ * This is a direct download endpoint that returns the PDF file
+ * 
+ * @param reporterId - The reporter's ID
+ * @returns Full URL to download the PDF (requires Authorization header)
+ * 
+ * @example
+ * ```ts
+ * const url = getIdCardPdfUrl(reporterId);
+ * // Use with FileSystem or fetch with Authorization header
+ * const response = await fetch(url, {
+ *   headers: { 
+ *     'Authorization': `Bearer ${token}`,
+ *     'Accept': 'application/pdf'
+ *   }
+ * });
+ * ```
+ */
+export function getIdCardPdfUrl(reporterId: string): string {
+  const base = process.env.EXPO_PUBLIC_API_URL_PROD || 'http://localhost:3001';
+  return `${base.replace(/\/$/, '')}/api/v1/id-cards/pdf?reporterId=${encodeURIComponent(reporterId)}`;
 }
 
 export type VerifyReporterKycInput = {
@@ -674,6 +779,8 @@ export type UpdateTenantReporterInput = {
   level?: Exclude<ReporterLevel, null>;
   stateId?: string;
   districtId?: string;
+  divisionId?: string;
+  constituencyId?: string;
   mandalId?: string;
   assemblyConstituencyId?: string;
   active?: boolean;
@@ -683,6 +790,7 @@ export type UpdateTenantReporterInput = {
   manualLoginEnabled?: boolean;
   manualLoginDays?: number;
   autoPublish?: boolean;
+  profilePhotoUrl?: string;
 };
 
 /** Admin updates a reporter's details */
@@ -701,10 +809,128 @@ export type ToggleLoginAccessResponse = {
   id: string;
   tenantId: string;
   manualLoginEnabled: boolean;
+  manualLoginDays?: number;
+};
+
+export type UpdateLoginAccessInput = {
+  manualLoginEnabled: boolean;
+  manualLoginDays?: number;
+};
+
+/** Admin updates reporter's manual login access (PATCH /login-access) */
+export async function updateReporterLoginAccess(
+  tenantId: string,
+  reporterId: string,
+  input: UpdateLoginAccessInput,
+): Promise<ToggleLoginAccessResponse> {
+  return await request<ToggleLoginAccessResponse>(`/tenants/${tenantId}/reporters/${reporterId}/login-access`, {
+    method: 'PATCH',
+    body: input,
+  });
+}
+
+/** @deprecated Use updateReporterLoginAccess instead */
+export async function toggleReporterLoginAccess(
+  tenantId: string,
+  reporterId: string,
+  loginEnabled: boolean,
+): Promise<ToggleLoginAccessResponse> {
+  return updateReporterLoginAccess(tenantId, reporterId, { manualLoginEnabled: loginEnabled });
+}
+
+export type UpdateSubscriptionInput = {
+  subscriptionActive: boolean;
+  monthlySubscriptionAmount?: number;
+  subscriptionActivationDate?: string; // ISO date for future activation
+};
+
+export type UpdateSubscriptionResponse = {
+  success: boolean;
+  reporterId: string;
+  tenantId: string;
+  subscriptionActive: boolean;
+  monthlySubscriptionAmount?: number;
+  subscriptionActivationDate?: string;
+};
+
+/** Admin updates reporter's subscription (PATCH /subscription) */
+export async function updateReporterSubscription(
+  tenantId: string,
+  reporterId: string,
+  input: UpdateSubscriptionInput,
+): Promise<UpdateSubscriptionResponse> {
+  return await request<UpdateSubscriptionResponse>(`/tenants/${tenantId}/reporters/${reporterId}/subscription`, {
+    method: 'PATCH',
+    body: input,
+  });
+}
+
+export type UpdateReporterNameInput = {
+  fullName: string;
+};
+
+export type UpdateReporterNameResponse = {
+  success: boolean;
+  reporterId: string;
+  tenantId: string;
+  fullName: string;
+};
+
+/** Admin updates reporter's name (PATCH /name) */
+export async function updateReporterName(
+  tenantId: string,
+  reporterId: string,
+  fullName: string,
+): Promise<UpdateReporterNameResponse> {
+  return await request<UpdateReporterNameResponse>(`/tenants/${tenantId}/reporters/${reporterId}/name`, {
+    method: 'PATCH',
+    body: { fullName },
+  });
+}
+
+export type UpdateReporterAssignmentInput = {
+  level: Exclude<ReporterLevel, null>;
+  designationId: string;
+  stateId?: string;
+  districtId?: string;
+  divisionId?: string;
+  constituencyId?: string;
+  mandalId?: string;
+  assemblyConstituencyId?: string;
+};
+
+/** Admin updates reporter's designation/level/location (PATCH /assignment) - SAFE method */
+export async function updateReporterAssignment(
+  tenantId: string,
+  reporterId: string,
+  input: UpdateReporterAssignmentInput,
+): Promise<TenantReporter> {
+  return await request<TenantReporter>(`/tenants/${tenantId}/reporters/${reporterId}/assignment`, {
+    method: 'PATCH',
+    body: input,
+  });
+}
+
+/** Admin deletes reporter (safe delete - phone number can be reused) */
+export async function deleteTenantReporter(
+  tenantId: string,
+  reporterId: string,
+): Promise<DeleteReporterResponse> {
+  return await request<DeleteReporterResponse>(`/tenants/${tenantId}/reporters/${reporterId}`, {
+    method: 'DELETE',
+  });
+}
+
+/** @deprecated Use toggleReporterLoginAccess instead */
+export type ToggleLoginAccessResponse_OLD = {
+  id: string;
+  tenantId: string;
+  manualLoginEnabled: boolean;
 };
 
 /** Admin toggles a reporter's login access */
-export async function toggleReporterLoginAccess(
+/** @deprecated Use updateReporterLoginAccess instead */
+async function toggleReporterLoginAccess_OLD(
   tenantId: string,
   reporterId: string,
   loginEnabled: boolean,

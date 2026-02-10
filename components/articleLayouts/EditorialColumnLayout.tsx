@@ -13,7 +13,7 @@ import { useTabBarVisibility } from '@/context/TabBarVisibilityContext';
 import { useAutoHideBottomBar } from '@/hooks/useAutoHideBottomBar';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { useReaction } from '@/hooks/useReaction';
-import { Feather } from '@expo/vector-icons';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
@@ -24,21 +24,48 @@ import {
   StyleSheet,
   Text,
   View,
+  useWindowDimensions,
+  Animated,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { ArticleLayoutComponent } from './types';
+import {
+  useFonts,
+  NotoSerifTelugu_700Bold,
+} from '@expo-google-fonts/noto-serif-telugu';
+import {
+  NotoSansTelugu_400Regular,
+} from '@expo-google-fonts/noto-sans-telugu';
 
-// Clamp text helper
-const clampText = (text: string, maxChars: number) => {
-  if (!text || text.length <= maxChars) return text;
-  return text.slice(0, maxChars - 1) + '…';
+// Clamp text to N words
+const clampWords = (text: string, maxWords: number): string => {
+  const words = text.trim().split(/\s+/);
+  return words.length > maxWords ? words.slice(0, maxWords).join(' ') + '...' : text;
 };
 
+
 const EditorialColumnLayout: ArticleLayoutComponent = ({ article, index, totalArticles }) => {
+  const [fontsLoaded] = useFonts({
+    NotoSerifTelugu_700Bold,
+    NotoSansTelugu_400Regular,
+  });
+
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { width: windowWidth } = useWindowDimensions();
+
+  // Fade-in animation
+  const fadeAnim = React.useRef(new Animated.Value(0)).current;
+  React.useEffect(() => {
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 350,
+      useNativeDriver: true,
+    }).start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Tab bar visibility toggle
   const { isTabBarVisible, setTabBarVisible } = useTabBarVisibility();
@@ -79,13 +106,35 @@ const EditorialColumnLayout: ArticleLayoutComponent = ({ article, index, totalAr
     ? article.category 
     : (article.category as any)?.name || 'Opinion';
 
-  // Full article text for quote (clamped to fit screen without scroll)
+  // Telugu detection
+  const isTelugu = (text?: string) => /[\u0C00-\u0C7F]/.test(String(text || ''));
+  const isTeluguTitle = isTelugu(article.title);
+  const isTeluguBody = isTelugu(article.body || article.summary);
+
+  // Full article text - 60 words max
   const bodyText = article.body || article.summary || '';
-  const fullArticleText = clampText(bodyText, 400);
+  const fullArticleText = clampWords(bodyText, 60);
+  const wordCount = fullArticleText.split(/\s+/).filter(w => w.length > 0).length;
 
   // Get image and caption
   const imageUrl = article.image || article.images?.[0] || null;
   const imageCaption = (article as any)?.imageCaption || (article as any)?.caption || '';
+
+  // Dynamic sizing based on content
+  const titleSize = 26;
+  const titleLineHeight = Math.round(titleSize * (isTeluguTitle ? 1.50 : 1.35));
+  const bodySize = 16;
+  const bodyLineHeight = Math.round(bodySize * 1.70);
+  
+  // Dynamic image height based on word count
+  // More words = smaller image to fit everything
+  const imageHeight = (() => {
+    if (wordCount >= 50) return Math.round(windowWidth * 0.40);  // 40% for long articles
+    if (wordCount >= 35) return Math.round(windowWidth * 0.50);  // 50% for medium
+    return Math.round(windowWidth * 0.60);  // 60% for short articles
+  })();
+
+  if (!fontsLoaded) return null;
 
   const onLike = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -115,14 +164,15 @@ const EditorialColumnLayout: ArticleLayoutComponent = ({ article, index, totalAr
   };
 
   return (
-    <Pressable 
-      style={[styles.container, { 
-        backgroundColor: isDark ? '#121212' : '#ffffff',
-        paddingTop: insets.top + 16,
-        paddingBottom: insets.bottom + 70 
-      }]}
-      onPress={handleScreenTap}
-    >
+    <Animated.View style={[styles.wrapper, { opacity: fadeAnim }]}>
+      <Pressable 
+        style={[styles.container, { 
+          backgroundColor: isDark ? '#0F172A' : '#FAFBFC',
+          paddingTop: insets.top + 16,
+          paddingBottom: insets.bottom + 70 
+        }]}
+        onPress={handleScreenTap}
+      >
       {/* Category label */}
       <View style={styles.categoryRow}>
         <View style={[styles.categoryLine, { backgroundColor: '#E74C3C' }]} />
@@ -135,8 +185,19 @@ const EditorialColumnLayout: ArticleLayoutComponent = ({ article, index, totalAr
         </Text>
       </View>
 
-      {/* Headline */}
-      <Text style={[styles.headline, { color: isDark ? '#fff' : '#1a1a1a' }]} numberOfLines={3}>
+      {/* Headline - Center aligned with proper spacing */}
+      <Text 
+        style={[
+          styles.headline, 
+          { 
+            color: isDark ? '#F8FAFC' : '#0F172A',
+            fontSize: titleSize,
+            lineHeight: titleLineHeight,
+          },
+          isTeluguTitle && { fontFamily: 'NotoSerifTelugu_700Bold' },
+        ]} 
+        numberOfLines={3}
+      >
         {article.title}
       </Text>
 
@@ -145,29 +206,44 @@ const EditorialColumnLayout: ArticleLayoutComponent = ({ article, index, totalAr
         {authorImage ? (
           <Image source={{ uri: authorImage }} style={styles.authorAvatar} contentFit="cover" />
         ) : (
-          <View style={[styles.authorAvatar, { backgroundColor: isDark ? '#333' : '#ddd' }]}>
-            <Feather name="user" size={18} color={isDark ? '#888' : '#666'} />
+          <View style={[styles.authorAvatar, { backgroundColor: isDark ? '#1E293B' : '#E2E8F0' }]}>
+            <MaterialCommunityIcons name="account" size={20} color={isDark ? '#64748B' : '#94A3B8'} />
           </View>
         )}
-        <Text style={[styles.authorName, { color: isDark ? '#ccc' : '#444' }]}>
+        <Text style={[styles.authorName, { color: isDark ? '#CBD5E1' : '#475569' }]}>
           {authorName}
         </Text>
       </View>
 
       {/* Full Article Quote */}
       <View style={styles.pullQuoteContainer}>
-        <View style={[styles.pullQuoteLine, { backgroundColor: '#E74C3C' }]} />
-        <Text style={[styles.pullQuote, { color: isDark ? '#ddd' : '#333' }]} numberOfLines={8}>
-          &ldquo;{fullArticleText}&rdquo;
+        <View style={[styles.pullQuoteLine, { backgroundColor: '#DC2626' }]} />
+        <Text 
+          style={[
+            styles.pullQuote, 
+            { 
+              color: isDark ? '#CBD5E1' : '#334155',
+              fontSize: bodySize,
+              lineHeight: bodyLineHeight,
+            },
+            isTeluguBody && { fontFamily: 'NotoSansTelugu_400Regular' },
+          ]} 
+          numberOfLines={10}
+        >
+          {fullArticleText}
         </Text>
       </View>
 
-      {/* Photo with Caption */}
+      {/* Photo with Caption - Dynamic height */}
       {imageUrl && (
         <View style={styles.photoContainer}>
-          <Image source={{ uri: imageUrl }} style={styles.articleImage} contentFit="cover" />
+          <Image 
+            source={{ uri: imageUrl }} 
+            style={[styles.articleImage, { height: imageHeight }]} 
+            contentFit="cover" 
+          />
           {imageCaption ? (
-            <Text style={[styles.captionText, { color: isDark ? '#888' : '#666' }]}>
+            <Text style={[styles.captionText, { color: isDark ? '#64748B' : '#64748B' }]}>
               {imageCaption}
             </Text>
           ) : null}
@@ -189,54 +265,59 @@ const EditorialColumnLayout: ArticleLayoutComponent = ({ article, index, totalAr
 
       {/* Footer Engagement Bar */}
       <View style={[styles.footer, { 
-        backgroundColor: isDark ? '#121212' : '#ffffff',
-        borderTopColor: isDark ? '#2a2a2a' : '#eee',
+        backgroundColor: isDark ? '#0F172A' : '#FAFBFC',
+        borderTopColor: isDark ? '#1E293B' : '#E2E8F0',
         paddingBottom: insets.bottom + 8
       }]}>
         <Pressable style={styles.footerBtn} onPress={onLike}>
-          <Feather 
-            name="thumbs-up" 
-            size={20} 
-            color={isLiked ? '#E74C3C' : (isDark ? '#888' : '#666')} 
+          <MaterialCommunityIcons
+            name={isLiked ? 'thumb-up' : 'thumb-up-outline'}
+            size={22} 
+            color={isLiked ? '#DC2626' : (isDark ? '#64748B' : '#94A3B8')} 
           />
-          <Text style={[styles.footerBtnText, { color: isDark ? '#888' : '#666' }]}>
+          <Text style={[styles.footerBtnText, { color: isDark ? '#64748B' : '#94A3B8' }]}>
             {likeCount > 0 ? `${likeCount}` : 'Agree'}
           </Text>
         </Pressable>
         
         <Pressable style={styles.footerBtn} onPress={onComment}>
-          <Feather name="message-square" size={20} color={isDark ? '#888' : '#666'} />
-          <Text style={[styles.footerBtnText, { color: isDark ? '#888' : '#666' }]}>
+          <MaterialCommunityIcons name="comment-outline" size={22} color={isDark ? '#64748B' : '#94A3B8'} />
+          <Text style={[styles.footerBtnText, { color: isDark ? '#64748B' : '#94A3B8' }]}>
             Respond
           </Text>
         </Pressable>
         
         <Pressable style={styles.footerBtn} onPress={onShare}>
-          <Feather name="share-2" size={20} color={isDark ? '#888' : '#666'} />
-          <Text style={[styles.footerBtnText, { color: isDark ? '#888' : '#666' }]}>
+          <MaterialCommunityIcons name="share-variant" size={22} color={isDark ? '#64748B' : '#94A3B8'} />
+          <Text style={[styles.footerBtnText, { color: isDark ? '#64748B' : '#94A3B8' }]}>
             Share
           </Text>
         </Pressable>
       </View>
     </Pressable>
+    </Animated.View>
   );
 };
 
 const styles = StyleSheet.create({
+  wrapper: {
+    flex: 1,
+  },
   container: {
     flex: 1,
-    paddingHorizontal: 24,
+    paddingHorizontal: 20,
   },
 
   // Category
   categoryRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
+    justifyContent: 'center',
+    marginBottom: 16,
     gap: 10,
   },
   categoryLine: {
-    width: 20,
+    width: 24,
     height: 3,
   },
   categoryText: {
@@ -252,24 +333,26 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
 
-  // Headline
+  // Headline - Center aligned
   headline: {
-    fontSize: 26,
-    fontWeight: '700',
-    lineHeight: 34,
-    marginBottom: 16,
+    fontWeight: '800',
+    marginBottom: 18,
+    textAlign: 'center',
+    letterSpacing: -0.4,
+    paddingHorizontal: 8,
   },
 
-  // Author Row
+  // Author Row - Center aligned
   authorRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 20,
   },
   authorAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     marginRight: 10,
     justifyContent: 'center',
     alignItems: 'center',
@@ -293,26 +376,24 @@ const styles = StyleSheet.create({
   },
   pullQuote: {
     flex: 1,
-    fontSize: 16,
-    fontStyle: 'italic',
-    lineHeight: 24,
+    textAlign: 'left',
+    letterSpacing: 0.2,
   },
 
-  // Photo with caption
+  // Photo with caption - dynamic height
   photoContainer: {
     marginBottom: 16,
-    borderRadius: 8,
+    borderRadius: 12,
     overflow: 'hidden',
   },
   articleImage: {
     width: '100%',
-    height: 160,
-    backgroundColor: '#333',
+    backgroundColor: '#E2E8F0',
   },
   captionText: {
     fontSize: 12,
     fontStyle: 'italic',
-    marginTop: 6,
+    marginTop: 8,
     paddingHorizontal: 4,
   },
 
@@ -329,7 +410,7 @@ const styles = StyleSheet.create({
     marginTop: 16,
     paddingTop: 12,
     borderTopWidth: 1,
-    borderTopColor: '#eee',
+    borderTopColor: '#E2E8F0',
   },
   signature: {
     fontSize: 14,

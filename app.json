@@ -2,17 +2,23 @@
   "expo": {
     "name": "kaburlu",
     "slug": "kaburlu",
-    "version": "1.0.0",
+    "version": "1.1.5",
     "orientation": "portrait",
     "icon": "./assets/images/app-icon.png",
     "scheme": "kaburlu",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.media.kaburlu"
+      "bundleIdentifier": "com.media.kaburlu",
+      "buildNumber": "7",
+      "googleServicesFile": "./GoogleService-Info.plist",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
+      "versionCode": 7,
       "icon": "./assets/images/app-icon.png",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/app-icon-foreground.png",
@@ -31,22 +37,43 @@
           "action": "VIEW",
           "autoVerify": true,
           "data": [
-            { "scheme": "https", "host": "s.kaburlumedia.com", "pathPrefix": "/" }
+            {
+              "scheme": "https",
+              "host": "s.kaburlumedia.com",
+              "pathPrefix": "/"
+            }
           ],
-          "category": ["BROWSABLE", "DEFAULT"]
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
         },
         {
           "action": "VIEW",
           "autoVerify": true,
           "data": [
-            { "scheme": "https", "host": "kaburlumedia.com", "pathPrefix": "/article" }
+            {
+              "scheme": "https",
+              "host": "kaburlumedia.com",
+              "pathPrefix": "/article"
+            }
           ],
-          "category": ["BROWSABLE", "DEFAULT"]
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
         },
         {
           "action": "VIEW",
-          "data": [{ "scheme": "kaburlu" }],
-          "category": ["BROWSABLE", "DEFAULT"]
+          "data": [
+            {
+              "scheme": "kaburlu"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
         }
       ]
     },
@@ -62,7 +89,7 @@
         {
           "image": "./assets/images/splash-icon.png",
           "resizeMode": "contain",
-          "backgroundColor": "#000000"
+          "backgroundColor": "#FFFFFF"
         }
       ],
       "expo-notifications",

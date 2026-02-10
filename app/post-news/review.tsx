@@ -2,15 +2,17 @@ import { ThemedText } from '@/components/ThemedText';
 import { Colors } from '@/constants/Colors';
 import { formatMonthDayFromLexicon, getDateLineLanguage } from '@/constants/dateLineLexicon';
 import { useColorScheme } from '@/hooks/useColorScheme';
-import { searchCombinedLocations, requestAddLocation, type CombinedLocationItem } from '@/services/locations';
+import { searchCombinedLocations, requestAddLocation, smartAddLocation, searchDistricts, type CombinedLocationItem, type SmartAddLocationRequest } from '@/services/locations';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -19,6 +21,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { AIRewriteUnifiedResponse } from '@/services/aiRewriteUnified';
+import { Audio } from 'expo-av';
 
 // Format dateline: "కూకట్‌పల్లి (కబుర్లు టుడే) జనవరి 28"
 function formatDateline(
@@ -45,6 +48,7 @@ export default function PostNewsReviewScreen() {
   // Editable fields
   const [headline, setHeadline] = useState('');
   const [subtitle, setSubtitle] = useState('');
+  const [bodyParagraphs, setBodyParagraphs] = useState<string[]>([]);
   const [isEditMode, setIsEditMode] = useState(false);
   
   // Location data
@@ -63,6 +67,18 @@ export default function PostNewsReviewScreen() {
   const [locationNotFoundVisible, setLocationNotFoundVisible] = useState(false);
   const [notFoundPlaceName, setNotFoundPlaceName] = useState('');
   const [requestingAdd, setRequestingAdd] = useState(false);
+  
+  // Smart location creation
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [selectedDistrict, setSelectedDistrict] = useState<CombinedLocationItem | null>(null);
+  const [selectedState, setSelectedState] = useState<CombinedLocationItem | null>(null);
+  const [districtQuery, setDistrictQuery] = useState('');
+  const [districtResults, setDistrictResults] = useState<CombinedLocationItem[]>([]);
+  const [districtSearching, setDistrictSearching] = useState(false);
+  const [creatingLocation, setCreatingLocation] = useState(false);
+
+  // Audio for location popup
+  const soundRef = useRef<Audio.Sound | null>(null);
 
   const loadData = useCallback(async () => {
     try {
@@ -84,6 +100,7 @@ export default function PostNewsReviewScreen() {
       // Set editable fields
       setHeadline(parsed.print_article.headline);
       setSubtitle(parsed.print_article.subtitle || '');
+      setBodyParagraphs(parsed.print_article.body || []);
       setPlaceName(parsed.print_article.dateline.place);
       setNewspaperName(parsed.print_article.dateline.newspaper || '');
 
@@ -116,15 +133,65 @@ export default function PostNewsReviewScreen() {
     loadData();
   }, [loadData]);
 
+  // Play audio when location not found popup opens (Telugu only)
+  useEffect(() => {
+    const playLocationAudio = async () => {
+      if (locationNotFoundVisible && languageCode === 'te') {
+        try {
+          // Unload previous sound if exists
+          if (soundRef.current) {
+            await soundRef.current.unloadAsync();
+            soundRef.current = null;
+          }
+
+          // Load and play new sound
+          const { sound } = await Audio.Sound.createAsync(
+            require('@/assets/audio/AI Location add.mp3'),
+            { shouldPlay: true, isLooping: true, volume: 0.7 }
+          );
+          soundRef.current = sound;
+        } catch (error) {
+          console.error('Failed to play location audio:', error);
+        }
+      } else {
+        // Stop audio when popup closes
+        if (soundRef.current) {
+          try {
+            await soundRef.current.stopAsync();
+            await soundRef.current.unloadAsync();
+            soundRef.current = null;
+          } catch (error) {
+            console.error('Failed to stop audio:', error);
+          }
+        }
+      }
+    };
+
+    playLocationAudio();
+  }, [locationNotFoundVisible, languageCode]);
+
+  // Cleanup audio on unmount
+  useEffect(() => {
+    return () => {
+      if (soundRef.current) {
+        soundRef.current.unloadAsync().catch(console.error);
+      }
+    };
+  }, []);
+
   // Auto-search location when placeName is set (from AI response)
   useEffect(() => {
     if (locationAutoSearchDone || !placeName.trim() || !tenantId || loading) return;
     
     const autoSearchLocation = async () => {
       setLocationSearching(true);
+      let items: CombinedLocationItem[] = [];
+      let result: any;
+      
       try {
-        const result = await searchCombinedLocations(placeName.trim(), 20, tenantId);
-        const items = result.items || [];
+        // First attempt: exact search
+        result = await searchCombinedLocations(placeName.trim(), 20, tenantId);
+        items = result.items || [];
         
         // Update newspaper name from API response if available
         if (result.tenant?.nativeName) {
@@ -158,20 +225,75 @@ export default function PostNewsReviewScreen() {
           const formatted = formatDateline(localizedName, effectiveNewspaper, languageCode);
           setDatelineText(formatted);
         } else {
-          // No results - use AI provided place name with default dateline
-          const formatted = formatDateline(placeName, newspaperName, languageCode);
-          setDatelineText(formatted);
+          // Second attempt: try with simplified query (remove special chars, extra spaces)
+          try {
+            const simplifiedQuery = placeName.trim().replace(/[,\-\s]+/g, ' ').trim();
+            if (simplifiedQuery !== placeName.trim()) {
+              console.log('Retry with simplified query:', simplifiedQuery);
+              result = await searchCombinedLocations(simplifiedQuery, 20, tenantId);
+              items = result.items || [];
+              
+              if (items.length > 0) {
+                const lang = getDateLineLanguage(languageCode);
+                const bestMatch = items[0];
+                setSelectedLocation(bestMatch);
+                const localizedName = (bestMatch.match?.names as any)?.[lang] || bestMatch.match?.name || placeName;
+                setPlaceName(localizedName);
+                const formatted = formatDateline(localizedName, newspaperName, languageCode);
+                setDatelineText(formatted);
+              } else {
+                // Still no results - show not found popup
+                setNotFoundPlaceName(placeName);
+                setLocationNotFoundVisible(true);
+                const formatted = formatDateline(placeName, newspaperName, languageCode);
+                setDatelineText(formatted);
+              }
+            } else {
+              // No variation possible - show not found popup
+              setNotFoundPlaceName(placeName);
+              setLocationNotFoundVisible(true);
+              const formatted = formatDateline(placeName, newspaperName, languageCode);
+              setDatelineText(formatted);
+            }
+          } catch (retryError) {
+            console.error('Second search attempt failed:', retryError);
+            setNotFoundPlaceName(placeName);
+            setLocationNotFoundVisible(true);
+            const formatted = formatDateline(placeName, newspaperName, languageCode);
+            setDatelineText(formatted);
+          }
         }
       } catch (error: any) {
         console.error('Auto location search failed:', error);
-        // Show location not found popup for 404 errors
-        if (error?.status === 404 || error?.message?.includes('404')) {
+        // Try second attempt with simplified query
+        try {
+          const simplifiedQuery = placeName.trim().replace(/[,\-\s]+/g, ' ').trim();
+          if (simplifiedQuery && simplifiedQuery !== placeName.trim()) {
+            console.log('Retry after error with simplified query:', simplifiedQuery);
+            result = await searchCombinedLocations(simplifiedQuery, 20, tenantId);
+            items = result.items || [];
+            
+            if (items.length > 0) {
+              const lang = getDateLineLanguage(languageCode);
+              const bestMatch = items[0];
+              setSelectedLocation(bestMatch);
+              const localizedName = (bestMatch.match?.names as any)?.[lang] || bestMatch.match?.name || placeName;
+              setPlaceName(localizedName);
+              const formatted = formatDateline(localizedName, newspaperName, languageCode);
+              setDatelineText(formatted);
+            } else {
+              throw new Error('No results after retry');
+            }
+          } else {
+            throw error;
+          }
+        } catch (finalError: any) {
+          console.error('All search attempts failed:', finalError);
           setNotFoundPlaceName(placeName);
           setLocationNotFoundVisible(true);
+          const formatted = formatDateline(placeName, newspaperName, languageCode);
+          setDatelineText(formatted);
         }
-        // Fallback to AI provided dateline
-        const formatted = formatDateline(placeName, newspaperName, languageCode);
-        setDatelineText(formatted);
       } finally {
         setLocationSearching(false);
         setLocationAutoSearchDone(true);
@@ -258,6 +380,107 @@ export default function PostNewsReviewScreen() {
       setLocationNotFoundVisible(false);
     }
   };
+  
+  // Search districts when user types
+  const handleDistrictSearch = useCallback(async (query: string) => {
+    if (!query.trim()) {
+      setDistrictResults([]);
+      return;
+    }
+    
+    setDistrictSearching(true);
+    try {
+      const result = await searchDistricts(query.trim(), selectedState?.match?.id, 20);
+      setDistrictResults(result.items || []);
+    } catch (error) {
+      console.error('District search failed:', error);
+      setDistrictResults([]);
+    } finally {
+      setDistrictSearching(false);
+    }
+  }, [selectedState]);
+  
+  // Handle create location with smart-add API
+  const handleCreateAndUseLocation = async () => {
+    if (!notFoundPlaceName.trim()) {
+      Alert.alert('లోపం', 'లొకేషన్ పేరు తప్పనిసరి');
+      return;
+    }
+    
+    if (!selectedDistrict) {
+      Alert.alert('లోపం', 'దయచేసి జిల్లా ఎంచుకోండి');
+      return;
+    }
+    
+    setCreatingLocation(true);
+    try {
+      const params: SmartAddLocationRequest = {
+        areaName: notFoundPlaceName.trim(),
+        stateName: selectedState?.match?.name || selectedDistrict?.state?.name || 'Telangana',
+        languageCode: languageCode,
+        forceType: 'mandal',
+        parentDistrictName: selectedDistrict.match.name,
+        parentDistrictId: selectedDistrict.match.id,
+      };
+      
+      console.log('Creating location with params:', params);
+      const result = await smartAddLocation(params);
+      
+      if (result.success && result.location) {
+        // Convert to CombinedLocationItem format
+        const newLocation: CombinedLocationItem = {
+          type: result.type.toUpperCase() as any,
+          match: {
+            id: result.location.id,
+            name: result.location.name,
+            names: result.location.translations.reduce((acc, t) => {
+              acc[t.language] = t.name;
+              return acc;
+            }, {} as Record<string, string>),
+          },
+          state: selectedState?.match || selectedDistrict?.state || null,
+          district: selectedDistrict?.match || null,
+          mandal: result.type === 'mandal' ? {
+            id: result.location.id,
+            name: result.location.name,
+          } : null,
+          village: result.type === 'village' ? {
+            id: result.location.id,
+            name: result.location.name,
+          } : null,
+        };
+        
+        // Set as selected location
+        setSelectedLocation(newLocation);
+        
+        // Get localized name from translation
+        const localizedName = result.translation?.name || result.location.name;
+        setPlaceName(localizedName);
+        
+        // Update dateline
+        const formatted = formatDateline(localizedName, newspaperName, languageCode);
+        setDatelineText(formatted);
+        
+        // Close modals
+        setLocationNotFoundVisible(false);
+        setShowCreateForm(false);
+        
+        Alert.alert(
+          'Success',
+          `Location "${localizedName}" created successfully and ready to use!`,
+          [{ text: 'OK' }]
+        );
+      }
+    } catch (error: any) {
+      console.error('Failed to create location:', error);
+      Alert.alert(
+        'Error',
+        error?.error || error?.message || 'Failed to create location. Please try again.'
+      );
+    } finally {
+      setCreatingLocation(false);
+    }
+  };
 
   const onNext = async () => {
     if (!headline.trim()) {
@@ -284,6 +507,7 @@ export default function PostNewsReviewScreen() {
         ...response!.print_article,
         headline: headline.trim(),
         subtitle: subtitle.trim() || null,
+        body: bodyParagraphs.filter(p => p.trim()), // Remove empty paragraphs
         dateline: {
           ...response!.print_article.dateline,
           place: placeName.trim(),
@@ -386,11 +610,51 @@ export default function PostNewsReviewScreen() {
 
           {/* Article Body */}
           <View style={[styles.previewSection, styles.bodySection]}>
-            {printArticle.body.map((paragraph, index) => (
-              <ThemedText key={index} style={[styles.previewParagraph, { color: c.text }]}>
-                {paragraph}
-              </ThemedText>
-            ))}
+            {isEditMode ? (
+              <View style={{ gap: 12 }}>
+                {bodyParagraphs.map((paragraph, index) => (
+                  <View key={index}>
+                    <ThemedText style={{ color: c.muted, fontSize: 12, marginBottom: 4, fontWeight: '600' }}>
+                      Paragraph {index + 1}
+                    </ThemedText>
+                    <TextInput
+                      value={paragraph}
+                      onChangeText={(text) => {
+                        const updated = [...bodyParagraphs];
+                        updated[index] = text;
+                        setBodyParagraphs(updated);
+                      }}
+                      placeholder={`Enter paragraph ${index + 1} content`}
+                      placeholderTextColor={c.muted}
+                      style={[
+                        styles.bodyInput,
+                        { borderColor: c.border, color: c.text, backgroundColor: c.background }
+                      ]}
+                      multiline
+                    />
+                  </View>
+                ))}
+                <Pressable
+                  onPress={() => setBodyParagraphs([...bodyParagraphs, ''])}
+                  style={({ pressed }) => [
+                    styles.addParagraphBtn,
+                    { borderColor: c.tint },
+                    pressed && { opacity: 0.7 },
+                  ]}
+                >
+                  <MaterialIcons name="add" size={18} color={c.tint} />
+                  <ThemedText style={{ color: c.tint, fontWeight: '600', marginLeft: 4 }}>
+                    Add Paragraph
+                  </ThemedText>
+                </Pressable>
+              </View>
+            ) : (
+              bodyParagraphs.map((paragraph, index) => (
+                <ThemedText key={index} style={[styles.previewParagraph, { color: c.text }]}>
+                  {paragraph}
+                </ThemedText>
+              ))
+            )}
           </View>
 
           {/* Dateline at bottom of article */}
@@ -486,42 +750,66 @@ export default function PostNewsReviewScreen() {
       <View style={[styles.bottomBar, { borderTopColor: c.border, backgroundColor: c.background }]}>
         <Pressable
           onPress={onNext}
+          disabled={!selectedLocation || locationSearching}
           style={({ pressed }) => [
             styles.nextBtn,
             { backgroundColor: c.tint },
             pressed && { opacity: 0.85 },
+            (!selectedLocation || locationSearching) && { opacity: 0.5, backgroundColor: c.muted },
           ]}
         >
-          <ThemedText style={{ color: '#fff', fontSize: 16, fontWeight: '600' }}>Next: Add Photos</ThemedText>
-          <MaterialIcons name="arrow-forward" size={20} color="#fff" />
+          {locationSearching ? (
+            <>
+              <ActivityIndicator color="#fff" size="small" />
+              <ThemedText style={{ color: '#fff', fontSize: 16, fontWeight: '600', marginLeft: 8 }}>
+                Searching Location...
+              </ThemedText>
+            </>
+          ) : !selectedLocation ? (
+            <>
+              <MaterialIcons name="location-off" size={20} color="#fff" />
+              <ThemedText style={{ color: '#fff', fontSize: 16, fontWeight: '600', marginLeft: 8 }}>
+                Select Location First
+              </ThemedText>
+            </>
+          ) : (
+            <>
+              <ThemedText style={{ color: '#fff', fontSize: 16, fontWeight: '600' }}>Next: Add Photos</ThemedText>
+              <MaterialIcons name="arrow-forward" size={20} color="#fff" />
+            </>
+          )}
         </Pressable>
       </View>
 
       {/* Location Search Modal */}
       <Modal visible={locationModalVisible} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: c.card, borderColor: c.border }]}>
-            <View style={[styles.modalHeader, { borderBottomColor: c.border }]}>
-              <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 17 }}>
-                Search Location
-              </ThemedText>
-              <Pressable onPress={() => setLocationModalVisible(false)}>
-                <MaterialIcons name="close" size={24} color={c.text} />
-              </Pressable>
-            </View>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={{ flex: 1 }}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { backgroundColor: c.card, borderColor: c.border }]}>
+              <View style={[styles.modalHeader, { borderBottomColor: c.border }]}>
+                <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 17 }}>
+                  Search Location
+                </ThemedText>
+                <Pressable onPress={() => setLocationModalVisible(false)}>
+                  <MaterialIcons name="close" size={24} color={c.text} />
+                </Pressable>
+              </View>
 
-            <View style={styles.searchContainer}>
-              <MaterialIcons name="search" size={20} color={c.muted} />
-              <TextInput
-                value={locationQuery}
-                onChangeText={setLocationQuery}
-                placeholder="Type to search places... (auto-search)"
-                placeholderTextColor={c.muted}
-                style={[styles.searchInput, { color: c.text }]}
-                autoFocus
-              />
-              {locationSearching && <ActivityIndicator size="small" />}
-            </View>
+              <View style={styles.searchContainer}>
+                <MaterialIcons name="search" size={20} color={c.muted} />
+                <TextInput
+                  value={locationQuery}
+                  onChangeText={setLocationQuery}
+                  placeholder="Type to search places... (auto-search)"
+                  placeholderTextColor={c.muted}
+                  style={[styles.searchInput, { color: c.text }]}
+                  autoFocus
+                />
+                {locationSearching && <ActivityIndicator size="small" />}
+              </View>
 
             <ScrollView style={styles.resultsContainer}>
               {locationResults.length === 0 && locationQuery.trim() && !locationSearching && (
@@ -583,76 +871,280 @@ export default function PostNewsReviewScreen() {
             </ScrollView>
           </View>
         </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Location Not Found Popup */}
       <Modal visible={locationNotFoundVisible} animationType="fade" transparent>
-        <View style={styles.popupOverlay}>
-          <View style={[styles.popupContent, { backgroundColor: c.card, borderColor: c.border }]}>
-            <View style={styles.popupIcon}>
-              <MaterialIcons name="location-off" size={48} color="#e74c3c" />
-            </View>
-            <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 18, textAlign: 'center' }}>
-              Location Not Available
-            </ThemedText>
-            <ThemedText style={{ color: c.muted, textAlign: 'center', marginTop: 8, lineHeight: 22 }}>
-              &ldquo;{notFoundPlaceName}&rdquo; is not available in our system.
-            </ThemedText>
-            
-            {/* Info Box */}
-            <View style={[styles.popupInfoBox, { backgroundColor: c.tint + '15', borderColor: c.tint + '30' }]}>
-              <MaterialIcons name="info" size={20} color={c.tint} />
-              <ThemedText style={{ color: c.text, fontSize: 13, flex: 1, marginLeft: 10, lineHeight: 18 }}>
-                Location is required for publishing. Please contact your publisher to add this location.
-              </ThemedText>
-            </View>
-            
-            <View style={styles.popupButtons}>
-              {/* Request to Add */}
-              <Pressable
-                onPress={handleRequestAddLocation}
-                disabled={requestingAdd}
-                style={({ pressed }) => [
-                  styles.popupBtn,
-                  styles.popupBtnPrimary,
-                  { backgroundColor: c.tint },
-                  pressed && { opacity: 0.85 },
-                  requestingAdd && { opacity: 0.6 },
-                ]}
-              >
-                {requestingAdd ? (
-                  <ActivityIndicator size="small" color="#fff" />
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={{ flex: 1 }}
+        >
+          <View style={styles.popupOverlay}>
+            <ScrollView
+              contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', padding: 20 }}
+              keyboardShouldPersistTaps="handled"
+            >
+              <View style={[styles.popupContent, { backgroundColor: c.card, borderColor: c.border, maxWidth: showCreateForm ? 440 : 360 }]}>
+                {!showCreateForm ? (
+                  <>
+                    {/* Initial Not Found Message */}
+                    <View style={[styles.popupIcon, { backgroundColor: '#e74c3c15' }]}>
+                      <MaterialIcons name="location-off" size={44} color="#e74c3c" />
+                    </View>
+                    <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 19, textAlign: 'center' }}>
+                      లొకేషన్ అందుబాటులో లేదు
+                    </ThemedText>
+                    <ThemedText style={{ color: c.muted, textAlign: 'center', marginTop: 10, lineHeight: 22, fontSize: 14, paddingHorizontal: 4 }}>
+                      &ldquo;{notFoundPlaceName}&rdquo; మా డేటాబేస్‌లో ఇంకా లేదు.
+                    </ThemedText>
+                    
+                    <View style={styles.popupButtons}>
+                      {/* Create Now - Primary Action */}
+                      <Pressable
+                        onPress={() => {
+                          setShowCreateForm(true);
+                          setDistrictQuery('');
+                          setSelectedDistrict(null);
+                        }}
+                        style={({ pressed }) => [
+                          styles.popupBtn,
+                          styles.popupBtnPrimary,
+                          { backgroundColor: c.tint },
+                          pressed && { opacity: 0.85 },
+                        ]}
+                      >
+                        <MaterialIcons name="add-location" size={22} color="#fff" />
+                        <ThemedText style={{ color: '#fff', fontWeight: '700', marginLeft: 8, fontSize: 15 }}>
+                          ఇప్పుడే క్రియేట్ చేయండి
+                        </ThemedText>
+                      </Pressable>
+                      
+                      {/* Search Different */}
+                      <Pressable
+                        onPress={() => {
+                          setLocationNotFoundVisible(false);
+                          setLocationQuery('');
+                          setLocationModalVisible(true);
+                        }}
+                        style={({ pressed }) => [
+                          styles.popupBtn,
+                          { borderWidth: 1.5, borderColor: c.tint, backgroundColor: c.background },
+                          pressed && { opacity: 0.7 },
+                        ]}
+                      >
+                        <MaterialIcons name="search" size={20} color={c.tint} />
+                        <ThemedText style={{ color: c.tint, fontWeight: '600', marginLeft: 8, fontSize: 15 }}>
+                          వేరే పేరుతో వెతకండి
+                        </ThemedText>
+                      </Pressable>
+                      
+                      {/* Request Later */}
+                      <Pressable
+                        onPress={handleRequestAddLocation}
+                        disabled={requestingAdd}
+                        style={({ pressed }) => [
+                          styles.popupBtn,
+                          { 
+                            borderWidth: 1.5, 
+                            borderColor: c.border,
+                            backgroundColor: c.background,
+                          },
+                          pressed && { opacity: 0.7 },
+                          requestingAdd && { opacity: 0.6 },
+                        ]}
+                      >
+                        {requestingAdd ? (
+                          <ActivityIndicator size="small" color={c.text} />
+                        ) : (
+                          <>
+                            <MaterialIcons name="send" size={18} color={c.muted} />
+                            <ThemedText style={{ color: c.muted, fontSize: 14, marginLeft: 8, fontWeight: '500' }}>
+                              తరువాత యాడ్మిన్‌ను అడగండి
+                            </ThemedText>
+                          </>
+                        )}
+                      </Pressable>
+                    </View>
+                  </>
                 ) : (
                   <>
-                    <MaterialIcons name="send" size={18} color="#fff" />
-                    <ThemedText style={{ color: '#fff', fontWeight: '600', marginLeft: 6 }}>
-                      Request Publisher to Add
-                    </ThemedText>
+                    {/* Create Location Form */}
+                    <View style={{ alignItems: 'center', marginBottom: 24 }}>
+                      <View style={[styles.popupIcon, { backgroundColor: c.tint + '15' }]}>
+                        <MaterialIcons name="add-location" size={44} color={c.tint} />
+                      </View>
+                      <ThemedText type="defaultSemiBold" style={{ color: c.text, fontSize: 19, textAlign: 'center', paddingHorizontal: 8 }}>
+                        &ldquo;{notFoundPlaceName}&rdquo; క్రియేట్ చేయండి
+                      </ThemedText>
+                      <ThemedText style={{ color: c.muted, fontSize: 14, marginTop: 6, textAlign: 'center', lineHeight: 20 }}>
+                        ఈ లొకేషన్ జోడించడానికి జిల్లా ఎంచుకోండి
+                      </ThemedText>
+                    </View>
+
+                    {/* District Selection */}
+                    <View style={{ marginBottom: 20, width: '100%' }}>
+                      <ThemedText style={{ color: c.text, fontWeight: '700', fontSize: 15, marginBottom: 6 }}>
+                        జిల్లా ఎంచుకోండి <ThemedText style={{ color: '#e74c3c' }}>*</ThemedText>
+                      </ThemedText>
+                      <ThemedText style={{ color: c.muted, fontSize: 13, marginBottom: 12, lineHeight: 18 }}>
+                        {notFoundPlaceName} ఏ జిల్లాలో ఉంది?
+                      </ThemedText>
+                      
+                      {selectedDistrict ? (
+                        <View style={[styles.selectedDistrictCard, { backgroundColor: c.tint + '08', borderColor: c.tint }]}>
+                          <MaterialIcons name="location-on" size={22} color={c.tint} />
+                          <View style={{ flex: 1 }}>
+                            <ThemedText style={{ color: c.text, fontWeight: '600', fontSize: 15 }}>
+                              {selectedDistrict.match.name}
+                            </ThemedText>
+                            {selectedDistrict.state && (
+                              <ThemedText style={{ color: c.muted, fontSize: 13, marginTop: 3 }}>
+                                {selectedDistrict.state.name}
+                              </ThemedText>
+                            )}
+                          </View>
+                          <Pressable
+                            onPress={() => {
+                              setSelectedDistrict(null);
+                              setDistrictQuery('');
+                            }}
+                            hitSlop={10}
+                            style={({ pressed }) => [
+                              { 
+                                backgroundColor: c.background,
+                                borderRadius: 20,
+                                padding: 6,
+                              },
+                              pressed && { opacity: 0.7 }
+                            ]}
+                          >
+                            <MaterialIcons name="close" size={18} color={c.muted} />
+                          </Pressable>
+                        </View>
+                      ) : (
+                        <>
+                          <View style={[styles.searchRow, { borderColor: c.border, backgroundColor: c.card }]}>
+                            <MaterialIcons name="search" size={20} color={c.muted} />
+                            <TextInput
+                              value={districtQuery}
+                              onChangeText={(text) => {
+                                setDistrictQuery(text);
+                                if (text.trim().length >= 2) {
+                                  handleDistrictSearch(text);
+                                } else {
+                                  setDistrictResults([]);
+                                }
+                              }}
+                              placeholder="జిల్లా పేరు వెతకండి..."
+                              placeholderTextColor={c.muted}
+                              style={[styles.searchRowInput, { color: c.text, fontSize: 15 }]}
+                            />
+                            {districtSearching && <ActivityIndicator size="small" color={c.tint} />}
+                          </View>
+                          
+                          {districtResults.length > 0 && (
+                            <ScrollView style={[styles.districtResults, { borderColor: c.border, backgroundColor: c.card }]}>
+                              {districtResults.map((item, index) => (
+                                <Pressable
+                                  key={index}
+                                  onPress={() => {
+                                    setSelectedDistrict(item);
+                                    if (item.state) {
+                                      setSelectedState(item);
+                                    }
+                                    setDistrictResults([]);
+                                    setDistrictQuery('');
+                                  }}
+                                  style={({ pressed }) => [
+                                    styles.districtResultItem,
+                                    { 
+                                      borderBottomColor: c.border,
+                                      backgroundColor: pressed ? c.background : 'transparent',
+                                    },
+                                    index === districtResults.length - 1 && { borderBottomWidth: 0 },
+                                  ]}
+                                >
+                                  <MaterialIcons name="location-city" size={20} color={c.muted} style={{ marginRight: 10 }} />
+                                  <View style={{ flex: 1 }}>
+                                    <ThemedText style={{ color: c.text, fontWeight: '600', fontSize: 15 }}>
+                                      {item.match.name}
+                                    </ThemedText>
+                                    {item.state && (
+                                      <ThemedText style={{ color: c.muted, fontSize: 13, marginTop: 3 }}>
+                                        {item.state.name}
+                                      </ThemedText>
+                                    )}
+                                  </View>
+                                  <MaterialIcons name="chevron-right" size={20} color={c.muted} />
+                                </Pressable>
+                              ))}
+                            </ScrollView>
+                          )}
+                        </>
+                      )}
+                    </View>
+
+                    {/* Action Buttons */}
+                    <View style={{ gap: 12, marginTop: 24, width: '100%' }}>
+                      <Pressable
+                        onPress={handleCreateAndUseLocation}
+                        disabled={!selectedDistrict || creatingLocation}
+                        style={({ pressed }) => [
+                          styles.popupBtn,
+                          styles.popupBtnPrimary,
+                          { backgroundColor: c.tint },
+                          pressed && { opacity: 0.85 },
+                          (!selectedDistrict || creatingLocation) && { opacity: 0.5 },
+                        ]}
+                      >
+                        {creatingLocation ? (
+                          <>
+                            <ActivityIndicator size="small" color="#fff" />
+                            <ThemedText style={{ color: '#fff', fontWeight: '700', marginLeft: 10, fontSize: 15 }}>
+                              క్రియేట్ అవుతోంది...
+                            </ThemedText>
+                          </>
+                        ) : (
+                          <>
+                            <MaterialIcons name="check-circle" size={22} color="#fff" />
+                            <ThemedText style={{ color: '#fff', fontWeight: '700', marginLeft: 8, fontSize: 15 }}>
+                              క్రియేట్ చేసి వాడండి
+                            </ThemedText>
+                          </>
+                        )}
+                      </Pressable>
+                      
+                      <Pressable
+                        onPress={() => {
+                          setShowCreateForm(false);
+                          setSelectedDistrict(null);
+                          setSelectedState(null);
+                          setDistrictQuery('');
+                          setDistrictResults([]);
+                        }}
+                        style={({ pressed }) => [
+                          styles.popupBtn,
+                          { 
+                            borderWidth: 1.5, 
+                            borderColor: c.border,
+                            backgroundColor: c.background,
+                          },
+                          pressed && { opacity: 0.7 },
+                        ]}
+                      >
+                        <MaterialIcons name="arrow-back" size={20} color={c.text} />
+                        <ThemedText style={{ color: c.text, fontWeight: '600', marginLeft: 6, fontSize: 15 }}>
+                          వెనక్కి
+                        </ThemedText>
+                      </Pressable>
+                    </View>
                   </>
                 )}
-              </Pressable>
-              
-              {/* Search Different Location */}
-              <Pressable
-                onPress={() => {
-                  setLocationNotFoundVisible(false);
-                  setLocationQuery(notFoundPlaceName);
-                  setLocationModalVisible(true);
-                }}
-                style={({ pressed }) => [
-                  styles.popupBtn,
-                  { borderWidth: 1, borderColor: c.tint },
-                  pressed && { opacity: 0.7 },
-                ]}
-              >
-                <MaterialIcons name="search" size={18} color={c.tint} />
-                <ThemedText style={{ color: c.tint, fontWeight: '600', marginLeft: 6 }}>
-                  Search Different Location
-                </ThemedText>
-              </Pressable>
-            </View>
+              </View>
+            </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </SafeAreaView>
   );
@@ -789,10 +1281,16 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   modalContent: {
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
     borderWidth: 1,
-    maxHeight: '80%',
+    height: '30%',
+    minHeight: 280,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
   },
   modalHeader: {
     flexDirection: 'row',
@@ -868,6 +1366,24 @@ const styles = StyleSheet.create({
     fontSize: 15,
     minHeight: 50,
   },
+  bodyInput: {
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 12,
+    fontSize: 15,
+    lineHeight: 22,
+    minHeight: 80,
+  },
+  addParagraphBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    marginTop: 4,
+  },
   bodySection: {
     paddingTop: 12,
     paddingBottom: 16,
@@ -897,27 +1413,32 @@ const styles = StyleSheet.create({
   },
   popupOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 24,
+    padding: 20,
   },
   popupContent: {
     width: '100%',
-    maxWidth: 340,
-    borderRadius: 20,
-    padding: 24,
+    maxWidth: 420,
+    borderRadius: 24,
+    padding: 28,
     borderWidth: 1,
     alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.2,
+    shadowRadius: 16,
+    elevation: 12,
   },
   popupIcon: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: 'rgba(231,76,60,0.1)',
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: 'rgba(231,76,60,0.12)',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 16,
+    marginBottom: 20,
   },
   popupInfoBox: {
     flexDirection: 'row',
@@ -937,8 +1458,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 14,
-    borderRadius: 12,
+    paddingVertical: 16,
+    borderRadius: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
   popupBtnPrimary: {
     // additional styling handled inline
@@ -956,6 +1482,78 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 16,
     borderRadius: 8,
+    borderWidth: 1,
+  },
+  typeChip: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    alignItems: 'center',
+  },
+  typeChipLarge: {
+    flex: 1,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 90,
+  },
+  selectedDistrictCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 2,
+    gap: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  searchRowInput: {
+    flex: 1,
+    fontSize: 15,
+    paddingVertical: 2,
+  },
+  districtResults: {
+    marginTop: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    maxHeight: 200,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  districtResultItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+    borderBottomWidth: 1,
+  },
+  stateDisplay: {
+    padding: 12,
+    borderRadius: 10,
     borderWidth: 1,
   },
 });

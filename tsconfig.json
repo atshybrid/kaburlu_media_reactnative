@@ -30,6 +30,8 @@
     "icons",
     "data",
     "types",
+    "tests",
+    "examples",
     "scripts/**/*.ts",
     ".expo/types/**/*.ts",
     "expo-env.d.ts"
@@ -52,5 +54,5 @@
     "babel.config.js",
     "metro.config.js"
   ],
-  "extends": "expo/tsconfig.base"
+  "extends": "./node_modules/expo/tsconfig.base"
 }

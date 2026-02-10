@@ -1,6 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { request } from './http';
-import { initCrashlytics, setUserId } from './crashlytics';
 
 export type Tokens = {
   jwt: string;
@@ -32,14 +31,21 @@ export async function saveTokens(t: Tokens) {
   if (t.session) items.push([SESSION_JSON_KEY, JSON.stringify(t.session)]);
   await AsyncStorage.multiSet(items);
   
-  // Set user info for Crashlytics
+  // Set user info for Crashlytics (lazy load to avoid initialization issues)
   const userId = t.user?.id || t.session?.userId || t.session?.reporter?.id;
   if (userId) {
-    setUserId(String(userId));
-    initCrashlytics(String(userId), {
-      userRole: t.session?.reporter ? 'reporter' : 'user',
-      tenantId: t.session?.tenantId || '',
-    });
+    (async () => {
+      try {
+        const { setUserId, initCrashlytics } = await import('./crashlytics');
+        await setUserId(String(userId));
+        await initCrashlytics(String(userId), {
+          userRole: t.session?.reporter ? 'reporter' : 'user',
+          tenantId: t.session?.tenantId || '',
+        });
+      } catch {
+        // Silent fail - crashlytics not critical for auth flow
+      }
+    })();
   }
 }
 

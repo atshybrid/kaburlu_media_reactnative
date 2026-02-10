@@ -2,7 +2,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import { Platform } from 'react-native';
-import { logError, logMessage } from './crashlytics';
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
@@ -18,10 +17,32 @@ const FALLBACK_DEV_URL = `http://${defaultHost}:3000`;
 
 const isDev = __DEV__ === true;
 
+// In production builds we must use the final API host. This prevents accidental
+// EAS environment overrides (or old configs) from pointing the app to a Cloudflare/
+// Render endpoint that can block mobile traffic.
+const EXPECTED_PROD_BASE_URL = 'https://api.kaburlumedia.com/api/v1';
+
+const APP_UA = (() => {
+  const v = Constants.expoConfig?.version || '0';
+  // Keep this simple and consistent so Cloudflare/WAF rules can allowlist it.
+  return `Kaburlu/${v} (${Platform.OS})`;
+})();
+
 // Resolve final base URL with sensible precedence
-const BASE_URL =
+let BASE_URL =
   EXPLICIT_URL ||
   (isDev ? (DEV_URL || FALLBACK_DEV_URL) : (PROD_URL || FALLBACK_DEV_URL));
+
+if (!isDev) {
+  try {
+    const u = new URL(String(BASE_URL));
+    if (u.host !== 'api.kaburlumedia.com') {
+      BASE_URL = EXPECTED_PROD_BASE_URL;
+    }
+  } catch {
+    BASE_URL = EXPECTED_PROD_BASE_URL;
+  }
+}
 
 export function getBaseUrl() {
   return BASE_URL;
@@ -50,10 +71,51 @@ if (DEBUG_HTTP) {
 export class HttpError extends Error {
   status: number;
   body?: any;
-  constructor(status: number, body?: any, message?: string) {
+  retryAfterMs?: number;
+  isCloudflare?: boolean;
+  constructor(status: number, body?: any, message?: string, init?: { retryAfterMs?: number; isCloudflare?: boolean }) {
     super(message || `HTTP ${status}`);
     this.status = status;
     this.body = body;
+    if (init?.retryAfterMs != null) this.retryAfterMs = init.retryAfterMs;
+    if (init?.isCloudflare != null) this.isCloudflare = init.isCloudflare;
+  }
+}
+
+function isProbablyHtml(text: string): boolean {
+  const t = text.trim().slice(0, 300).toLowerCase();
+  return t.includes('<!doctype html') || t.includes('<html') || t.includes('<head') || t.includes('<title');
+}
+
+function isCloudflareChallenge(text: string): boolean {
+  const t = text.toLowerCase();
+  return (
+    t.includes('cloudflare') ||
+    t.includes('just a moment') ||
+    t.includes('attention required') ||
+    t.includes('cf-ray') ||
+    t.includes('/cdn-cgi/')
+  );
+}
+
+function parseRetryAfterMs(retryAfterHeader: string | null): number | undefined {
+  if (!retryAfterHeader) return undefined;
+  const raw = retryAfterHeader.trim();
+  if (!raw) return undefined;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const dateMs = Date.parse(raw);
+  if (Number.isFinite(dateMs)) return Math.max(0, dateMs - Date.now());
+  return undefined;
+}
+
+function safeApiHint(): string {
+  try {
+    const u = new URL(BASE_URL);
+    const path = u.pathname && u.pathname !== '/' ? u.pathname.replace(/\/$/, '') : '';
+    return `${u.host}${path}`;
+  } catch {
+    return String(BASE_URL || '').slice(0, 80);
   }
 }
 
@@ -62,16 +124,23 @@ type ErrorListener = (error: Error | HttpError, context: { path: string; method:
 const listeners = new Set<ErrorListener>();
 export function onHttpError(listener: ErrorListener) { listeners.add(listener); return () => listeners.delete(listener); }
 function emitError(err: Error | HttpError, context: { path: string; method: HttpMethod }) {
-  // Log to Crashlytics (production only)
+  // Log to Crashlytics (production only, lazy load to avoid initialization issues)
   if (!__DEV__) {
     const status = (err as HttpError)?.status || 0;
     // Skip 404 errors from Crashlytics
     if (status !== 404) {
-      logError(err instanceof Error ? err : new Error(String(err)), {
-        path: context.path,
-        method: context.method,
-        status: String(status),
-      });
+      (async () => {
+        try {
+          const { logError } = await import('./crashlytics');
+          await logError(err instanceof Error ? err : new Error(String(err)), {
+            path: context.path,
+            method: context.method,
+            status: String(status),
+          });
+        } catch {
+          // Silent fail - crashlytics not critical for error reporting
+        }
+      })();
     }
   }
   listeners.forEach(l => l(err, context));
@@ -102,7 +171,7 @@ export async function tryRefreshJwt(): Promise<string> {
   if (!refreshToken) throw new Error('No refresh token');
   const res = await withTimeout(fetch(`${BASE_URL}/auth/refresh`, {
     method: 'POST',
-    headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+    headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'User-Agent': APP_UA },
     body: JSON.stringify({ refreshToken }),
   }));
   const text = await res.text();
@@ -133,6 +202,7 @@ export async function request<T = any>(path: string, options: { method?: HttpMet
   const headers: Record<string, string> = {
     'Accept': 'application/json',
     'Content-Type': 'application/json',
+    'User-Agent': APP_UA,
     ...(options.headers || {}),
     ...(jwt ? { Authorization: `Bearer ${jwt}` } : {}),
   };
@@ -180,6 +250,7 @@ export async function request<T = any>(path: string, options: { method?: HttpMet
       throw new Error(tagged);
     }
     const ct = res.headers.get('content-type') || '';
+    const retryAfterMs = parseRetryAfterMs(res.headers.get('retry-after'));
     const text = await res.text();
     let data: any = undefined;
     if (text) {
@@ -203,12 +274,21 @@ export async function request<T = any>(path: string, options: { method?: HttpMet
       console.log('[HTTP] ←', method, url, res.status, `${elapsed}ms`, ct || '(no-ct)', preview ? `| body: ${preview}` : '');
     }
     if (!res.ok) {
-      const message = typeof data === 'string' ? data.slice(0, 200) : (data?.message || `HTTP ${res.status}`);
-      throw new HttpError(res.status, data, message);
+      const isHtml = typeof data === 'string' && isProbablyHtml(data);
+      const isCf = isHtml && typeof data === 'string' && isCloudflareChallenge(data);
+      const message = isCf
+        ? `Request blocked by Cloudflare protection (HTTP ${res.status}) on ${safeApiHint()}. Please try again shortly.`
+        : (typeof data === 'string' ? data.slice(0, 200) : (data?.message || `HTTP ${res.status}`));
+      throw new HttpError(res.status, data, message, { retryAfterMs, isCloudflare: isCf });
     }
     // Ensure we return parsed JSON; if body isn't JSON, error out so callers can handle explicitly
     if (typeof data === 'string') {
-      throw new Error('Expected JSON response but received text');
+      const isHtml = isProbablyHtml(data);
+      const isCf = isHtml && isCloudflareChallenge(data);
+      const message = isCf
+        ? `Request returned HTML (likely Cloudflare) (HTTP ${res.status}) on ${safeApiHint()}.`
+        : 'Expected JSON response but received text';
+      throw new HttpError(res.status, data, message, { retryAfterMs, isCloudflare: isCf });
     }
     return (data as T);
   };
@@ -241,9 +321,13 @@ export async function request<T = any>(path: string, options: { method?: HttpMet
         }
       }
 
-      const transient = !isHttp || (status >= 500 && status < 600);
+      const retryAfter = isHttp ? (err as HttpError).retryAfterMs : undefined;
+      const transient = !isHttp || (status >= 500 && status < 600) || status === 408 || status === 425 || status === 429;
       if (attempt < maxRetries && transient) {
-        const backoff = 300 * Math.pow(2, attempt) + Math.random() * 200;
+        const base = retryAfter != null
+          ? Math.min(Math.max(retryAfter, 500), 15000)
+          : (300 * Math.pow(2, attempt) + Math.random() * 200);
+        const backoff = Math.min(base, 15000);
         await new Promise(r => setTimeout(r, backoff));
         attempt++;
         continue;

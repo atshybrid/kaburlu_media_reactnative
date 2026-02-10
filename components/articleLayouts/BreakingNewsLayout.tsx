@@ -13,7 +13,7 @@ import { useTabBarVisibility } from '@/context/TabBarVisibilityContext';
 import { useAutoHideBottomBar } from '@/hooks/useAutoHideBottomBar';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { useReaction } from '@/hooks/useReaction';
-import { Feather } from '@expo/vector-icons';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
@@ -25,17 +25,32 @@ import {
   StyleSheet,
   Text,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { ArticleLayoutComponent } from './types';
+import {
+  useFonts,
+  NotoSerifTelugu_700Bold,
+} from '@expo-google-fonts/noto-serif-telugu';
+import {
+  NotoSansTelugu_400Regular,
+} from '@expo-google-fonts/noto-sans-telugu';
+import { pickTitleColorTheme } from '@/constants/TitleColorRules';
 
 const BREAKING_RED = '#DC2626';
 
 const BreakingNewsLayout: ArticleLayoutComponent = ({ article, index, totalArticles }) => {
+  const [fontsLoaded] = useFonts({
+    NotoSerifTelugu_700Bold,
+    NotoSansTelugu_400Regular,
+  });
+
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { width: windowWidth } = useWindowDimensions();
 
   // Tab bar visibility
   const { isTabBarVisible, setTabBarVisible } = useTabBarVisibility();
@@ -55,10 +70,32 @@ const BreakingNewsLayout: ArticleLayoutComponent = ({ article, index, totalArtic
     }
   }, [isTabBarVisible, hide, show, setTabBarVisible]);
 
+  // Fade-in animation
+  const [fadeAnim] = useState(new Animated.Value(0));
+  
   // Pulsing animation for live indicator
   const [pulseAnim] = useState(new Animated.Value(1));
+  
+  // Slide animation for breaking banner
+  const [slideAnim] = useState(new Animated.Value(-100));
 
   useEffect(() => {
+    // Fade in content
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 400,
+      useNativeDriver: true,
+    }).start();
+
+    // Slide in banner
+    Animated.spring(slideAnim, {
+      toValue: 0,
+      tension: 50,
+      friction: 8,
+      useNativeDriver: true,
+    }).start();
+
+    // Pulse animation
     const pulse = Animated.loop(
       Animated.sequence([
         Animated.timing(pulseAnim, {
@@ -75,7 +112,7 @@ const BreakingNewsLayout: ArticleLayoutComponent = ({ article, index, totalArtic
     );
     pulse.start();
     return () => pulse.stop();
-  }, [pulseAnim]);
+  }, [pulseAnim, fadeAnim, slideAnim]);
 
   // Reactions
   const reaction = useReaction({ articleId: article.id });
@@ -107,6 +144,27 @@ const BreakingNewsLayout: ArticleLayoutComponent = ({ article, index, totalArtic
     return words.slice(0, 60).join(' ') + '…';
   }, [article.body, article.summary]);
 
+  // Telugu detection
+  const isTelugu = (text?: string) => /[\u0C00-\u0C7F]/.test(String(text || ''));
+  const isTeluguTitle = isTelugu(article.title);
+  const isTeluguBody = isTelugu(articleText);
+
+  // Word count for dynamic sizing
+  const wordCount = articleText.split(/\s+/).filter(w => w.length > 0).length;
+
+  // Dynamic sizing
+  const titleSize = 24;
+  const titleLineHeight = Math.round(titleSize * (isTeluguTitle ? 1.50 : 1.35));
+  const bodySize = 15;
+  const bodyLineHeight = Math.round(bodySize * 1.70);
+
+  // Dynamic image height based on word count
+  const imageHeight = (() => {
+    if (wordCount >= 50) return Math.round((windowWidth - 40) * 0.45);  // 45% for long articles
+    if (wordCount >= 35) return Math.round((windowWidth - 40) * 0.55);  // 55% for medium
+    return Math.round((windowWidth - 40) * 0.65);  // 65% for short articles
+  })();
+
   // Category
   const categoryName = typeof article.category === 'string' 
     ? article.category 
@@ -114,6 +172,16 @@ const BreakingNewsLayout: ArticleLayoutComponent = ({ article, index, totalArtic
 
   // Location
   const location = (article as any)?.author?.placeName || (article as any)?.placeName || '';
+
+  // Get title color theme from database tags
+  const themed = pickTitleColorTheme({ 
+    title: article.title, 
+    metaTitle: (article as any)?.metaTitle, 
+    tags: (article as any)?.tags 
+  });
+  const tagColor = themed?.primary || BREAKING_RED;
+
+  if (!fontsLoaded) return null;
 
   const onLike = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -143,54 +211,91 @@ const BreakingNewsLayout: ArticleLayoutComponent = ({ article, index, totalArtic
   };
 
   return (
-    <Pressable style={[styles.container, { backgroundColor: isDark ? '#0a0a0a' : '#fff' }]} onPress={handleScreenTap}>
-      {/* Breaking Banner */}
-      <View style={[styles.breakingBanner, { paddingTop: insets.top }]}>
-        <View style={styles.breakingInner}>
-          <Animated.View style={[styles.liveDot, { opacity: pulseAnim }]} />
-          <Text style={styles.breakingText}>BREAKING NEWS</Text>
-        </View>
-      </View>
+    <Animated.View style={[styles.wrapper, { opacity: fadeAnim, backgroundColor: '#fff' }]}>
+      <Pressable style={[styles.container, { backgroundColor: '#fff' }]} onPress={handleScreenTap}>
+        {/* Breaking Banner - Animated with tag color */}
+        <Animated.View style={[
+          styles.breakingBanner, 
+          { 
+            paddingTop: insets.top,
+            backgroundColor: tagColor,
+            transform: [{ translateY: slideAnim }]
+          }
+        ]}>
+          <View style={styles.breakingInner}>
+            <Animated.View style={[styles.liveDot, { opacity: pulseAnim }]} />
+            <Text style={styles.breakingText}>BREAKING NEWS</Text>
+            <Animated.View style={[styles.liveDot, { opacity: pulseAnim }]} />
+          </View>
+        </Animated.View>
 
-      {/* Main Content */}
-      <View style={[styles.content, { paddingBottom: insets.bottom + 70 }]}>
+      {/* Main Content - WHITE BACKGROUND */}
+      <View style={[styles.content, { paddingBottom: insets.bottom + 70, backgroundColor: '#fff' }]}>
         {/* Update timestamp and category */}
         <View style={styles.updateRow}>
-          <View style={styles.categoryBadge}>
+          <View style={[styles.categoryBadge, { backgroundColor: tagColor }]}>
             <Text style={styles.categoryText}>{categoryName.toUpperCase()}</Text>
           </View>
-          <Feather name="clock" size={13} color={BREAKING_RED} />
+          <MaterialCommunityIcons name="clock-outline" size={14} color={tagColor} />
           <Text style={styles.updateText}>{timeAgo}</Text>
           {location && (
             <>
               <View style={styles.updateDot} />
+              <MaterialCommunityIcons name="map-marker" size={13} color="#64748B" />
               <Text style={styles.locationText} numberOfLines={1}>{location}</Text>
             </>
           )}
         </View>
 
-        {/* Headline */}
-        <Text style={[styles.headline, { color: isDark ? '#fff' : '#1a1a1a' }]} numberOfLines={3}>
+        {/* Headline - WHITE BACKGROUND with tag color accent */}
+        <Text 
+          style={[
+            styles.headline, 
+            { 
+              color: '#0F172A',
+              fontSize: titleSize,
+              lineHeight: titleLineHeight,
+              backgroundColor: '#fff',
+            },
+            isTeluguTitle && { fontFamily: 'NotoSerifTelugu_700Bold' },
+          ]} 
+          numberOfLines={3}
+        >
           {article.title}
         </Text>
 
-        {/* Image */}
+        {/* Image - Dynamic height based on word count */}
         {imageUrl && (
           <View style={styles.imageContainer}>
-            <Image source={{ uri: imageUrl }} style={styles.image} contentFit="cover" />
-            <View style={styles.liveTag}>
+            <Image 
+              source={{ uri: imageUrl }} 
+              style={[styles.image, { height: imageHeight }]} 
+              contentFit="cover" 
+            />
+            <View style={[styles.liveTag, { backgroundColor: tagColor }]}>
               <Animated.View style={[styles.liveTagDot, { opacity: pulseAnim }]} />
               <Text style={styles.liveTagText}>LIVE</Text>
             </View>
           </View>
         )}
 
-        {/* Article Text */}
+        {/* Article Text - WHITE BACKGROUND with tag color border */}
         <View style={[styles.articleTextSection, { 
-          backgroundColor: isDark ? '#1a1a1a' : '#fafafa',
-          borderLeftColor: BREAKING_RED
+          backgroundColor: '#F1F5F9',
+          borderLeftColor: tagColor
         }]}>
-          <Text style={[styles.articleText, { color: isDark ? '#ddd' : '#333' }]} numberOfLines={8}>
+          <Text 
+            style={[
+              styles.articleText, 
+              { 
+                color: '#334155',
+                fontSize: bodySize,
+                lineHeight: bodyLineHeight,
+              },
+              isTeluguBody && { fontFamily: 'NotoSansTelugu_400Regular' },
+            ]} 
+            numberOfLines={10}
+          >
             {articleText}
           </Text>
         </View>
@@ -199,66 +304,69 @@ const BreakingNewsLayout: ArticleLayoutComponent = ({ article, index, totalArtic
         <View style={styles.flexSpacer} />
 
         {/* Counter and source - always at bottom */}
-        <View style={[styles.bottomRow, { borderTopColor: isDark ? '#333' : '#eee' }]}>
-          <Text style={[styles.sourceText, { color: isDark ? '#666' : '#999' }]}>
+        <View style={[styles.bottomRow, { borderTopColor: '#eee' }]}>
+          <Text style={[styles.sourceText, { color: '#999' }]}>
             {article.publisherName || 'Kaburlu News'}
           </Text>
-          <Text style={[styles.counterText, { color: isDark ? '#444' : '#bbb' }]}>
+          <Text style={[styles.counterText, { color: '#bbb' }]}>
             {index + 1} / {totalArticles}
           </Text>
         </View>
       </View>
 
-      {/* Footer */}
+      {/* Footer with tag color */}
       <View style={[styles.footer, { 
-        backgroundColor: isDark ? '#0a0a0a' : '#fff',
-        borderTopColor: BREAKING_RED,
+        backgroundColor: '#fff',
+        borderTopColor: tagColor,
         paddingBottom: insets.bottom + 8
       }]}>
         <Pressable style={styles.footerBtn} onPress={onLike}>
-          <Feather 
-            name="heart" 
-            size={20} 
-            color={isLiked ? BREAKING_RED : (isDark ? '#888' : '#666')} 
+          <MaterialCommunityIcons
+            name={isLiked ? 'heart' : 'heart-outline'}
+            size={22} 
+            color={isLiked ? tagColor : '#94A3B8'} 
           />
-          <Text style={[styles.footerBtnText, { color: isDark ? '#888' : '#666' }]}>
+          <Text style={[styles.footerBtnText, { color: '#94A3B8' }]}>
             {likeCount || ''}
           </Text>
         </Pressable>
         
         <Pressable style={styles.footerBtn} onPress={onComment}>
-          <Feather name="message-circle" size={20} color={isDark ? '#888' : '#666'} />
+          <MaterialCommunityIcons name="comment-outline" size={22} color='#94A3B8' />
         </Pressable>
         
-        <Pressable style={[styles.followBtn]}>
-          <Feather name="bell" size={14} color="#fff" />
+        <Pressable style={[styles.followBtn, { backgroundColor: tagColor }]}>
+          <MaterialCommunityIcons name="bell" size={16} color="#fff" />
           <Text style={styles.followBtnText}>Follow</Text>
         </Pressable>
         
         <Pressable style={styles.footerBtn} onPress={onShare}>
-          <Feather name="share" size={20} color={isDark ? '#888' : '#666'} />
+          <MaterialCommunityIcons name="share-variant" size={22} color='#94A3B8' />
         </Pressable>
       </View>
     </Pressable>
+    </Animated.View>
   );
 };
 
 const styles = StyleSheet.create({
+  wrapper: {
+    flex: 1,
+  },
   container: {
     flex: 1,
   },
 
-  // Breaking Banner
+  // Breaking Banner - Animated
   breakingBanner: {
-    backgroundColor: BREAKING_RED,
-    paddingBottom: 8,
+    paddingBottom: 10,
   },
   breakingInner: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 10,
-    paddingVertical: 6,
+    gap: 12,
+    paddingVertical: 8,
   },
   liveDot: {
     width: 8,
@@ -268,37 +376,36 @@ const styles = StyleSheet.create({
   },
   breakingText: {
     color: '#fff',
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '900',
-    letterSpacing: 2,
+    letterSpacing: 2.5,
   },
 
   // Main content
   content: {
     flex: 1,
     paddingHorizontal: 20,
-    paddingTop: 12,
+    paddingTop: 24,
   },
 
   // Update row
   updateRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 10,
+    marginBottom: 14,
     gap: 8,
     flexWrap: 'wrap',
   },
   categoryBadge: {
-    backgroundColor: BREAKING_RED,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
   },
   categoryText: {
     color: '#fff',
     fontSize: 10,
     fontWeight: '800',
-    letterSpacing: 0.5,
+    letterSpacing: 0.8,
   },
   updateText: {
     color: BREAKING_RED,
@@ -309,69 +416,67 @@ const styles = StyleSheet.create({
     width: 3,
     height: 3,
     borderRadius: 2,
-    backgroundColor: '#999',
+    backgroundColor: '#94A3B8',
     marginHorizontal: 4,
   },
   locationText: {
-    color: '#888',
+    color: '#64748B',
     fontSize: 12,
     flex: 1,
   },
 
-  // Headline
+  // Headline - Beautiful styling
   headline: {
-    fontSize: 22,
     fontWeight: '900',
-    lineHeight: 28,
-    marginBottom: 14,
+    marginBottom: 16,
+    letterSpacing: -0.5,
+    paddingVertical: 8,
   },
 
-  // Image
+  // Image - Dynamic height
   imageContainer: {
-    marginBottom: 14,
-    borderRadius: 8,
+    marginBottom: 16,
+    borderRadius: 12,
     overflow: 'hidden',
     position: 'relative',
   },
   image: {
     width: '100%',
-    aspectRatio: 16 / 9,
-    backgroundColor: '#222',
+    backgroundColor: '#1E293B',
   },
   liveTag: {
     position: 'absolute',
-    top: 10,
-    left: 10,
-    backgroundColor: BREAKING_RED,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
+    top: 12,
+    left: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
+    gap: 6,
   },
   liveTagDot: {
-    width: 5,
-    height: 5,
+    width: 6,
+    height: 6,
     borderRadius: 3,
     backgroundColor: '#fff',
   },
   liveTagText: {
     color: '#fff',
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '800',
+    letterSpacing: 0.5,
   },
 
   // Article Text Section
   articleTextSection: {
     padding: 16,
-    borderRadius: 8,
+    borderRadius: 10,
     borderLeftWidth: 4,
     marginBottom: 12,
   },
   articleText: {
-    fontSize: 15,
-    lineHeight: 24,
+    letterSpacing: 0.2,
   },
 
   // Flex spacer
@@ -387,7 +492,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
     paddingTop: 10,
     borderTopWidth: 1,
-    borderTopColor: '#333',
+    borderTopColor: '#E2E8F0',
   },
   sourceText: {
     fontSize: 12,
@@ -407,7 +512,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-around',
     alignItems: 'center',
-    paddingVertical: 10,
+    paddingVertical: 12,
     borderTopWidth: 3,
   },
   footerBtn: {
@@ -423,11 +528,10 @@ const styles = StyleSheet.create({
   followBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    backgroundColor: BREAKING_RED,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 18,
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
   },
   followBtnText: {
     color: '#fff',

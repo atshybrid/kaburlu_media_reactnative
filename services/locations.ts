@@ -1,6 +1,6 @@
 import { request } from './http';
 
-export type CombinedLocationType = 'STATE' | 'DISTRICT' | 'MANDAL' | 'VILLAGE' | string;
+export type CombinedLocationType = 'STATE' | 'DISTRICT' | 'ASSEMBLY' | 'MANDAL' | 'VILLAGE' | string;
 
 export type CombinedLocationMatch = {
   id: string;
@@ -13,6 +13,7 @@ export type CombinedLocationItem = {
   match: CombinedLocationMatch;
   state: CombinedLocationMatch | null;
   district: CombinedLocationMatch | null;
+  assemblyConstituency?: CombinedLocationMatch | null;
   mandal: CombinedLocationMatch | null;
   village: CombinedLocationMatch | null;
 };
@@ -70,4 +71,82 @@ export async function requestAddLocation(
       languageCode: languageCode || 'te',
     }),
   });
+}
+
+export type SmartAddLocationRequest = {
+  areaName: string;
+  stateName: string;
+  languageCode: string;
+  forceType: 'mandal' | 'village' | 'town';
+  parentDistrictName?: string;
+  parentDistrictId?: string;
+};
+
+export type SmartAddLocationResponse = {
+  success: boolean;
+  type: 'mandal' | 'village' | 'town' | 'district' | 'state';
+  location: {
+    id: string;
+    name: string;
+    districtId?: string;
+    stateId?: string;
+    translations: Array<{
+      id: string;
+      language: string;
+      name: string;
+    }>;
+    district?: {
+      id: string;
+      name: string;
+      stateId: string;
+    };
+    state?: {
+      id: string;
+      name: string;
+    };
+  };
+  translation?: {
+    id: string;
+    language: string;
+    name: string;
+  };
+  aiDetected: boolean;
+};
+
+/**
+ * Smart add location - creates location immediately with AI assistance
+ * Returns the created location that can be used right away
+ */
+export async function smartAddLocation(
+  params: SmartAddLocationRequest
+): Promise<SmartAddLocationResponse> {
+  return await request<SmartAddLocationResponse>('/location/smart-add', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+}
+
+/**
+ * Search for districts by name
+ */
+export async function searchDistricts(
+  query: string,
+  stateId?: string,
+  limit = 20
+): Promise<SearchCombinedLocationsResponse> {
+  const sp = new URLSearchParams();
+  sp.set('q', query);
+  sp.set('limit', String(limit));
+  sp.set('type', 'DISTRICT');
+  if (stateId) sp.set('stateId', stateId);
+  
+  try {
+    return await request<SearchCombinedLocationsResponse>(`/locations/search-combined?${sp.toString()}`);
+  } catch (e: any) {
+    if (e?.status === 404) {
+      return { q: query, count: 0, items: [] };
+    }
+    throw e;
+  }
 }

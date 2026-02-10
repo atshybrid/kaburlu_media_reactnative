@@ -1,6 +1,7 @@
 import AppLockGate from '@/components/AppLockGate';
 import LoginBottomSheet from '@/components/LoginBottomSheet';
 import Toast from '@/components/Toast';
+import ErrorBoundary from '@/components/ErrorBoundary';
 import { initCrashlytics } from '@/services/crashlytics';
 import { checkForAppUpdates } from '@/services/appUpdates';
 import { ensureFirebaseAuthAsync, isFirebaseConfigComplete, logFirebaseGoogleAlignment } from '@/services/firebaseClient';
@@ -26,24 +27,23 @@ import { useColorScheme } from '../hooks/useColorScheme';
 // Suppress expo-keep-awake activation errors (expo-video compatibility issue)
 LogBox.ignoreLogs(['Unable to activate keep awake']);
 
-// Keep native splash visible until splash screen video first frame is ready
-SplashScreen.preventAutoHideAsync().catch(() => {});
+// Hide native splash immediately - we show our own multi-language animated splash
+SplashScreen.hideAsync().catch(() => {});
 
 // Setup notification listeners early to catch notification clicks
 // even when app is opened from quit state
 setupNotificationListeners();
-
-// Initialize Crashlytics for crash reporting
-initCrashlytics();
 
 // Custom Header Component
 const CustomHeader = () => {
   return (
     <View style={styles.headerContainer}>
       <Text style={styles.headerText}>
-        Choose your preferred <Text style={styles.boldText}>language</Text>
+        Choose your preferred <Text style={styles.boldText}>language</Text> to read the <Text style={styles.boldText}>news</Text>
         {'\n'}
-        to read the <Text style={styles.boldText}>news</Text>
+        మీకు ఇష్టమైన <Text style={styles.boldText}>భాష</Text> ఎంచుకోండి
+        {'\n'}
+        अपनी पसंदीदा <Text style={styles.boldText}>भाषा</Text> चुनें
       </Text>
     </View>
   );
@@ -81,6 +81,9 @@ function ThemedApp() {
   React.useEffect(() => {
     (async () => {
       try {
+        // Initialize Crashlytics first
+        await initCrashlytics();
+        
         if (isFirebaseConfigComplete()) {
           const auth = await ensureFirebaseAuthAsync();
           console.log('[AUTH_INIT] Layout ensured auth (async)', { appId: auth.app.options.appId, hasUser: !!auth.currentUser });
@@ -193,7 +196,7 @@ function ThemedApp() {
                   animationTypeForReplace: 'push',
                 }}
               >
-              <Stack.Screen name="splash" options={{ animation: 'none', contentStyle: { backgroundColor: '#000000' } }} />
+              <Stack.Screen name="splash" options={{ animation: 'none', contentStyle: { backgroundColor: '#FFFFFF' } }} />
               <Stack.Screen
                 name="language"
                 options={{
@@ -258,11 +261,13 @@ function ThemedApp() {
 
 export default function RootLayout() {
   return (
-    <ThemeProviderLocal>
-      <UiPrefsProvider>
-        <ThemedApp />
-      </UiPrefsProvider>
-    </ThemeProviderLocal>
+    <ErrorBoundary>
+      <ThemeProviderLocal>
+        <UiPrefsProvider>
+          <ThemedApp />
+        </UiPrefsProvider>
+      </ThemeProviderLocal>
+    </ErrorBoundary>
   );
 }
 
@@ -272,7 +277,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 15,
     paddingBottom: 10,
     justifyContent: 'center',
-    height: 110,
+    height: 140,
     shadowColor: '#000',
     shadowOffset: {
       width: 0,

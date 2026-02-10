@@ -19,7 +19,7 @@
     <key>CFBundlePackageType</key>
     <string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>1.1.1</string>
     <key>CFBundleSignature</key>
     <string>????</string>
     <key>CFBundleURLTypes</key>
@@ -52,23 +52,27 @@
       <true/>
     </dict>
     <key>NSCameraUsageDescription</key>
-    <string>Allow kaburlu to use your camera to capture photos and videos for your news posts.</string>
+    <string>kaburlu needs camera access to capture photos and videos for your news posts.</string>
     <key>NSFaceIDUsageDescription</key>
     <string>Allow $(PRODUCT_NAME) to use Face ID for secure app access.</string>
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+    <string>Allow $(PRODUCT_NAME) to access your location</string>
+    <key>NSLocationAlwaysUsageDescription</key>
+    <string>Allow $(PRODUCT_NAME) to access your location</string>
     <key>NSLocationWhenInUseUsageDescription</key>
     <string>kaburlu needs your location to tag news articles with your current place. This helps readers find local news in their area.</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Allow kaburlu to record audio with your videos for news posts.</string>
+    <string>kaburlu needs microphone access to record audio with your videos.</string>
     <key>NSPhotoLibraryAddUsageDescription</key>
     <string>Allow $(PRODUCT_NAME) to save photos</string>
     <key>NSPhotoLibraryUsageDescription</key>
-    <string>Allow kaburlu to access your photos to attach media to your posts.</string>
+    <string>kaburlu needs access to your photos to attach images and videos to your news posts.</string>
     <key>NSUserActivityTypes</key>
     <array>
       <string>$(PRODUCT_BUNDLE_IDENTIFIER).expo.index_route</string>
     </array>
     <key>RCTNewArchEnabled</key>
-    <false/>
+    <true/>
     <key>UILaunchStoryboardName</key>
     <string>SplashScreen</string>
     <key>UIRequiredDeviceCapabilities</key>

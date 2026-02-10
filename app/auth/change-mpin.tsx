@@ -8,6 +8,7 @@
 
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { changeMpin } from '@/services/api';
+import { loadTokens } from '@/services/auth';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -17,6 +18,7 @@ import React, { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
+  Keyboard,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -94,12 +96,27 @@ export default function ChangeMpinScreen() {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setSuccess(true);
 
-      // Navigate to appropriate destination after short delay
-      setTimeout(() => {
-        if (params.from === 'post') {
+      // Navigate to role-based dashboard after short delay
+      setTimeout(async () => {
+        try {
+          // Get session to determine user role
+          const tokens = await loadTokens();
+          const session: any = (tokens as any)?.session;
+          const role = session?.role;
+
+          // Route based on role
+          if (role === 'TENANT_ADMIN') {
+            router.replace('/tenant/dashboard');
+          } else if (role === 'REPORTER') {
+            router.replace('/reporter/dashboard');
+          } else {
+            // Fallback to explore if role unknown
+            router.replace('/explore');
+          }
+        } catch (err) {
+          console.error('[ChangeMpin] Failed to load session:', err);
+          // Fallback to explore on error
           router.replace('/explore');
-        } else {
-          router.replace('/news');
         }
       }, 2000);
     } catch (e: any) {
@@ -109,7 +126,7 @@ export default function ChangeMpinScreen() {
     } finally {
       setChanging(false);
     }
-  }, [params.mobile, params.oldMpin, params.from, newMpin, confirmMpin, router]);
+  }, [params.mobile, params.oldMpin, newMpin, confirmMpin, router]);
 
   // Success state
   if (success) {
@@ -181,10 +198,18 @@ export default function ChangeMpinScreen() {
               ref={newMpinRef}
               style={[styles.mpinInput, { backgroundColor: isDark ? '#1e293b' : '#f1f5f9', color: textColor, borderColor }]}
               value={newMpin}
-              onChangeText={(t) => { setNewMpin(t.replace(/\D/g, '').slice(0, 4)); setError(null); }}
+              onChangeText={(t) => { 
+                const cleaned = t.replace(/\D/g, '').slice(0, 4);
+                setNewMpin(cleaned); 
+                setError(null);
+                // Auto-move to confirm after 4 digits
+                if (cleaned.length === 4) {
+                  setTimeout(() => confirmMpinRef.current?.focus(), 100);
+                }
+              }}
               keyboardType="number-pad"
               maxLength={4}
-              placeholder="••••"
+              placeholder=""
               placeholderTextColor={mutedColor}
               secureTextEntry
               autoFocus
@@ -200,10 +225,24 @@ export default function ChangeMpinScreen() {
               ref={confirmMpinRef}
               style={[styles.mpinInput, { backgroundColor: isDark ? '#1e293b' : '#f1f5f9', color: textColor, borderColor }]}
               value={confirmMpin}
-              onChangeText={(t) => { setConfirmMpin(t.replace(/\D/g, '').slice(0, 4)); setError(null); }}
+              onChangeText={(t) => { 
+                const cleaned = t.replace(/\D/g, '').slice(0, 4);
+                setConfirmMpin(cleaned); 
+                setError(null);
+                // Auto-submit after 4 digits - validate directly before submit
+                if (cleaned.length === 4 && newMpin.length === 4) {
+                  // Check match immediately with actual values
+                  if (cleaned !== newMpin) {
+                    setError('MPIN లు సరిపోలలేదు');
+                    return;
+                  }
+                  Keyboard.dismiss();
+                  setTimeout(() => handleChangeMpin(), 300);
+                }
+              }}
               keyboardType="number-pad"
               maxLength={4}
-              placeholder="••••"
+              placeholder=""
               placeholderTextColor={mutedColor}
               secureTextEntry
               returnKeyType="done"
@@ -338,7 +377,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     fontSize: 24,
     fontWeight: '700',
-    textAlign: 'center',
+    textAlign: 'left',
     letterSpacing: 8,
   },
   button: {

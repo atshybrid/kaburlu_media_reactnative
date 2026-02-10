@@ -368,3 +368,31 @@ export async function scheduleLocalTestNotification(seconds = 3) {
 		console.warn('[NOTIF] schedule local failed', e instanceof Error ? e.message : e);
 	}
 }
+
+/**
+ * Get and display push token for testing
+ * Usage: In console, call this function to get the token for backend testing
+ */
+export async function getPushTokenForTesting(): Promise<string | undefined> {
+	try {
+		const token = await getCurrentPushToken();
+		if (token) {
+			console.log('\n\n');
+			console.log('═══════════════════════════════════════════════════════════');
+			console.log('📱 PUSH NOTIFICATION TOKEN FOR TESTING:');
+			console.log('═══════════════════════════════════════════════════════════');
+			console.log(token);
+			console.log('═══════════════════════════════════════════════════════════');
+			console.log('Copy this token and use it in your backend API call');
+			console.log('\n\n');
+			return token;
+		} else {
+			console.log('[NOTIF TEST] No token available yet. Make sure notifications are enabled.');
+			return undefined;
+		}
+	} catch (e) {
+		console.warn('[NOTIF TEST] Failed to get token:', e);
+		return undefined;
+	}
+}
+

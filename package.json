@@ -1,7 +1,12 @@
 {
   "name": "kaburlu",
+  "packageManager": "npm@10.9.3",
+  "engines": {
+    "node": "20.x",
+    "npm": "10.x"
+  },
   "main": "expo-router/entry",
-  "version": "1.0.0",
+  "version": "1.1.5",
   "scripts": {
     "agent:smoke": "node ./scripts/agent-smoke.test.mjs",
     "start": "expo start",
@@ -16,11 +21,19 @@
     "lint": "expo lint",
     "clean:win": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"Remove-Item -Recurse -Force node_modules; Remove-Item -Force package-lock.json -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force .\\node_modules\\.cache\\* -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force $env:TEMP\\metro-cache-* -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force $env:TEMP\\haste-map-* -ErrorAction SilentlyContinue; echo 'Clean complete. Run npm install and then npx expo run:android';\"",
     "android:apk:release": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/use-jdk17.ps1 -- ./android/gradlew.bat assembleRelease --no-daemon --stacktrace --console=plain",
-    "android:bundle:release": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/use-jdk17.ps1 -- ./android/gradlew.bat bundleRelease --no-daemon --stacktrace --console=plain"
+    "android:bundle:release": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/use-jdk17.ps1 -- ./android/gradlew.bat bundleRelease --no-daemon --stacktrace --console=plain",
+    "version:patch": "node ./scripts/bump-version.mjs patch",
+    "version:minor": "node ./scripts/bump-version.mjs minor",
+    "version:major": "node ./scripts/bump-version.mjs major",
+    "build:android": "npm run version:patch && eas build --platform android --profile production",
+    "build:ios": "npm run version:patch && eas build --platform ios --profile production",
+    "build:all": "npm run version:patch && eas build --platform all --profile production"
   },
   "dependencies": {
     "@expo-google-fonts/anek-telugu": "^0.4.1",
     "@expo-google-fonts/mandali": "^0.4.1",
+    "@expo-google-fonts/noto-sans-telugu": "^0.4.2",
+    "@expo-google-fonts/noto-serif-telugu": "^0.4.2",
     "@expo-google-fonts/ramabhadra": "^0.4.0",
     "@expo/metro-runtime": "~6.1.2",
     "@expo/ngrok": "^4.1.3",
@@ -39,12 +52,12 @@
     "body-parser": "^2.2.2",
     "dotenv": "^16.6.1",
     "expo": "~54.0.7",
-    "expo-auth-session": "^5.5.2",
+    "expo-auth-session": "~7.0.10",
     "expo-av": "~16.0.8",
     "expo-blur": "~15.0.7",
     "expo-clipboard": "~8.0.7",
     "expo-constants": "~18.0.8",
-    "expo-crypto": "~13.0.2",
+    "expo-crypto": "~15.0.8",
     "expo-dev-client": "~6.0.12",
     "expo-file-system": "~19.0.21",
     "expo-font": "~14.0.8",
@@ -54,7 +67,7 @@
     "expo-keep-awake": "~15.0.7",
     "expo-linear-gradient": "~15.0.7",
     "expo-linking": "~8.0.8",
-    "expo-local-authentication": "~14.0.1",
+    "expo-local-authentication": "~17.0.8",
     "expo-location": "~19.0.7",
     "expo-media-library": "~18.2.1",
     "expo-notifications": "~0.32.11",

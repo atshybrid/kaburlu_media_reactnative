@@ -1534,6 +1534,7 @@ export const registerGuestUser = async (data: { languageId: string; deviceDetail
       const json = await request<{ success?: boolean; data?: any }>(`/auth/guest`, {
         method: 'POST',
         body,
+        noAuth: true,
       });
       const payload = json?.data ?? (json as any);
       const expiresIn: number | undefined = payload?.expiresInSec ?? payload?.expiresIn;
@@ -1552,6 +1553,8 @@ export const registerGuestUser = async (data: { languageId: string; deviceDetail
       const body = (err as any)?.body;
       const serverMsg = body?.message || body?.error || err?.message;
       console.warn('Guest registration attempt failed', { attempt: label, status, message: serverMsg });
+      // Cloudflare/WAF responses are not schema-related; don't try other payload variants.
+      if ((status === 429 || status === 403) && String(serverMsg || '').toLowerCase().includes('cloudflare')) break;
       // Only retry on validation-ish 400 errors; otherwise break early
       if (!(status === 400 || status === 422)) break;
       // If this was the last attempt we'll surface below

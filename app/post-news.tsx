@@ -338,7 +338,7 @@ async function aiHeadlines(opts: { mainTitle: string; bullets?: string[]; maxTit
 }
 
 async function aiRewriteNews(opts: { rawText: string; jwt?: string; model: string }): Promise<AiRewriteResponse> {
-  const url = 'https://app.kaburlumedia.com/api/v1/ainewspaper_rewrite';
+  const url = `${getBaseUrl()}/ainewspaper_rewrite`;
   const headers: Record<string, string> = {
     Accept: 'application/json',
     'Content-Type': 'application/json',

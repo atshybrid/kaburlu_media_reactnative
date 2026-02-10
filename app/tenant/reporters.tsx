@@ -2,7 +2,13 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { loadTokens } from '@/services/auth';
-import { getTenantReporters, type TenantReporter } from '@/services/reporters';
+import { 
+  getTenantReporters, 
+  deleteReporter,
+  toggleReporterActive,
+  type TenantReporter,
+  type ReporterLevel,
+} from '@/services/reporters';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useMemo, useRef, useState } from 'react';
@@ -15,6 +21,10 @@ import {
     Text,
     TextInput,
     View,
+    Modal,
+    TouchableOpacity,
+    ActivityIndicator,
+    Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -95,6 +105,11 @@ export default function TenantReportersScreen() {
   const [kycFilter, setKycFilter] = useState<string | null>(() => params.kycFilter || null);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
+  /* ── Reporter Management Modals ── */
+  const [selectedReporter, setSelectedReporter] = useState<TenantReporter | null>(null);
+  const [deleteModalVisible, setDeleteModalVisible] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
+
   /* ── Load data ── */
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -139,6 +154,74 @@ export default function TenantReportersScreen() {
     },
     [router],
   );
+
+  /* ── Reporter Management Actions ── */
+  
+  const handleDeletePress = useCallback((reporter: TenantReporter) => {
+    setSelectedReporter(reporter);
+    setDeleteModalVisible(true);
+  }, []);
+
+  const handleTransferPress = useCallback((reporter: TenantReporter) => {
+    // Navigate to transfer screen instead of showing modal
+    (router.push as any)({
+      pathname: '/tenant/transfer-reporter',
+      params: {
+        reporterId: reporter.id,
+        reporterName: reporter.fullName || 'Reporter',
+        currentDesignationId: reporter.designationId || '',
+      }
+    });
+  }, [router]);
+
+  const confirmDelete = useCallback(async () => {
+    if (!tenantId || !selectedReporter) return;
+    
+    setActionLoading(true);
+    try {
+      await deleteReporter(tenantId, selectedReporter.id);
+      
+      // Remove from list
+      setReporters(prev => prev.filter(r => r.id !== selectedReporter.id));
+      
+      setDeleteModalVisible(false);
+      setSelectedReporter(null);
+      
+      Alert.alert('విజయవంతం', 'రిపోర్టర్ తొలగించబడింది');
+    } catch (e: any) {
+      const msg = e?.message || '';
+      if (msg.includes('cannot delete') || msg.includes('yourself')) {
+        Alert.alert('తప్పు', 'మీరు మీ స్వంత ప్రొఫైల్‌ని తొలగించలేరు');
+      } else {
+        Alert.alert('తప్పు', msg || 'తొలగించడం విఫలమైంది. మళ్ళీ ప్రయత్నించండి.');
+      }
+    } finally {
+      setActionLoading(false);
+    }
+  }, [tenantId, selectedReporter]);
+
+  const confirmDeactivate = useCallback(async () => {
+    if (!tenantId || !selectedReporter) return;
+    
+    setActionLoading(true);
+    try {
+      await toggleReporterActive(tenantId, selectedReporter.id, false);
+      
+      // Update in list
+      setReporters(prev => prev.map(r => 
+        r.id === selectedReporter.id ? { ...r, active: false } : r
+      ));
+      
+      setDeleteModalVisible(false);
+      setSelectedReporter(null);
+      
+      Alert.alert('విజయవంతం', 'రిపోర్టర్ డీయాక్టివేట్ చేయబడింది');
+    } catch (e: any) {
+      Alert.alert('తప్పు', e?.message || 'డీయాక్టివేట్ చేయడం విఫలమైంది');
+    } finally {
+      setActionLoading(false);
+    }
+  }, [tenantId, selectedReporter]);
 
   /* ── Filtering ── */
   const designationCounts = useMemo(() => {
@@ -343,6 +426,8 @@ export default function TenantReportersScreen() {
               item={item}
               scheme={scheme}
               onOpen={() => openReporter(item.id)}
+              onDelete={() => handleDeletePress(item)}
+              onTransfer={() => handleTransferPress(item)}
             />
           )}
           onEndReachedThreshold={0.4}
@@ -375,6 +460,68 @@ export default function TenantReportersScreen() {
           <MaterialIcons name="person-add" size={24} color="#fff" />
         </Pressable>
       )}
+
+      {/* Delete Confirmation Modal */}
+      <Modal
+        visible={deleteModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !actionLoading && setDeleteModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.confirmModal, { backgroundColor: c.card }]}>
+            <View style={[styles.confirmIcon, { backgroundColor: '#FEE2E2' }]}>
+              <MaterialIcons name="delete-outline" size={40} color="#DC2626" />
+            </View>
+            
+            <Text style={[styles.confirmTitle, { color: c.text }]}>రిపోర్టర్ తొలగించాలా?</Text>
+            <Text style={[styles.confirmSubtitle, { color: c.muted }]}>
+              {selectedReporter?.fullName || 'Reporter'}
+            </Text>
+            
+            <Text style={[styles.confirmWarning, { color: '#92400E', backgroundColor: '#FEF3C7' }]}>
+              ⚠️ డిలీట్ చేస్తే మొబైల్ నంబర్ విడుదల అవుతుంది. కానీ పోస్ట్ హిస్టరీ ఉంటుంది.
+            </Text>
+            
+            <Text style={[styles.confirmHint, { color: c.muted }]}>
+              💡 బదులుగా డీయాక్టివేట్ చేయండి - డేటా సేఫ్‌గా ఉంటుంది
+            </Text>
+
+            {actionLoading ? (
+              <View style={styles.confirmActions}>
+                <ActivityIndicator size="large" color={PRIMARY_COLOR} />
+                <Text style={{ color: c.muted, marginTop: 8 }}>దయచేసి వేచి ఉండండి...</Text>
+              </View>
+            ) : (
+              <View style={styles.confirmActions}>
+                <TouchableOpacity
+                  style={[styles.confirmBtn, { backgroundColor: '#F59E0B' }]}
+                  onPress={confirmDeactivate}
+                >
+                  <MaterialIcons name="pause-circle-outline" size={20} color="#fff" />
+                  <Text style={styles.confirmBtnText}>డీయాక్టివేట్</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.confirmBtn, { backgroundColor: '#DC2626' }]}
+                  onPress={confirmDelete}
+                >
+                  <MaterialIcons name="delete-forever" size={20} color="#fff" />
+                  <Text style={styles.confirmBtnText}>తొలగించు</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.confirmBtn, styles.confirmBtnCancel, { borderColor: c.border }]}
+                  onPress={() => setDeleteModalVisible(false)}
+                >
+                  <Text style={{ color: c.text, fontWeight: '600' }}>రద్దు</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
+
     </SafeAreaView>
   );
 }
@@ -385,12 +532,18 @@ function ReporterCard({
   item,
   scheme,
   onOpen,
+  onDelete,
+  onTransfer,
 }: {
   item: TenantReporter;
   scheme: 'light' | 'dark';
   onOpen: () => void;
+  onDelete?: () => void;
+  onTransfer?: () => void;
 }) {
   const c = Colors[scheme];
+  const [menuVisible, setMenuVisible] = useState(false);
+  
   const name = item.fullName || 'Unknown';
   const mobile = item.mobileNumber || '—';
   const designation = item.designation?.name || 'Reporter';
@@ -406,42 +559,121 @@ function ReporterCard({
   const subActive = !!item.subscriptionActive;
 
   return (
-    <Pressable
-      onPress={onOpen}
-      android_ripple={{ color: c.border }}
-      style={({ pressed }) => [
-        styles.card,
-        { backgroundColor: c.card, borderColor: c.border },
-        pressed && styles.cardPressed,
-      ]}
-    >
-      {/* Avatar */}
-      <View style={[styles.avatar, { backgroundColor: levelMeta.color + '20', borderColor: levelMeta.color }]}>
-        {item.profilePhotoUrl ? (
-          <Image source={{ uri: item.profilePhotoUrl }} style={styles.avatarImg} resizeMode="cover" />
-        ) : (
-          <Text style={{ color: levelMeta.color, fontSize: 20, fontWeight: '700' }}>
-            {initials(name)}
+    <View style={styles.cardWrapper}>
+      <Pressable
+        onPress={onOpen}
+        android_ripple={{ color: c.border }}
+        style={({ pressed }) => [
+          styles.card,
+          { backgroundColor: c.card, borderColor: c.border },
+          pressed && styles.cardPressed,
+        ]}
+      >
+        {/* Avatar */}
+        <View style={[styles.avatar, { backgroundColor: levelMeta.color + '20', borderColor: levelMeta.color }]}>
+          {item.profilePhotoUrl ? (
+            <Image source={{ uri: item.profilePhotoUrl }} style={styles.avatarImg} resizeMode="cover" />
+          ) : (
+            <Text style={{ color: levelMeta.color, fontSize: 20, fontWeight: '700' }}>
+              {initials(name)}
+            </Text>
+          )}
+        </View>
+
+        {/* Content */}
+        <View style={styles.cardContent}>
+          <Text style={[styles.cardName, { color: c.text }]} numberOfLines={1}>
+            {name}
           </Text>
-        )}
-      </View>
+          <Text style={[styles.cardSub, { color: c.muted }]} numberOfLines={1}>
+            {designation} • {location}
+          </Text>
+          <Text style={[styles.cardPhone, { color: c.text }]}>📞 {mobile}</Text>
+        </View>
 
-      {/* Content */}
-      <View style={styles.cardContent}>
-        <Text style={[styles.cardName, { color: c.text }]} numberOfLines={1}>
-          {name}
-        </Text>
-        <Text style={[styles.cardSub, { color: c.muted }]} numberOfLines={1}>
-          {designation} • {location}
-        </Text>
-        <Text style={[styles.cardPhone, { color: c.text }]}>📞 {mobile}</Text>
-      </View>
+        {/* Status indicator */}
+        <View style={[styles.statusDot, { backgroundColor: subActive ? '#10B981' : '#EF4444' }]} />
+        
+        {/* More Menu */}
+        <Pressable
+          onPress={(e) => {
+            e.stopPropagation();
+            setMenuVisible(true);
+          }}
+          style={({ pressed }) => [
+            styles.moreBtn,
+            pressed && { opacity: 0.5 }
+          ]}
+          hitSlop={8}
+        >
+          <MaterialIcons name="more-vert" size={24} color={c.muted} />
+        </Pressable>
+      </Pressable>
 
-      {/* Status indicator */}
-      <View style={[styles.statusDot, { backgroundColor: subActive ? '#10B981' : '#EF4444' }]} />
-      
-      <MaterialIcons name="chevron-right" size={24} color={c.muted} />
-    </Pressable>
+      {/* Action Menu Modal */}
+      <Modal
+        visible={menuVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setMenuVisible(false)}
+      >
+        <Pressable 
+          style={styles.modalOverlay}
+          onPress={() => setMenuVisible(false)}
+        >
+          <View style={[styles.actionMenu, { backgroundColor: c.card, borderColor: c.border }]}>
+            <Text style={[styles.actionMenuTitle, { color: c.text }]}>{name}</Text>
+            
+            <TouchableOpacity
+              style={styles.actionMenuItem}
+              onPress={() => {
+                setMenuVisible(false);
+                onOpen();
+              }}
+            >
+              <MaterialIcons name="visibility" size={22} color="#3B82F6" />
+              <Text style={[styles.actionMenuText, { color: c.text }]}>వివరాలు చూడండి</Text>
+            </TouchableOpacity>
+
+            {onTransfer && (
+              <TouchableOpacity
+                style={styles.actionMenuItem}
+                onPress={() => {
+                  setMenuVisible(false);
+                  onTransfer();
+                }}
+              >
+                <MaterialIcons name="swap-horiz" size={22} color="#F59E0B" />
+                <Text style={[styles.actionMenuText, { color: c.text }]}>డిజిగ్నేషన్ మార్చండి</Text>
+              </TouchableOpacity>
+            )}
+
+            {onDelete && (
+              <TouchableOpacity
+                style={styles.actionMenuItem}
+                onPress={() => {
+                  setMenuVisible(false);
+                  onDelete();
+                }}
+              >
+                <MaterialIcons name="delete-outline" size={22} color="#EF4444" />
+                <Text style={[styles.actionMenuText, { color: '#EF4444' }]}>తొలగించండి</Text>
+              </TouchableOpacity>
+            )}
+
+            <View style={[styles.actionMenuDivider, { backgroundColor: c.border }]} />
+            
+            <TouchableOpacity
+              style={styles.actionMenuItem}
+              onPress={() => setMenuVisible(false)}
+            >
+              <MaterialIcons name="close" size={22} color={c.muted} />
+              <Text style={[styles.actionMenuText, { color: c.muted }]}>రద్దు</Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Modal>
+    </View>
   );
 }
 
@@ -505,6 +737,21 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  searchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderRadius: 10,
+    marginTop: 8,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    paddingVertical: 6,
   },
   headerSearchInput: {
     flex: 1,
@@ -599,5 +846,129 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 8,
     elevation: 6,
+  },
+
+  /* Card Wrapper */
+  cardWrapper: { position: 'relative' },
+  moreBtn: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  /* Modal Overlay */
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  /* Action Menu */
+  actionMenu: {
+    width: '80%',
+    maxWidth: 320,
+    borderRadius: 16,
+    padding: 8,
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  actionMenuTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    paddingBottom: 8,
+  },
+  actionMenuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 14,
+    borderRadius: 8,
+  },
+  actionMenuText: {
+    fontSize: 15,
+    fontWeight: '500',
+  },
+  actionMenuDivider: {
+    height: 1,
+    marginVertical: 4,
+  },
+
+  /* Confirm Modal */
+  confirmModal: {
+    width: '85%',
+    maxWidth: 400,
+    borderRadius: 20,
+    padding: 24,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 10,
+  },
+  confirmIcon: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  confirmTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  confirmSubtitle: {
+    fontSize: 15,
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  confirmWarning: {
+    fontSize: 13,
+    textAlign: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    marginBottom: 12,
+    width: '100%',
+  },
+  confirmHint: {
+    fontSize: 13,
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  confirmActions: {
+    width: '100%',
+    gap: 10,
+    alignItems: 'center',
+  },
+  confirmBtn: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    borderRadius: 12,
+  },
+  confirmBtnText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  confirmBtnCancel: {
+    backgroundColor: 'transparent',
+    borderWidth: 1,
   },
 });

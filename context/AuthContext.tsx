@@ -43,8 +43,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
+  // SAFE MODE: Don't crash if used outside provider
+  // Return guest mode defaults instead
   if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
+    console.warn('[useAuth] Used outside AuthProvider - returning guest defaults');
+    return {
+      jwt: null,
+      refreshToken: null,
+      setAuthTokens: () => {
+        console.warn('[useAuth] setAuthTokens called in guest mode');
+      },
+    };
   }
   return context;
 };

@@ -1,0 +1,20 @@
+# EAS ignore file
+node_modules/
+.expo/
+.expo-shared/
+dist/
+build/
+*.log
+.DS_Store
+android/build/
+android/app/build/
+android/.gradle/
+android/app/.cxx/
+.gradle/
+ios/build/
+ios/Pods/
+ios/kaburlu.xcworkspace/
+*.keystore
+*.jks
+.env.local
+.env.*.local

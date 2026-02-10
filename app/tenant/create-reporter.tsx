@@ -12,7 +12,7 @@ import { useColorScheme } from '@/hooks/useColorScheme';
 import { loadTokens } from '@/services/auth';
 import { searchCombinedLocations, type CombinedLocationItem } from '@/services/locations';
 import {
-  checkPublicReporterAvailability,
+  // checkPublicReporterAvailability, // COMMENTED: Temporarily disabled
   createTenantReporter,
   getReporterDesignations,
   type CreateTenantReporterInput,
@@ -58,21 +58,21 @@ function isAllowedLocationForLevel(level: string, item: CombinedLocationItem) {
   if (lvl === 'STATE') return type === 'STATE';
   // Staff Reporter (DISTRICT level) - select mandal, we use its district
   if (lvl === 'DISTRICT') return type === 'MANDAL';
-  // Constituency Reporter - can select mandal OR district
+  // Constituency Reporter - select mandal or district, pass ID as assemblyConstituencyId
   if (lvl === 'CONSTITUENCY') return type === 'MANDAL' || type === 'DISTRICT';
-  // RC (ASSEMBLY level) - can select mandal OR district
-  if (lvl === 'ASSEMBLY') return type === 'MANDAL' || type === 'DISTRICT';
+  // RC (DIVISION level) - select mandal or district, pass ID as assemblyConstituencyId
+  if (lvl === 'DIVISION') return type === 'MANDAL' || type === 'DISTRICT';
   // Mandal Reporter - only mandal
   if (lvl === 'MANDAL') return type === 'MANDAL';
   return false;
 }
 
-const LEVEL_ORDER = ['STATE', 'DISTRICT', 'CONSTITUENCY', 'ASSEMBLY', 'MANDAL'] as const;
+const LEVEL_ORDER = ['STATE', 'DISTRICT', 'CONSTITUENCY', 'DIVISION', 'MANDAL'] as const;
 const LEVEL_LABELS: Record<string, string> = {
   STATE: 'రాష్ట్రం',
   DISTRICT: 'జిల్లా',
   CONSTITUENCY: 'నియోజకవర్గం',
-  ASSEMBLY: 'RC స్థాయి',
+  DIVISION: 'RC స్థాయి',
   MANDAL: 'మండలం',
 };
 
@@ -81,7 +81,7 @@ const LEVEL_CONFIG: Record<string, { color: string; bgColor: string; icon: strin
   STATE: { color: '#7C3AED', bgColor: '#7C3AED15', icon: 'flag', emoji: '🏛️', avatar: '🎤' },
   DISTRICT: { color: '#2563EB', bgColor: '#2563EB15', icon: 'location-city', emoji: '🏢', avatar: '📰' },
   CONSTITUENCY: { color: '#059669', bgColor: '#05966915', icon: 'how-to-vote', emoji: '🗳️', avatar: '📊' },
-  ASSEMBLY: { color: '#10B981', bgColor: '#10B98115', icon: 'location-searching', emoji: '📍', avatar: '📝' },
+  DIVISION: { color: '#10B981', bgColor: '#10B98115', icon: 'location-searching', emoji: '📍', avatar: '📝' },
   MANDAL: { color: '#D97706', bgColor: '#D9770615', icon: 'home-work', emoji: '🏘️', avatar: '✍️' },
 };
 
@@ -91,10 +91,10 @@ function getSearchHintForLevel(level: string): string {
   if (lvl === 'STATE') return 'రాష్ట్రం';
   // Staff Reporter (DISTRICT) - search mandal, we'll use its district
   if (lvl === 'DISTRICT') return 'మండలం';
-  // Constituency Reporter - search mandal or district
+  // Constituency Reporter - search mandal or district (selected ID = assemblyConstituencyId)
   if (lvl === 'CONSTITUENCY') return 'మండలం లేదా జిల్లా';
-  // RC (ASSEMBLY) - can search mandal or district
-  if (lvl === 'ASSEMBLY') return 'మండలం లేదా జిల్లా';
+  // RC (DIVISION) - search mandal or district (selected ID = assemblyConstituencyId)
+  if (lvl === 'DIVISION') return 'మండలం లేదా జిల్లా';
   // Mandal Reporter
   if (lvl === 'MANDAL') return 'మండలం';
   return 'ప్రాంతం';
@@ -148,9 +148,12 @@ export default function CreateReporterScreen() {
         const tid = session?.tenantId || session?.tenant?.id;
         setTenantId(typeof tid === 'string' ? tid : null);
 
-        const list = await getReporterDesignations();
+        const list = await getReporterDesignations(tid);
+        console.log('[CreateReporter] Loaded designations:', list);
+        console.log('[CreateReporter] Designations count:', list?.length);
         setDesignations(Array.isArray(list) ? list : []);
       } catch (e: any) {
+        console.error('[CreateReporter] Error loading designations:', e);
         setError(e?.message || 'లోడ్ కాలేదు');
       } finally {
         setLoading(false);
@@ -165,13 +168,14 @@ export default function CreateReporterScreen() {
     const withoutTenantAdmin = designations.filter(
       (d) => String(d.code || '').toUpperCase() !== 'TENANT_ADMIN'
     );
+    console.log('[CreateReporter] After filtering TENANT_ADMIN:', withoutTenantAdmin.length, 'designations');
     const filtered = q
       ? withoutTenantAdmin.filter((d) => 
           String(d.name || '').toLowerCase().includes(q) || 
           String(d.nativeName || '').toLowerCase().includes(q)
         )
       : withoutTenantAdmin;
-    const buckets: Record<string, ReporterDesignation[]> = { STATE: [], DISTRICT: [], CONSTITUENCY: [], ASSEMBLY: [], MANDAL: [] };
+    const buckets: Record<string, ReporterDesignation[]> = { STATE: [], DISTRICT: [], CONSTITUENCY: [], DIVISION: [], MANDAL: [] };
     for (const d of filtered) {
       const lvl = String(d.level || '').toUpperCase();
       if (buckets[lvl]) buckets[lvl].push(d);
@@ -180,6 +184,7 @@ export default function CreateReporterScreen() {
     Object.keys(buckets).forEach((lvl) => {
       buckets[lvl].sort((a, b) => (a.levelOrder || 0) - (b.levelOrder || 0));
     });
+    console.log('[CreateReporter] Designations by level:', buckets);
     return buckets;
   }, [designations, desigQuery]);
 
@@ -226,51 +231,55 @@ export default function CreateReporterScreen() {
       try {
         const level = selectedLevel as Exclude<ReporterLevel, null>;
         const payload: any = { designationId: selectedDesig.id, level };
-        const locType = normalizeLocationType(loc.type);
+        // const locType = normalizeLocationType(loc.type); // COMMENTED: Not used when availability check is disabled
         
         if (selectedLevel === 'STATE') {
           payload.stateId = locId;
         } else if (selectedLevel === 'DISTRICT') {
           // Staff Reporter: selected mandal, use its district
           payload.districtId = loc.district?.id || locId;
-        } else if (selectedLevel === 'ASSEMBLY') {
-          // RC: can select mandal or district - API uses assemblyConstituencyId
-          // For now, pass the selected location id
-          if (locType === 'MANDAL') {
-            payload.mandalId = locId;
-          } else if (locType === 'DISTRICT') {
-            payload.districtId = locId;
-          }
+        } else if (selectedLevel === 'DIVISION') {
+          // RC (DIVISION level) uses divisionId (assemblyConstituencyId)
+          payload.divisionId = locId;
+        } else if (selectedLevel === 'CONSTITUENCY') {
+          // CONSTITUENCY level also uses assemblyConstituencyId
+          payload.assemblyConstituencyId = locId;
         } else if (selectedLevel === 'MANDAL') {
           payload.mandalId = locId;
         }
 
         // Skip availability check if we don't have the right ID for the level
         // This handles cases where API expects specific ID types
-        try {
-          const res = await checkPublicReporterAvailability(tenantId, payload);
-          setIsAvailable(!!res?.available);
-          if (!res?.available) {
-            setFormError('ఈ ప్రాంతంలో ఇప్పటికే రిపోర్టర్ ఉన్నారు');
-          } else {
-            setFormError(null);
-          }
-        } catch (apiErr: any) {
-          // If API returns 404, location not found
-          if (apiErr?.status === 404) {
-            console.log('[checkAvailability] API 404 - location not found:', apiErr?.data);
-            setIsAvailable(false);
-            const field = apiErr?.data?.field || 'location';
-            setFormError(`ఎంచుకున్న ${field === 'districtId' ? 'జిల్లా' : field === 'mandalId' ? 'మండలం' : 'ప్రాంతం'} కనుగొనబడలేదు`);
-          } else if (apiErr?.status === 400) {
-            // If API returns 400, assume available (API may not support this combination)
-            console.log('[checkAvailability] API 400 - assuming available for level:', level, 'locType:', locType);
-            setIsAvailable(true);
-            setFormError(null);
-          } else {
-            throw apiErr;
-          }
-        }
+        
+        // COMMENTED OUT: Reporter availability check disabled temporarily
+        // try {
+        //   const res = await checkPublicReporterAvailability(tenantId, payload);
+        //   setIsAvailable(!!res?.available);
+        //   if (!res?.available) {
+        //     setFormError('ఈ ప్రాంతంలో ఇప్పటికే రిపోర్టర్ ఉన్నారు');
+        //   } else {
+        //     setFormError(null);
+        //   }
+        // } catch (apiErr: any) {
+        //   // If API returns 404, location not found
+        //   if (apiErr?.status === 404) {
+        //     console.log('[checkAvailability] API 404 - location not found:', apiErr?.data);
+        //     setIsAvailable(false);
+        //     const field = apiErr?.data?.field || 'location';
+        //     setFormError(`ఎంచుకున్న ${field === 'districtId' ? 'జిల్లా' : field === 'mandalId' ? 'మండలం' : 'ప్రాంతం'} కనుగొనబడలేదు`);
+        //   } else if (apiErr?.status === 400) {
+        //     // If API returns 400, assume available (API may not support this combination)
+        //     console.log('[checkAvailability] API 400 - assuming available for level:', level, 'locType:', locType);
+        //     setIsAvailable(true);
+        //     setFormError(null);
+        //   } else {
+        //     throw apiErr;
+        //   }
+        // }
+        
+        // Temporarily assume always available
+        setIsAvailable(true);
+        setFormError(null);
       } catch (e: any) {
         setFormError(e?.message || 'చెక్ చేయలేకపోయాము');
         setIsAvailable(false);
@@ -296,7 +305,6 @@ export default function CreateReporterScreen() {
     setSubmitting(true);
     try {
       const level = selectedLevel as Exclude<ReporterLevel, null>;
-      const locType = normalizeLocationType(selectedLoc.type);
       const input: CreateTenantReporterInput = {
         fullName: fullName.trim(),
         mobileNumber: digitsOnly(mobileNumber),
@@ -313,13 +321,12 @@ export default function CreateReporterScreen() {
       } else if (selectedLevel === 'DISTRICT') {
         // Staff Reporter: selected mandal, use its district
         input.districtId = selectedLoc.district?.id || selectedLoc.match.id;
-      } else if (selectedLevel === 'ASSEMBLY') {
-        // RC: can select mandal or district
-        if (locType === 'MANDAL') {
-          input.mandalId = selectedLoc.match.id;
-        } else if (locType === 'DISTRICT') {
-          input.districtId = selectedLoc.match.id;
-        }
+      } else if (selectedLevel === 'DIVISION') {
+        // RC (DIVISION level) - pass selected location ID as divisionId
+        input.divisionId = selectedLoc.match.id;
+      } else if (selectedLevel === 'CONSTITUENCY') {
+        // CONSTITUENCY level - pass selected location ID as assemblyConstituencyId
+        input.assemblyConstituencyId = selectedLoc.match.id;
       } else if (selectedLevel === 'MANDAL') {
         input.mandalId = selectedLoc.match.id;
       }

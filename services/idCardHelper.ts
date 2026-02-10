@@ -34,6 +34,7 @@ import {
   resendMyIdCardToWhatsApp,
   deleteIdCardPdf,
   updateIdCardPdf,
+  getIdCardPdfUrl,
   type GenerateReporterIdCardResponse,
   type RegenerateIdCardInput,
   type ReporterIdCard,
@@ -151,6 +152,21 @@ export class IdCardHelper {
       throw new Error('Tenant ID required for admin operations');
     }
     return await updateIdCardPdf(this.tenantId, reporterId, input);
+  }
+
+  /**
+   * Get PDF download URL (PUBLIC API - works for both roles)
+   * Returns the direct download URL for the ID card PDF
+   * 
+   * @param reporterId - Reporter ID (optional for REPORTER role - uses own ID from token)
+   * @returns Download URL (requires Authorization header when fetching)
+   */
+  getPdfUrl(reporterId?: string): string {
+    const id = this.isAdmin() ? reporterId : reporterId; // For reporter, reporterId is still needed
+    if (!id) {
+      throw new Error('Reporter ID required');
+    }
+    return getIdCardPdfUrl(id);
   }
 
   private isAdmin(): boolean {

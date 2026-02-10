@@ -1,6 +1,6 @@
 import LegalSkeleton from '@/components/ui/LegalSkeleton';
 import { useThemeColor } from '@/hooks/useThemeColor';
-import { getTerms } from '@/services/api';
+import { getPrivacyPolicy } from '@/services/api';
 import { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { WebView } from 'react-native-webview';
@@ -13,7 +13,7 @@ export default function PrivacyPolicyPage() {
   useEffect(() => {
     (async () => {
       try {
-        const doc = await getTerms('en');
+        const doc = await getPrivacyPolicy('en');
         setHtml(doc?.content || '<p>No content</p>');
       } catch {
         setHtml('<p>Failed to load terms.</p>');

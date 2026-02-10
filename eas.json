@@ -15,7 +15,15 @@
       }
     },
     "production": {
-      "autoIncrement": true
+      "channel": "production",
+      "autoIncrement": false,
+      "node": "20.19.4",
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "ios": {
+        "buildConfiguration": "Release"
+      }
     }
   },
   "submit": {

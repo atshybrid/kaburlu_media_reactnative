@@ -1,5 +1,6 @@
 import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
+import { getBaseUrl } from '@/services/http';
 import { Feather } from '@expo/vector-icons';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ListRenderItem } from 'react-native';
@@ -47,8 +48,7 @@ function CitizenReporterArticles({ visible, onClose, token }: Props) {
   const fetchArticles = useCallback(async () => {
     setLoading(true);
     try {
-  const baseurl = 'https://ai-kaburlu-backend.onrender.com/api/v1';
-      const url = `${baseurl}/shortnews`;
+      const url = `${getBaseUrl()}/shortnews`;
       const res = await fetch(url, {
         headers: {
           accept: 'application/json',

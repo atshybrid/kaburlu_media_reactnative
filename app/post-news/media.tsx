@@ -238,21 +238,16 @@ export default function PostNewsMediaScreen() {
         location,
       });
 
-      // Success! Clear draft and go back to post-news screen
+      // Success! Show congrats modal
+      setShowCongrats(true);
       setJustPosted(true);
       resetDraft();
       
-      // Show brief success message
-      Alert.alert(
-        '✅ విజయం!',
-        'మీ ఆర్టికల్ విజయవంతంగా పబ్లిష్ చేయబడింది.',
-        [
-          {
-            text: 'మరో న్యూస్ పోస్ట్ చేయండి',
-            onPress: () => router.replace('/post-news')
-          }
-        ]
-      );
+      // Auto-dismiss after 3 seconds and navigate to post-news
+      setTimeout(() => {
+        setShowCongrats(false);
+        router.replace('/post-news');
+      }, 3000);
       
       return res;
     } catch (e: any) {

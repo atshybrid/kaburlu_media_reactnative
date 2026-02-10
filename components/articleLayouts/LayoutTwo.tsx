@@ -1,8 +1,7 @@
 import { getTeluguPlaceName } from '@/constants/placeLexicon';
 import { useReaction } from '@/hooks/useReaction';
 import { useTransliteration } from '@/hooks/useTransliteration';
-import { Feather } from '@expo/vector-icons';
-// Replaced custom icons with Feather for a cleaner, pro look
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import TEBrandLogo from '@/assets/images/kaburlu_te_brand_logo.svg';
 import { WEB_BASE_URL } from '@/config/appConfig';
 import { pickTitleColorTheme } from '@/constants/TitleColorRules';
@@ -17,36 +16,57 @@ import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, Pressable, Share as RnShare, StyleSheet, Text, TextInput, ToastAndroid, TouchableOpacity, View, useWindowDimensions } from 'react-native';
+import { Platform, Pressable, Share as RnShare, StyleSheet, Text, TextInput, ToastAndroid, TouchableOpacity, View, useWindowDimensions, Animated } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ShareLib from 'react-native-share';
 import ViewShot from 'react-native-view-shot';
 import BottomSheet from '../ui/BottomSheet';
 import type { ArticleLayoutComponent } from './types';
 
-// Colors - Bright, solid colors for excellent visibility
-const DEFAULT_RANDOM_COLORS = [
-  '#DC2626', // Red - Breaking, urgent
-  '#059669', // Emerald - Fresh, positive
-  '#2563EB', // Blue - Professional, trustworthy
-  '#7C3AED', // Violet - Creative, culture
-  '#D97706', // Amber - Warm, human interest
-  '#0891B2', // Cyan - Modern, tech
-];
-
-const clampWords = (text?: string, maxWords = 60) => {
-  if (!text) return '';
-  const parts = String(text).split(/\s+/);
-  if (parts.length <= maxWords) return text;
-  // Show exactly the first maxWords without adding ellipsis
-  return parts.slice(0, maxWords).join(' ');
+// Professional newspaper color palette - refined and balanced
+const THEME_COLORS = {
+  // Primary accent colors
+  crimsonRed: '#B91C1C',      // Breaking news, urgent
+  forestGreen: '#047857',     // Positive, environment
+  royalBlue: '#1E40AF',       // Politics, trust
+  deepPurple: '#6D28D9',      // Culture, lifestyle
+  goldenOrange: '#D97706',    // Human interest, warmth
+  tealBlue: '#0369A1',        // Technology, innovation
+  // Neutral tones
+  charcoal: '#1F2937',
+  slate: '#475569',
+  lightGray: '#F3F4F6',
+  border: '#E5E7EB',
+  // UI states
+  activeLike: '#EF4444',
+  activeDislike: '#7C3AED',
 };
 
-// const clampChars = (text: string, maxChars: number) => {
-//   if (!text) return '';
-//   if (text.length <= maxChars) return text;
-//   return text.slice(0, Math.max(0, maxChars - 1)) + '…';
-// };
+const ACCENT_PALETTE = [
+  THEME_COLORS.crimsonRed,
+  THEME_COLORS.forestGreen,
+  THEME_COLORS.royalBlue,
+  THEME_COLORS.deepPurple,
+  THEME_COLORS.goldenOrange,
+  THEME_COLORS.tealBlue,
+];
+
+// Utility: Smart text clamping with word awareness
+const clampWords = (text?: string, maxWords = 60) => {
+  if (!text) return '';
+  const parts = String(text).split(/\s+/).filter(Boolean);
+  if (parts.length <= maxWords) return text;
+  return parts.slice(0, maxWords).join(' ') + '…';
+};
+
+const clampChars = (text?: string, maxChars = 100) => {
+  const s = (text || '').trim();
+  if (s.length <= maxChars) return s;
+  // Find last space before limit for clean word break
+  const truncated = s.slice(0, maxChars);
+  const lastSpace = truncated.lastIndexOf(' ');
+  return (lastSpace > maxChars * 0.8 ? truncated.slice(0, lastSpace) : truncated) + '…';
+};
 
 const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) => {
   // Resolve selected language (for top row locale)
@@ -111,7 +131,6 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
     
     // Count words to determine alignment and sizing
     const wordCount = (s: string) => (s ? s.split(/\s+/).filter(Boolean).length : 0);
-    const totalWords = wordCount(raw);
     
     if (raw.includes(':')) {
       const firstIdx = raw.indexOf(':');
@@ -164,14 +183,6 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
 
   // Title colors: one strong, one light. Short lines (<=2 words) get strong; long lines get light.
   // If both short, the primary line is strong and the other is light; if both long, both light.
-  const hexToRgba = (hex: string, alpha: number) => {
-    const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-    if (!m) return hex;
-    const r = parseInt(m[1], 16);
-    const g = parseInt(m[2], 16);
-    const b = parseInt(m[3], 16);
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-  };
   const hexToRgb = (hex: string) => {
     const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
     if (!m) return { r: 0, g: 0, b: 0 };
@@ -228,36 +239,18 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
   const pickAccent = (key: string, idx?: number) => {
     let h = 0;
     for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
-    const base = h % DEFAULT_RANDOM_COLORS.length;
-    const offset = typeof idx === 'number' ? (idx % DEFAULT_RANDOM_COLORS.length) : 0;
-    const chosen = (base + offset) % DEFAULT_RANDOM_COLORS.length;
-    return DEFAULT_RANDOM_COLORS[chosen];
+    const base = h % ACCENT_PALETTE.length;
+    const offset = typeof idx === 'number' ? (idx % ACCENT_PALETTE.length) : 0;
+    const chosen = (base + offset) % ACCENT_PALETTE.length;
+    return ACCENT_PALETTE[chosen];
   };
   const accentKey = String((article as any)?.id || article.title || 'kaburlu');
   const accent = pickAccent(accentKey, index);
-  const wc2 = (s: string) => (s ? s.split(/\s+/).filter(Boolean).length : 0);
-  const line1Short = wc2(line1) <= 2;
-  const line2Short = wc2(line2) <= 2;
   // Keyword-based color theme from centralized config
   const themed = pickTitleColorTheme({ title: article.title, metaTitle: (article as any)?.metaTitle, tags: (article as any)?.tags });
   const complement = themed ? themed.secondary : complementHex(accent);
   const accentFinal = themed ? themed.primary : accent;
-  // Decide strong line: pick the shorter line; if tie, use primary; else fall back to line1
-  const bothLong = line1 && line2 && !line1Short && !line2Short;
-  let strongLine: 'line1' | 'line2' | null = null;
-  if (!bothLong) {
-    if (!line1 && line2) strongLine = 'line2';
-    else if (line1 && !line2) strongLine = 'line1';
-    else if (line1 && line2) {
-      if (line1Short && !line2Short) strongLine = 'line1';
-      else if (!line1Short && line2Short) strongLine = 'line2';
-      else if (primary === 'line1') strongLine = 'line1';
-      else if (primary === 'line2') strongLine = 'line2';
-      else strongLine = 'line1';
-    }
-  }
-  
-  // Title colors - ALL SOLID BRIGHT COLORS, no faded/light colors
+  // Title colors - determine which line gets strong color
   // Line1 uses accent color, Line2 uses complement color - both solid
   let colorLine1 = undefined as string | undefined;
   let colorLine2 = undefined as string | undefined;
@@ -271,15 +264,18 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
     colorLine2 = accentFinal;
   }
 
-  // H2 subheading - ONLY show if article has explicit metaTitle (not metaDescription or tags)
+  // H2 subheading - ONLY show metaTitle if it's different from title (not summary)
   const subHeadingRaw = ((article as any).metaTitle || '').trim();
-  const clampChars = (text?: string, maxChars: number = 80) => {
-    const s = (text || '').trim();
-    if (s.length <= maxChars) return s;
-    return s.slice(0, Math.max(0, maxChars - 1)) + '…';
-  };
-  // Only show if there's actual subheading content
-  const subHeading = subHeadingRaw ? clampChars(subHeadingRaw, 80) : '';
+  const titleLower = (article.title || '').toLowerCase().trim();
+  const subLower = subHeadingRaw.toLowerCase().trim();
+  
+  // Only show if:
+  // 1. metaTitle exists
+  // 2. metaTitle is different from title (not just a repeat)
+  // 3. metaTitle has meaningful content (more than 5 chars)
+  const isDifferentFromTitle = subHeadingRaw && subHeadingRaw.length > 5 && subLower !== titleLower;
+  const subHeading = isDifferentFromTitle ? clampChars(subHeadingRaw, 100) : '';
+  
   // H2 bar: rich colors that stand out
   const H2_BG_PALETTE = ['#1E40AF', '#7C3AED', '#047857', '#B91C1C', '#0369A1', '#6D28D9', '#0F766E', '#A16207'];
   const h2Idx = Math.abs(typeof index === 'number' ? index : 0) % H2_BG_PALETTE.length;
@@ -292,26 +288,46 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
   const calcSecondarySize = (s: string) => shortLine(s) ? 30 : (s.length <= 28 ? 26 : 24);
   const title1Size = primary === 'line1' ? calcPrimarySize(line1) : calcSecondarySize(line1);
   const title2Size = primary === 'line2' ? calcPrimarySize(line2) : calcSecondarySize(line2);
-  // Dynamic, language-aware line heights - tighter spacing between lines
+  
+  // Optimized line heights - balanced spacing for readability
   const isTeluguTitle = (languageCode === 'te') || isTelugu(line1 || '') || isTelugu(line2 || '');
   const line1IsShort = shortLine(line1);
   const line2IsShort = shortLine(line2);
+  
+  // Proper line height calculation - Telugu needs more space for tall glyphs
   const lhFor = (size: number, isPrimary: boolean, isShort: boolean) => {
-    // Telugu fonts need more headroom to prevent top crop
-    let m = isPrimary ? 1.25 : 1.20;
-    if (isTeluguTitle) m += 0.15;    // Telugu glyphs need significantly more headroom
-    if (m > 1.45) m = 1.45;          // safety cap
+    // Base multiplier for clean spacing
+    let m = isPrimary ? 1.20 : 1.15;  // Increased from 1.15/1.10
+    
+    // Telugu fonts need more headroom for proper glyph rendering
+    if (isTeluguTitle) {
+      m += 0.18;  // Increased from 0.10 for better spacing
+    }
+    
+    // Short lines can be slightly tighter (only for non-Telugu)
+    if (isShort && !isTeluguTitle) {
+      m -= 0.02;
+    }
+    
+    // Safety caps
+    if (m > 1.45) m = 1.45;  // Increased cap for Telugu
+    if (m < 1.10) m = 1.10;  // Minimum to prevent clipping
+    
     return Math.round(size * m);
   };
   const line1LH = lhFor(title1Size, primary === 'line1', line1IsShort);
   const line2LH = lhFor(title2Size, primary === 'line2', line2IsShort);
-  // Dynamic padding for H1 container - more top padding to prevent crop into header
-  const h1PadTop = Math.max(18, Math.ceil((title1Size || 0) * (isTeluguTitle ? 0.30 : 0.20)));
-  const h1PadBottom = Math.max(4, Math.ceil((title2Size || 0) * (isTeluguTitle ? 0.08 : 0.06)));
-  // Start large and let it shrink to fit width, so it visually fills the bar.
-  const h2Size = 44;
-  // Very small visual separation between H1 and H2 to avoid merging
-  const h1h2Gap = 3;
+  
+  // Dynamic padding for H1 container - proper spacing for Telugu glyphs
+  const h1PadTop = Math.max(14, Math.ceil((title1Size || 0) * (isTeluguTitle ? 0.28 : 0.18)));  // Increased for Telugu
+  const h1PadBottom = Math.max(3, Math.ceil((title2Size || 0) * (isTeluguTitle ? 0.08 : 0.04)));  // Increased slightly
+  
+  // Dynamic H1-H2 gap based on whether H2 exists and content type
+  const h1h2Gap = (() => {
+    if (!subHeading) return 0;  // No gap if no H2
+    if (isTeluguTitle) return 4;  // Slightly more for Telugu
+    return 2;  // Minimal gap for tight design
+  })();
   // line gap now handled via Text lineHeight; no explicit margin gap
   // Content font size: scale by word count (max 60 words). Shorter content gets larger font to reduce blank area.
   const excerptText = clampWords(article.body || article.summary, 60);
@@ -455,6 +471,17 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
   const contentFontSize = shareMode ? (contentFontSizeBase + 2) : contentFontSizeBase;
   const contentLineHeight = Math.round(contentFontSize * 1.6);
 
+  // Professional fade-in animation
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 300,
+      useNativeDriver: true,
+    }).start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Handle tap to toggle bottom navigation
   const handleScreenTap = useCallback(() => {
     if (isTabBarVisible) {
@@ -467,8 +494,9 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
   }, [isTabBarVisible, hide, show, setTabBarVisible]);
   
   return (
+    <Animated.View style={[styles.screen, { opacity: fadeAnim }]}>
     <Pressable 
-      style={styles.screen}
+      style={{ flex: 1 }}
       onPress={handleScreenTap}
     >
   {/* Capture content up to the author footer (exclude engagement), with white background */}
@@ -519,9 +547,9 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
               <Text
                 style={[
                   primary === 'line1' ? styles.titleHighlight : styles.titleNormal,
-                  { color: colorLine1, fontSize: title1Size, lineHeight: line1LH, includeFontPadding: false, paddingTop: isTeluguTitle ? 6 : 0 },
-                  // Telugu H1: use Anek Telugu (requested)
-                  (languageCode === 'te' || isTelugu(line1)) && { fontFamily: 'AnekTelugu-Bold' },
+                  { color: colorLine1, fontSize: title1Size, lineHeight: line1LH, includeFontPadding: false, paddingTop: isTeluguTitle ? 8 : 0 },
+                  // Telugu H1: use Noto Serif Telugu Bold (Google Fonts recommended for news)
+                  (languageCode === 'te' || isTelugu(line1)) && { fontFamily: 'NotoSerifTelugu_700Bold' },
                 ]}
                 numberOfLines={1}
                 adjustsFontSizeToFit
@@ -532,13 +560,13 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
             </View>
           )}
           {!!line2 && (
-            <View>
+            <View style={{ marginTop: isTeluguTitle ? 1 : 0 }}>
               <Text
                 style={[
                   primary === 'line2' ? styles.titleHighlight : styles.titleNormal,
                   { color: colorLine2, fontSize: title2Size, lineHeight: line2LH, includeFontPadding: false },
-                  // Telugu H1: use Anek Telugu (requested)
-                  (languageCode === 'te' || isTelugu(line2)) && { fontFamily: 'AnekTelugu-Bold' },
+                  // Telugu H1: use Noto Serif Telugu Bold (Google Fonts recommended for news)
+                  (languageCode === 'te' || isTelugu(line2)) && { fontFamily: 'NotoSerifTelugu_700Bold' },
                 ]}
                 numberOfLines={1}
                 adjustsFontSizeToFit
@@ -557,8 +585,8 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
               style={[
                 styles.subHeadingText,
                 { color: subHeadingTextColor },
-                // Telugu H2 uses Mandali Bold when language/content is Telugu
-                (languageCode === 'te' || isTelugu(subHeading)) && { fontFamily: 'Mandali', fontWeight: '700' },
+                // Telugu H2 uses Noto Sans Telugu SemiBold (Google Fonts recommended)
+                (languageCode === 'te' || isTelugu(subHeading)) && { fontFamily: 'NotoSansTelugu_600SemiBold' },
               ]}
               numberOfLines={2}
               adjustsFontSizeToFit
@@ -577,7 +605,8 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
           style={[
             styles.excerpt,
             { fontSize: contentFontSize, lineHeight: contentLineHeight },
-            (languageCode === 'te' || isTelugu(excerptText)) && { fontFamily: 'Mandali' },
+            // Telugu body: use Noto Sans Telugu Regular (Google Fonts - best readability)
+            (languageCode === 'te' || isTelugu(excerptText)) && { fontFamily: 'NotoSansTelugu_400Regular' },
           ]}
           ellipsizeMode="clip"
           numberOfLines={(() => {
@@ -635,8 +664,12 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
                 style={[styles.likeItem, styles.likeItemLeft, reaction.updating && { opacity: 0.6 }]}
                 onPress={() => { reaction.like(); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
               >
-                <Feather name="thumbs-up" size={22} color={isLiked ? '#D32F2F' : '#111'} />
-                <Text style={[styles.likeText, isLiked && { color: '#D32F2F' }]}>{likeCount}</Text>
+                <MaterialCommunityIcons 
+                  name={isLiked ? "thumb-up" : "thumb-up-outline"} 
+                  size={22} 
+                  color={isLiked ? THEME_COLORS.activeLike : THEME_COLORS.slate} 
+                />
+                <Text style={[styles.likeText, isLiked && { color: THEME_COLORS.activeLike }]}>{likeCount}</Text>
               </TouchableOpacity>
               <View style={styles.likeDivider} />
               <TouchableOpacity
@@ -645,22 +678,26 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
                 style={[styles.likeItem, styles.likeItemRight, reaction.updating && { opacity: 0.6 }]}
                 onPress={() => { reaction.dislike(); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
               >
-                <Feather name="thumbs-down" size={22} color={isDisliked ? '#D32F2F' : '#111'} />
-                <Text style={[styles.likeText, isDisliked && { color: '#D32F2F' }]}>{dislikeCount}</Text>
+                <MaterialCommunityIcons 
+                  name={isDisliked ? "thumb-down" : "thumb-down-outline"} 
+                  size={22} 
+                  color={isDisliked ? THEME_COLORS.activeDislike : THEME_COLORS.slate} 
+                />
+                <Text style={[styles.likeText, isDisliked && { color: THEME_COLORS.activeDislike }]}>{dislikeCount}</Text>
               </TouchableOpacity>
             </View>
           </View>
           <View style={styles.engRightCluster}>
             <TouchableOpacity style={styles.flatBtn} onPress={onComment}>
-              <Feather name="message-circle" size={22} color="#111" />
+              <MaterialCommunityIcons name="comment-text-outline" size={22} color={THEME_COLORS.charcoal} />
               <Text style={styles.flatBtnText}>{commentsCount}</Text>
             </TouchableOpacity>
             {/* Opinion: single icon opens sheet */}
             <TouchableOpacity style={styles.iconBtn} onPress={() => { setOpinionType(null); onOpenOpinion(); }}>
-              <Feather name="edit-3" size={22} color="#111" />
+              <MaterialCommunityIcons name="pencil-outline" size={22} color={THEME_COLORS.charcoal} />
             </TouchableOpacity>
             <TouchableOpacity style={styles.iconBtn} onPress={onShare}>
-              <Feather name="share-2" size={22} color="#111" />
+              <MaterialCommunityIcons name="share-variant-outline" size={22} color={THEME_COLORS.charcoal} />
             </TouchableOpacity>
           </View>
         </View>
@@ -675,36 +712,37 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
         dragEnabled={false}
         accessibilityLabel="Opinion sheet"
       >
-        <View style={{ gap: 12 }}>
-          <Text style={{ fontSize: 16, fontWeight: '700', textAlign: 'center' }}>Share your opinion</Text>
-          <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 12 }} pointerEvents="auto">
+        <View style={{ gap: 16, paddingHorizontal: 4 }}>
+          <Text style={{ fontSize: 20, fontWeight: '800', textAlign: 'center', color: THEME_COLORS.charcoal }}>Share your opinion</Text>
+          <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 14 }} pointerEvents="auto">
             <TouchableOpacity
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              activeOpacity={0.8}
+              activeOpacity={0.7}
               accessibilityRole="button"
               accessibilityLabel="Mark opinion positive"
               onPressIn={() => { setOpinionType('positive'); try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {} }}
               onPress={() => { setOpinionType('positive'); }}
               style={[styles.opBtn, opinionType === 'positive' && styles.opBtnPositiveActive]}
             >
-              <Feather name="thumbs-up" size={18} color={opinionType === 'positive' ? '#fff' : '#555'} />
+              <MaterialCommunityIcons name="thumb-up" size={20} color={opinionType === 'positive' ? '#fff' : THEME_COLORS.slate} />
               <Text style={[styles.opBtnText, opinionType === 'positive' && styles.opBtnTextActive]}>Positive</Text>
             </TouchableOpacity>
             <TouchableOpacity
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              activeOpacity={0.8}
+              activeOpacity={0.7}
               accessibilityRole="button"
               accessibilityLabel="Mark opinion negative"
               onPressIn={() => { setOpinionType('negative'); try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {} }}
               onPress={() => { setOpinionType('negative'); }}
               style={[styles.opBtn, opinionType === 'negative' && styles.opBtnNegativeActive]}
             >
-              <Feather name="thumbs-down" size={18} color={opinionType === 'negative' ? '#fff' : '#555'} />
+              <MaterialCommunityIcons name="thumb-down" size={20} color={opinionType === 'negative' ? '#fff' : THEME_COLORS.slate} />
               <Text style={[styles.opBtnText, opinionType === 'negative' && styles.opBtnTextActive]}>Negative</Text>
             </TouchableOpacity>
           </View>
           <TextInput
-            placeholder="Type your opinion (max 50)"
+            placeholder="Type your opinion (max 50 characters)"
+            placeholderTextColor="#9CA3AF"
             value={tr.value}
             onChangeText={tr.onChangeText}
             maxLength={50}
@@ -712,82 +750,381 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
             numberOfLines={3}
             style={styles.opInput}
           />
-          <View style={{ flexDirection: 'row', alignSelf: 'stretch' }}>
-            <TouchableOpacity onPress={() => setOpinionVisible(false)} style={[styles.opSheetBtn, { flex: 1, borderRadius: 0 }]}>
-              <Text style={{ textAlign: 'center' }}>Cancel</Text>
+          <View style={{ flexDirection: 'row', alignSelf: 'stretch', gap: 12 }}>
+            <TouchableOpacity onPress={() => setOpinionVisible(false)} style={[styles.opSheetBtn, { flex: 1 }]}>
+              <Text style={{ textAlign: 'center', fontWeight: '700', fontSize: 15, color: THEME_COLORS.charcoal }}>Cancel</Text>
             </TouchableOpacity>
             <TouchableOpacity
               disabled={!(opinionType && (tr.value || '').trim())}
               onPress={onSubmitOpinion}
-              style={[styles.opSheetBtn, styles.opSheetPrimary, { flex: 1, borderRadius: 0 }, !(opinionType && (tr.value || '').trim()) && { opacity: 0.6 }]}
+              style={[styles.opSheetBtn, styles.opSheetPrimary, { flex: 1 }, !(opinionType && (tr.value || '').trim()) && { opacity: 0.5 }]}
             >
-              <Text style={{ color: '#fff', textAlign: 'center' }}>Submit</Text>
+              <Text style={{ color: '#fff', textAlign: 'center', fontWeight: '700', fontSize: 15 }}>Submit</Text>
             </TouchableOpacity>
           </View>
           {tr.lastError ? <Text style={{ color: '#c00', fontSize: 12 }}>Transliteration error: {tr.lastError}</Text> : null}
         </View>
       </BottomSheet>
     </Pressable>
+    </Animated.View>
   );
 };
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#fff' },
-  topContent: { paddingBottom: 8 },
-  // Top bar with background and column dividers - brand orange theme
-  topBar: { backgroundColor: '#ff9934', borderBottomWidth: 0, paddingTop: 6, paddingBottom: 4 },
-  topRow: { flexDirection: 'row', alignItems: 'stretch' },
-  topCellWrap: { flex: 1, flexDirection: 'row', alignItems: 'stretch' },
-  topCell: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 6 },
-  topCellDivider: { width: 1, backgroundColor: 'rgba(255,255,255,0.3)', alignSelf: 'stretch' },
-  topColText: { fontSize: 13, color: '#ffffff', textAlign: 'center', fontWeight: '700' },
-  headerArea: { justifyContent: 'space-between', paddingHorizontal: 0, marginTop: 6 },
-  h1Area: { paddingHorizontal: 16, alignItems: 'center', paddingBottom: 4, paddingTop: 8 },
-  titleHighlight: { fontSize: 36, fontWeight: '800', textAlign: 'center', marginVertical: 0, paddingHorizontal: 8, letterSpacing: -0.5 },
-  titleNormal: { fontSize: 26, fontWeight: '700', textAlign: 'center', marginVertical: 0, paddingHorizontal: 8, letterSpacing: -0.3 },
-  teluguFont: { fontFamily: 'Pottisreeramulu' },
-  subHeadingWrap: { paddingVertical: 10, paddingHorizontal: 16, marginHorizontal: 0 },
-  subHeadingText: { fontSize: 18, textAlign: 'center', fontWeight: '600', lineHeight: 24 },
-  image: { width: '100%', aspectRatio: 16/9, marginTop: 0, backgroundColor: '#f3f4f6', borderRadius: 0 },
-  excerpt: { marginTop: 10, fontSize: 16, color: '#374151', paddingHorizontal: 16, lineHeight: 26 },
-  bottomDock: { marginTop: 'auto', paddingTop: 6, backgroundColor: '#fff' },
-  footer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 6, paddingHorizontal: 16, paddingBottom: 8 },
-  footerLeft: { flexDirection: 'row', alignItems: 'center' },
-  avatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#e5e7eb' },
-  brand: { fontSize: 14, color: '#374151', fontWeight: '700' },
-  authorSmall: { fontSize: 12, color: '#6B7280' },
-  timeSmall: { fontSize: 12, color: '#9CA3AF' },
-  engagementRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingBottom: 10, paddingTop: 4, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#E5E7EB' },
-  engLeftCluster: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  engRightCluster: { flexDirection: 'row', alignItems: 'center', gap: 2 },
-  engBtn: { paddingVertical: 6, paddingHorizontal: 10, minWidth: 56, alignItems: 'center' },
-  likeGroup: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F9FAFB', borderRadius: 24, paddingHorizontal: 4 },
-  likeItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 6, paddingHorizontal: 10, gap: 6 },
-  likeItemLeft: { },
-  likeItemRight: { },
-  likeDivider: { width: 1, height: 20, backgroundColor: '#E5E7EB', marginHorizontal: 0 },
-  likeText: { fontSize: 14, color: '#374151', fontWeight: '600' },
-  flatBtn: { flexDirection: 'row', alignItems: 'center', paddingVertical: 6, paddingHorizontal: 10, gap: 6, backgroundColor: '#F9FAFB', borderRadius: 20 },
-  flatBtnText: { fontSize: 14, color: '#374151', fontWeight: '600' },
-  iconBtn: { paddingVertical: 8, paddingHorizontal: 12, backgroundColor: '#F9FAFB', borderRadius: 20 },
-  // Opinion sheet styles (beautified)
-  opBtn: { paddingVertical: 10, paddingHorizontal: 18, borderWidth: 0, borderColor: 'transparent', borderRadius: 22, backgroundColor: '#f3f4f6', flexDirection: 'row', alignItems: 'center', gap: 8, elevation: 1, shadowColor: '#000', shadowOpacity: 0.07, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
-  opBtnActive: { backgroundColor: '#D32F2F' },
-  opBtnPositive: { borderColor: '#22c55e', borderWidth: 1 },
-  opBtnNegative: { borderColor: '#ef4444', borderWidth: 1 },
-  opBtnPositiveActive: { backgroundColor: '#22c55e' },
-  opBtnNegativeActive: { backgroundColor: '#ef4444' },
-  opBtnText: { fontSize: 14, color: '#333', fontWeight: '700' },
-  opBtnTextActive: { color: '#fff', fontWeight: '700' },
-  opInput: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 10, minHeight: 72, textAlignVertical: 'top' },
-  opSheetBtn: { paddingVertical: 10, paddingHorizontal: 14, borderRadius: 8, backgroundColor: '#eee' },
-  opSheetPrimary: { backgroundColor: '#D32F2F' },
+  screen: { 
+    flex: 1, 
+    backgroundColor: '#FFFFFF' 
+  },
+  topContent: { 
+    paddingBottom: 12 
+  },
+  // Masthead bar with refined orange brand theme
+  topBar: { 
+    backgroundColor: '#FF8C00', 
+    borderBottomWidth: 2, 
+    borderBottomColor: 'rgba(0,0,0,0.1)',
+    paddingTop: 8, 
+    paddingBottom: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 3,
+  },
+  topRow: { 
+    flexDirection: 'row', 
+    alignItems: 'stretch' 
+  },
+  topCellWrap: { 
+    flex: 1, 
+    flexDirection: 'row', 
+    alignItems: 'stretch' 
+  },
+  topCell: { 
+    flex: 1, 
+    alignItems: 'center', 
+    justifyContent: 'center', 
+    paddingVertical: 8 
+  },
+  topCellDivider: { 
+    width: 1, 
+    backgroundColor: 'rgba(255,255,255,0.4)', 
+    alignSelf: 'stretch' 
+  },
+  topColText: { 
+    fontSize: 13, 
+    color: '#FFFFFF', 
+    textAlign: 'center', 
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  headerArea: { 
+    justifyContent: 'space-between', 
+    paddingHorizontal: 0, 
+    marginTop: 8 
+  },
+  // Title area with improved spacing
+  h1Area: { 
+    paddingHorizontal: 20, 
+    alignItems: 'center', 
+    paddingBottom: 6,  // Reduced from 8
+    paddingTop: 10      // Reduced from 12
+  },
+  titleHighlight: { 
+    fontSize: 38, 
+    fontWeight: '900', 
+    textAlign: 'center', 
+    marginVertical: 0,  // No vertical margin
+    paddingHorizontal: 8, 
+    letterSpacing: -0.8,
+    textShadowColor: 'rgba(0,0,0,0.05)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
+  titleNormal: { 
+    fontSize: 28, 
+    fontWeight: '700', 
+    textAlign: 'center', 
+    marginVertical: 0,  // No vertical margin
+    paddingHorizontal: 8, 
+    letterSpacing: -0.4 
+  },
+  teluguFont: { 
+    fontFamily: 'Pottisreeramulu' 
+  },
+  // Subheading bar with gradient effect
+  subHeadingWrap: { 
+    paddingVertical: 10,  // Reduced from 12
+    paddingHorizontal: 20, 
+    marginHorizontal: 0,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  subHeadingText: { 
+    fontSize: 17, 
+    textAlign: 'center', 
+    fontWeight: '600', 
+    lineHeight: 24,
+    letterSpacing: 0.2,
+  },
+  // Professional image styling
+  image: { 
+    width: '100%', 
+    aspectRatio: 16/9, 
+    marginTop: 6, 
+    backgroundColor: THEME_COLORS.lightGray, 
+    borderRadius: 0,
+  },
+  // Refined excerpt typography
+  excerpt: { 
+    marginTop: 14, 
+    fontSize: 16, 
+    color: THEME_COLORS.charcoal, 
+    paddingHorizontal: 20, 
+    lineHeight: 26,
+    letterSpacing: 0.2,
+  },
+  // Footer with clean separation
+  bottomDock: { 
+    marginTop: 'auto', 
+    paddingTop: 8, 
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: 1,
+    borderTopColor: THEME_COLORS.border,
+  },
+  footer: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    marginTop: 8, 
+    paddingHorizontal: 20, 
+    paddingBottom: 10 
+  },
+  footerLeft: { 
+    flexDirection: 'row', 
+    alignItems: 'center',
+    flex: 1,
+  },
+  avatar: { 
+    width: 44, 
+    height: 44, 
+    borderRadius: 22, 
+    backgroundColor: THEME_COLORS.lightGray,
+    borderWidth: 2,
+    borderColor: THEME_COLORS.border,
+  },
+  brand: { 
+    fontSize: 14, 
+    color: THEME_COLORS.charcoal, 
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  authorSmall: { 
+    fontSize: 13, 
+    color: THEME_COLORS.slate,
+    marginTop: 2,
+  },
+  timeSmall: { 
+    fontSize: 12, 
+    color: '#9CA3AF',
+    fontWeight: '600',
+  },
+  // Modern engagement row with card-like clusters
+  engagementRow: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    paddingHorizontal: 16, 
+    paddingBottom: 12, 
+    paddingTop: 10,
+    backgroundColor: '#FAFBFC',
+    borderTopWidth: 1,
+    borderTopColor: THEME_COLORS.border,
+  },
+  engLeftCluster: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    gap: 10 
+  },
+  engRightCluster: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    gap: 8 
+  },
+  engBtn: { 
+    paddingVertical: 8, 
+    paddingHorizontal: 12, 
+    minWidth: 60, 
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: THEME_COLORS.border,
+  },
+  // Like/Dislike group with pill design
+  likeGroup: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    backgroundColor: '#FFFFFF', 
+    borderRadius: 28,
+    borderWidth: 1.5,
+    borderColor: THEME_COLORS.border,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  likeItem: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    paddingVertical: 8, 
+    paddingHorizontal: 12, 
+    gap: 6 
+  },
+  likeItemLeft: {},
+  likeItemRight: {},
+  likeDivider: { 
+    width: 1.5, 
+    height: 24, 
+    backgroundColor: THEME_COLORS.border, 
+    marginHorizontal: 2 
+  },
+  likeText: { 
+    fontSize: 15, 
+    color: THEME_COLORS.charcoal, 
+    fontWeight: '700',
+    minWidth: 20,
+    textAlign: 'center',
+  },
+  // Refined flat buttons
+  flatBtn: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    paddingVertical: 8, 
+    paddingHorizontal: 14, 
+    gap: 6, 
+    backgroundColor: '#FFFFFF', 
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: THEME_COLORS.border,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  flatBtnText: { 
+    fontSize: 14, 
+    color: THEME_COLORS.charcoal, 
+    fontWeight: '700',
+    minWidth: 18,
+    textAlign: 'center',
+  },
+  iconBtn: { 
+    paddingVertical: 9, 
+    paddingHorizontal: 12, 
+    backgroundColor: '#FFFFFF', 
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: THEME_COLORS.border,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  // Opinion sheet with modern design
+  opBtn: { 
+    paddingVertical: 12, 
+    paddingHorizontal: 20, 
+    borderWidth: 2, 
+    borderColor: THEME_COLORS.border, 
+    borderRadius: 24, 
+    backgroundColor: '#FFFFFF', 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    gap: 8, 
+    elevation: 2, 
+    shadowColor: '#000', 
+    shadowOpacity: 0.08, 
+    shadowRadius: 8, 
+    shadowOffset: { width: 0, height: 2 } 
+  },
+  opBtnActive: { 
+    borderWidth: 2,
+  },
+  opBtnPositive: {},
+  opBtnNegative: {},
+  opBtnPositiveActive: { 
+    backgroundColor: '#10B981',
+    borderColor: '#10B981',
+  },
+  opBtnNegativeActive: { 
+    backgroundColor: '#EF4444',
+    borderColor: '#EF4444',
+  },
+  opBtnText: { 
+    fontSize: 15, 
+    color: THEME_COLORS.charcoal, 
+    fontWeight: '700' 
+  },
+  opBtnTextActive: { 
+    color: '#FFFFFF', 
+    fontWeight: '700' 
+  },
+  opInput: { 
+    borderWidth: 1.5, 
+    borderColor: THEME_COLORS.border, 
+    borderRadius: 12, 
+    padding: 14, 
+    minHeight: 80, 
+    textAlignVertical: 'top',
+    fontSize: 15,
+    backgroundColor: '#FAFBFC',
+  },
+  opSheetBtn: { 
+    paddingVertical: 14, 
+    paddingHorizontal: 16, 
+    borderRadius: 12, 
+    backgroundColor: THEME_COLORS.lightGray,
+    alignItems: 'center',
+  },
+  opSheetPrimary: { 
+    backgroundColor: THEME_COLORS.royalBlue 
+  },
   // Share branding bar
-  brandBar: { backgroundColor: '#000', paddingHorizontal: 12, paddingVertical: 8 },
-  brandBarRow: { flexDirection: 'row', alignItems: 'center' },
-  brandBarTextCol: { flex: 7, justifyContent: 'center' },
-  brandBarLogoCol: { flex: 3, alignItems: 'flex-end' },
-  brandBarText: { color: '#fff', fontSize: 22, lineHeight: 22, includeFontPadding: false, fontWeight: '800', textAlign: 'left' },
+  brandBar: { 
+    backgroundColor: '#000000', 
+    paddingHorizontal: 16, 
+    paddingVertical: 10,
+    borderBottomWidth: 3,
+    borderBottomColor: '#FF8C00',
+  },
+  brandBarRow: { 
+    flexDirection: 'row', 
+    alignItems: 'center' 
+  },
+  brandBarTextCol: { 
+    flex: 7, 
+    justifyContent: 'center' 
+  },
+  brandBarLogoCol: { 
+    flex: 3, 
+    alignItems: 'flex-end' 
+  },
+  brandBarText: { 
+    color: '#FFFFFF', 
+    fontSize: 22, 
+    lineHeight: 26, 
+    includeFontPadding: false, 
+    fontWeight: '900', 
+    textAlign: 'left',
+    letterSpacing: 0.5,
+  },
 });
 
 export default LayoutTwo;
