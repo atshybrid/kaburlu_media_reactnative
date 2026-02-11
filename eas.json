@@ -6,12 +6,22 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "android": {
+        "googleServicesFile": "./google-services.json"
+      },
+      "ios": {
+        "googleServicesFile": "./GoogleService-Info.plist"
+      }
     },
     "preview": {
       "distribution": "internal",
       "android": {
-        "buildType": "apk"
+        "buildType": "apk",
+        "googleServicesFile": "./google-services.json"
+      },
+      "ios": {
+        "googleServicesFile": "./GoogleService-Info.plist"
       }
     },
     "production": {
@@ -19,10 +29,12 @@
       "autoIncrement": false,
       "node": "20.19.4",
       "android": {
-        "buildType": "app-bundle"
+        "buildType": "app-bundle",
+        "googleServicesFile": "./google-services.json"
       },
       "ios": {
-        "buildConfiguration": "Release"
+        "buildConfiguration": "Release",
+        "googleServicesFile": "./GoogleService-Info.plist"
       }
     }
   },
