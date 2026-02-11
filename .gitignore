@@ -62,6 +62,8 @@ expo-env.d.ts
 # Sensitive Google / OAuth credentials (do NOT commit)
 client_secret_*.json
 google-services.json
+GoogleService-Info.plist
+ios/kaburlu/GoogleService-Info.plist
 
 # Local backup of dependencies
 node_modules.old/

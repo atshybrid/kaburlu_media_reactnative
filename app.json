@@ -130,7 +130,7 @@
         "mode": "native"
       },
       "firebase": {
-        "webApiKey": "AIzaSyAIwciUGr4JgSo7keO0TiSPzS3E70SeUyw",
+        "webApiKey": "__AUTO_FROM_GOOGLE_SERVICES_JSON__",
         "projectId": "khabarx-f0365",
         "appId": "1:572758255210:android:4ee81e7bc477d728f44c13",
         "messagingSenderId": "572758255210",
