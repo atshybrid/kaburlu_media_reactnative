@@ -155,6 +155,17 @@ function InnerLayout() {
             setTimeout(() => {
               try {
                 void (async () => {
+                  // Check if user is logged in first
+                  const { loadTokens } = await import('@/services/auth');
+                  const tokens = await loadTokens();
+                  
+                  // Guest user - redirect to login
+                  if (!tokens?.jwt) {
+                    router.push('/auth/login' as any);
+                    return;
+                  }
+                  
+                  // Logged in - check role
                   const role = await getCachedProfileRole();
                   if (canAccessPostNewsByRole(role)) {
                     router.push('/post-news' as any);

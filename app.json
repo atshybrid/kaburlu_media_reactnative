@@ -2,23 +2,23 @@
   "expo": {
     "name": "kaburlu",
     "slug": "kaburlu",
-    "version": "1.1.5",
+    "version": "1.1.6",
     "orientation": "portrait",
     "icon": "./assets/images/app-icon.png",
     "scheme": "kaburlu",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": false,
+    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.media.kaburlu",
-      "buildNumber": "7",
+      "buildNumber": "8",
       "googleServicesFile": "./GoogleService-Info.plist",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
-      "versionCode": 7,
+      "versionCode": 8,
       "icon": "./assets/images/app-icon.png",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/app-icon-foreground.png",
@@ -126,15 +126,15 @@
       "google": {
         "androidClientId": "__AUTO_FROM_GOOGLE_SERVICES_JSON__",
         "iosClientId": "YOUR_IOS_CLIENT_ID.apps.googleusercontent.com",
-        "webClientId": "572758255210-gubenuc6g6p9j5tudgaqo5m6lc8irtn4.apps.googleusercontent.com",
+        "webClientId": "__AUTO_FROM_GOOGLE_SERVICES_JSON__",
         "mode": "native"
       },
       "firebase": {
         "webApiKey": "__AUTO_FROM_GOOGLE_SERVICES_JSON__",
-        "projectId": "khabarx-f0365",
-        "appId": "1:572758255210:android:4ee81e7bc477d728f44c13",
-        "messagingSenderId": "572758255210",
-        "storageBucket": "khabarx-f0365.firebasestorage.app"
+        "projectId": "__AUTO_FROM_GOOGLE_SERVICES_JSON__",
+        "appId": "__AUTO_FROM_GOOGLE_SERVICES_JSON__",
+        "messagingSenderId": "__AUTO_FROM_GOOGLE_SERVICES_JSON__",
+        "storageBucket": "__AUTO_FROM_GOOGLE_SERVICES_JSON__"
       },
       "router": {},
       "eas": {

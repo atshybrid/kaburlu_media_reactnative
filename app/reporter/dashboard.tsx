@@ -504,8 +504,8 @@ export default function ReporterDashboard() {
               const keysToKeep = ['selectedLanguage', 'profile_location', 'profile_location_obj', 'push_notifications_enabled'];
               await softLogout(keysToKeep, mobile || undefined);
               
-              // Go to account tab
-              router.replace('/tech');
+              // Redirect to news feed as guest
+              router.replace('/news');
             } catch (e: any) {
               console.error('[Dashboard] Logout failed:', e);
             } finally {

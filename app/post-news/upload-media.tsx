@@ -173,12 +173,8 @@ export default function PostNewsUploadMediaScreen() {
     loadData();
   }, [loadData]);
 
-  // Auto-save uploaded photos when they change (for back navigation persistence)
-  useEffect(() => {
-    if (!loading && uploadedPhotos.length > 0) {
-      AsyncStorage.setItem('UPLOADED_PHOTOS', JSON.stringify(uploadedPhotos)).catch(() => {});
-    }
-  }, [uploadedPhotos, loading]);
+  // Auto-save is now handled in individual update functions
+  // Removed duplicate useEffect to prevent race conditions
 
   // Auto-save uploaded video when it changes
   useEffect(() => {
@@ -236,7 +232,10 @@ export default function PostNewsUploadMediaScreen() {
 
       setUploadedPhotos((prev) => {
         const filtered = prev.filter((p) => p.photoId !== photo.id);
-        return [...filtered, newPhoto];
+        const updated = [...filtered, newPhoto];
+        // Save immediately to prevent duplicate state
+        AsyncStorage.setItem('UPLOADED_PHOTOS', JSON.stringify(updated)).catch(() => {});
+        return updated;
       });
     } catch (error: any) {
       Alert.alert('Upload Failed', error?.message || 'Failed to upload image');
@@ -286,7 +285,12 @@ export default function PostNewsUploadMediaScreen() {
         isExtra: true,
       };
 
-      setUploadedPhotos((prev) => [...prev, newPhoto]);
+      setUploadedPhotos((prev) => {
+        const updated = [...prev, newPhoto];
+        // Save immediately to prevent duplicate state
+        AsyncStorage.setItem('UPLOADED_PHOTOS', JSON.stringify(updated)).catch(() => {});
+        return updated;
+      });
     } catch (error: any) {
       Alert.alert('Upload Failed', error?.message || 'Failed to upload image');
     } finally {
@@ -339,9 +343,11 @@ export default function PostNewsUploadMediaScreen() {
   const removePhoto = (photoId: string) => {
     setUploadedPhotos((prev) => {
       const updated = prev.filter((p) => p.photoId !== photoId);
-      // If all photos removed, clear storage
+      // Save immediately to prevent duplicate state
       if (updated.length === 0) {
         AsyncStorage.removeItem('UPLOADED_PHOTOS').catch(() => {});
+      } else {
+        AsyncStorage.setItem('UPLOADED_PHOTOS', JSON.stringify(updated)).catch(() => {});
       }
       return updated;
     });
@@ -352,15 +358,21 @@ export default function PostNewsUploadMediaScreen() {
   };
 
   const updateCaption = (photoId: string, caption: string) => {
-    setUploadedPhotos((prev) =>
-      prev.map((p) => (p.photoId === photoId ? { ...p, caption } : p))
-    );
+    setUploadedPhotos((prev) => {
+      const updated = prev.map((p) => (p.photoId === photoId ? { ...p, caption } : p));
+      // Save immediately
+      AsyncStorage.setItem('UPLOADED_PHOTOS', JSON.stringify(updated)).catch(() => {});
+      return updated;
+    });
   };
 
   const updateAlt = (photoId: string, alt: string) => {
-    setUploadedPhotos((prev) =>
-      prev.map((p) => (p.photoId === photoId ? { ...p, alt } : p))
-    );
+    setUploadedPhotos((prev) => {
+      const updated = prev.map((p) => (p.photoId === photoId ? { ...p, alt } : p));
+      // Save immediately
+      AsyncStorage.setItem('UPLOADED_PHOTOS', JSON.stringify(updated)).catch(() => {});
+      return updated;
+    });
   };
 
   // Location search function
@@ -954,6 +966,7 @@ export default function PostNewsUploadMediaScreen() {
               ]}
             >
               <ThemedText style={{ color: '#fff', fontWeight: '600' }}>వేతకండి</ThemedText>
+            </Pressable>
 
             <ScrollView style={styles.locationResultsContainer}>
               {locationResults.length === 0 && locationQuery.trim() && !locationSearching && (

@@ -374,6 +374,12 @@ export type GetNewspaperArticlesParams = {
   categoryId?: string;
   languageId?: string;
   search?: string;
+  fromDate?: string;
+  toDate?: string;
+  stateId?: string;
+  districtId?: string;
+  mandalId?: string;
+  reporterId?: string;
 };
 
 /**

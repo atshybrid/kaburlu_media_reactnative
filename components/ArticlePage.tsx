@@ -37,10 +37,11 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 // Prefer static import; add runtime guard below in case native module isn't linked yet
-import { getCachedCommentsByShortNews, getCommentsByShortNews, prefetchCommentsByShortNews } from '@/services/api';
+import { getCachedCommentsByShortNews, getCommentsByShortNews, prefetchCommentsByShortNews, getShortNewsOptions, type ShortNewsOptionCounts } from '@/services/api';
 import { on } from '@/services/events';
 import ShareLib from 'react-native-share';
 import ViewShot from 'react-native-view-shot';
+import ShareableShortNewsImage, { ShareableShortNewsImageRef, ShareableShortNewsData } from '@/components/ShareableShortNewsImage';
 // Lightweight guard: if module didn't load (shouldn't happen after rebuild) fallbacks will kick in.
 const shareRuntime: typeof ShareLib | undefined = ShareLib || undefined;
 
@@ -120,7 +121,10 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
   const viewShotRef = useRef<ViewShot>(null);
   const heroCaptureRef = useRef<ViewShot>(null); // wraps hero media for image capture
   const fullShareRef = useRef<ViewShot>(null); // off-screen full article capture (hero + title + body, no engagement)
+  const shortNewsShareRef = useRef<ShareableShortNewsImageRef>(null); // for short news with caption
   const [shareMode, setShareMode] = useState(false); // toggled briefly during capture (could show watermark if desired)
+  const [showShortNewsShare, setShowShortNewsShare] = useState(false); // controls ShareableShortNewsImage modal
+  const [optionCounts, setOptionCounts] = useState<ShortNewsOptionCounts | null>(null); // for share image
   // Transliteration for place + tagline
   // Language handling: we keep both the article's original language and the user's selected app language.
   // resolvedLang is what we use for branding/translation (user preference wins).
@@ -376,6 +380,21 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
   // Tap share: capture hero image ONLY (no text baked) and attempt to send image + caption.
   const handleShareTap = async () => {
     try {
+      // Check if this is a short news article with caption or options
+      const caption = (article as any)?.caption;
+      const hasCaption = caption && typeof caption === 'string' && caption.trim().length > 0;
+      
+      if (hasCaption || optionCounts) {
+        // Use ShareableShortNewsImage for short news with caption/options
+        setShowShortNewsShare(true);
+        await new Promise(r => setTimeout(r, 100)); // Allow modal to render
+        await shortNewsShareRef.current?.captureAndShare();
+        setShowShortNewsShare(false);
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        return;
+      }
+
+      // Regular article sharing flow
       setShareMode(true);
       // allow any pending hero rendering (video poster/image) to stabilize
       await new Promise(r => setTimeout(r, 80));
@@ -621,6 +640,10 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
               ]} numberOfLines={maxBodyLines || undefined} ellipsizeMode="tail">
                 {article.body}
               </Text>
+              
+              {/* ShortNews Options Section - Removed from regular view */}
+              {/* Options are now only loaded when sharing, for authorized roles */}
+              
               {/* Gallery moved to top hero; no inline gallery here */}
             </View>
             {/* Right-side vertical engagement rail (disabled in favor of footer) */}
@@ -745,6 +768,71 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
           </View>
         </ViewShot>
       </View>
+
+      {/* Short News Share Modal */}
+      {((article as any)?.caption || optionCounts) && (
+        <ShareableShortNewsImage
+          ref={shortNewsShareRef}
+          visible={showShortNewsShare}
+          shortNews={{
+            id: article.id,
+            title: article.title,
+            content: article.body || '',
+            coverImageUrl: article.imageUrl || article.thumbnail || undefined,
+            caption: (article as any).caption,
+            reporter: article.author ? {
+              id: (article.author as any).id,
+              fullName: (article.author as any).fullName || (article.author as any).name,
+              profilePhotoUrl: (article.author as any).profilePhotoUrl || (article.author as any).avatar,
+              location: (article.author as any).placeName,
+            } : undefined,
+            options: optionCounts ? {
+              positive: optionCounts.positive,
+              negative: optionCounts.negative,
+              total: optionCounts.total,
+              topOptions: [], // will be populated when modal opens
+            } : undefined,
+          }}
+          onCaptureStart={async () => {
+            setShareMode(true);
+            // Fetch top options before sharing (only for authorized roles)
+            try {
+              // Check user role - only CITIZEN_REPORTER, TENANT_ADMIN, TENANT_REPORTER can view/add options
+              const tokens = await AsyncStorage.getItem('jwt');
+              const userJson = await AsyncStorage.getItem('user');
+              const user = userJson ? JSON.parse(userJson) : null;
+              const role = user?.role?.toUpperCase();
+              
+              const canViewOptions = role === 'CITIZEN_REPORTER' || role === 'TENANT_ADMIN' || role === 'TENANT_REPORTER' || role === 'REPORTER';
+              
+              if (canViewOptions && tokens) {
+                const allOptions = await getShortNewsOptions(article.id);
+                if (allOptions && allOptions.length > 0) {
+                  const topOpts = allOptions.slice(0, 2).map(opt => ({
+                    userName: opt.user?.name || 'User',
+                    content: opt.content,
+                    type: opt.type,
+                  }));
+                  // Update the shortNews prop with top options
+                  shortNewsShareRef.current && ((shortNewsShareRef.current as any)._topOptions = topOpts);
+                  
+                  // Update optionCounts for share image
+                  const posCount = allOptions.filter(o => o.type === 'POSITIVE').length;
+                  const negCount = allOptions.filter(o => o.type === 'NEGATIVE').length;
+                  setOptionCounts({
+                    positive: posCount,
+                    negative: negCount,
+                    total: allOptions.length,
+                  });
+                }
+              }
+            } catch (error) {
+              console.error('[Share] Failed to fetch options:', error);
+            }
+          }}
+          onCaptureEnd={() => setShareMode(false)}
+        />
+      )}
     </View>
   );
 };

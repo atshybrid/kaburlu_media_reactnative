@@ -5,7 +5,7 @@ import { useColorScheme } from '@/hooks/useColorScheme';
 import { searchCombinedLocations, requestAddLocation, smartAddLocation, searchDistricts, type CombinedLocationItem, type SmartAddLocationRequest } from '@/services/locations';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useState, useRef } from 'react';
 import {
   ActivityIndicator,
@@ -80,6 +80,11 @@ export default function PostNewsReviewScreen() {
   // Audio for location popup
   const soundRef = useRef<Audio.Sound | null>(null);
 
+  // Audio for review screen (Telugu only)
+  const reviewSoundRef = useRef<Audio.Sound | null>(null);
+  const reviewVoicePlayedRef = useRef(false);
+  const [isFocused, setIsFocused] = useState(true);
+
   const loadData = useCallback(async () => {
     try {
       const storedResponse = await AsyncStorage.getItem('AI_REWRITE_RESPONSE');
@@ -133,10 +138,37 @@ export default function PostNewsReviewScreen() {
     loadData();
   }, [loadData]);
 
+  // Play review voice when this screen loads (Telugu only)
+  useEffect(() => {
+    const playReviewVoice = async () => {
+      if (loading || !isFocused) return;
+      const lc = String(languageCode || '').toLowerCase();
+      if (!lc.startsWith('te')) return;
+      if (reviewVoicePlayedRef.current) return;
+      reviewVoicePlayedRef.current = true;
+
+      try {
+        if (reviewSoundRef.current) {
+          await reviewSoundRef.current.unloadAsync();
+          reviewSoundRef.current = null;
+        }
+        const { sound } = await Audio.Sound.createAsync(
+          require('@/assets/audio/Review_post_voice_telugu.mp3'),
+          { shouldPlay: true, isLooping: false, volume: 1.0 }
+        );
+        reviewSoundRef.current = sound;
+      } catch (error) {
+        console.error('Failed to play review voice:', error);
+      }
+    };
+
+    void playReviewVoice();
+  }, [loading, languageCode, isFocused]);
+
   // Play audio when location not found popup opens (Telugu only)
   useEffect(() => {
     const playLocationAudio = async () => {
-      if (locationNotFoundVisible && languageCode === 'te') {
+      if (locationNotFoundVisible && languageCode === 'te' && isFocused) {
         try {
           // Unload previous sound if exists
           if (soundRef.current) {
@@ -168,13 +200,41 @@ export default function PostNewsReviewScreen() {
     };
 
     playLocationAudio();
-  }, [locationNotFoundVisible, languageCode]);
+  }, [locationNotFoundVisible, languageCode, isFocused]);
+
+  // Stop audio when screen loses focus (navigation away)
+  useFocusEffect(
+    useCallback(() => {
+      // Screen gained focus
+      setIsFocused(true);
+      
+      return () => {
+        // Screen losing focus - stop all audio immediately
+        setIsFocused(false);
+        
+        if (soundRef.current) {
+          soundRef.current.stopAsync().catch(console.error);
+          soundRef.current.unloadAsync().catch(console.error);
+          soundRef.current = null;
+        }
+        if (reviewSoundRef.current) {
+          reviewSoundRef.current.stopAsync().catch(console.error);
+          reviewSoundRef.current.unloadAsync().catch(console.error);
+          reviewSoundRef.current = null;
+        }
+      };
+    }, [])
+  );
 
   // Cleanup audio on unmount
   useEffect(() => {
     return () => {
       if (soundRef.current) {
         soundRef.current.unloadAsync().catch(console.error);
+      }
+
+      if (reviewSoundRef.current) {
+        reviewSoundRef.current.unloadAsync().catch(console.error);
       }
     };
   }, []);

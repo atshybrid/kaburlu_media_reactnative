@@ -38,7 +38,19 @@ export default function Toast() {
     const unsubscribeHttp = onHttpError((err) => {
       // Skip 404 errors - don't show toast
       if ((err as any)?.status === 404) return;
+      
+      // Skip auth errors - these are handled by the app
+      if ((err as any)?.status === 401) return;
+      if ((err as any)?.status === 403) return;
+      
       const msg = (err as any)?.message || 'Network error';
+      const msgLower = String(msg).toLowerCase();
+      
+      // Skip confusing error messages
+      if (msgLower.includes('unauthorized')) return;
+      if (msgLower.includes('forbidden')) return;
+      if (msgLower.includes('token')) return;
+      
       show(String(msg));
     });
 

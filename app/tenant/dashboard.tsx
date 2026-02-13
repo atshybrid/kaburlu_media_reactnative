@@ -1,19 +1,17 @@
 /**
- * Tenant Admin Dashboard - Redesigned for Easy Navigation
+ * Tenant Admin Dashboard - Clean, Simple, Beginner-Friendly
  * 
  * Features:
- * 📰 News Approval (Most Important - Pending articles)
- * 👥 Reporter Management (Create, KYC, ID Card, Edit, Subscription)
- * 📊 Analytics (Daily articles per reporter, counts)
- * 💰 Payments Tracking
- * 📢 Ads Management
+ * ✅ Simple & Easy to Understand
+ * ✅ Clean Card-Based Design  
+ * ✅ Big, Clear Buttons
+ * ✅ Minimal, Classic UI
  */
 
 import { ThemedText } from '@/components/ThemedText';
 import ReporterWantedPoster from '@/components/tenant/ReporterWantedPoster';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Colors } from '@/constants/Colors';
-import { useColorScheme } from '@/hooks/useColorScheme';
 import { loadTokens, softLogout } from '@/services/auth';
 import { logout } from '@/services/api';
 import {
@@ -25,7 +23,7 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Image } from 'expo-image';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
@@ -36,10 +34,13 @@ import {
     StatusBar,
     StyleSheet,
     View,
+    useColorScheme as useRNColorScheme,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-/* ─────────────────────────────  Helpers  ───────────────────────────── */
+/* ─────────────────────────────────────────────────────────────
+   Helper Functions
+───────────────────────────────────────────────────────────── */
 
 function isValidHexColor(v?: string | null) {
   if (!v) return false;
@@ -82,10 +83,12 @@ function initials(name?: string | null): string {
   return letters || 'T';
 }
 
-/* ─────────────────────────────  Main Screen  ───────────────────────────── */
+/* ─────────────────────────────────────────────────────────────
+   Main Dashboard Component
+───────────────────────────────────────────────────────────── */
 
 export default function TenantDashboardScreen() {
-  const scheme = useColorScheme() ?? 'light';
+  const scheme = useRNColorScheme() ?? 'light';
   const c = Colors[scheme];
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -96,11 +99,10 @@ export default function TenantDashboardScreen() {
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<TenantAdminFullResponse | null>(null);
   const [sessionBrand, setSessionBrand] = useState<{ primary?: string; logo?: string; name?: string }>({});
-  const [actualPendingCount, setActualPendingCount] = useState<number | null>(null); // null = not fetched yet
+  const [actualPendingCount, setActualPendingCount] = useState<number | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
 
   const primary = data?.branding?.primaryColor || sessionBrand.primary || c.tint;
-  const secondary = data?.branding?.secondaryColor || '#DC2626';
   const logoUrl = data?.branding?.logoUrl || sessionBrand.logo;
   const tenantName = data?.tenant?.name || sessionBrand.name || 'Admin Dashboard';
 
@@ -124,11 +126,9 @@ export default function TenantDashboardScreen() {
       const dashboard = await getTenantAdminDashboard();
       setData(dashboard);
       
-      // Fetch actual pending count from newspaper API for accuracy
       try {
         const pendingRes = await getNewspaperArticles({ status: 'PENDING', limit: 1 });
         setActualPendingCount(pendingRes.total || 0);
-        console.log('[Dashboard] Actual newspaper pending count:', pendingRes.total);
       } catch (e) {
         console.warn('[Dashboard] Failed to fetch pending count:', e);
       }
@@ -146,45 +146,36 @@ export default function TenantDashboardScreen() {
     }, [loadData])
   );
 
-  // Hardware back button: go to news page
   useFocusEffect(
     useCallback(() => {
-      const onBack = () => {
+      const onBackPress = () => {
         router.replace('/news');
         return true;
       };
-      const sub = BackHandler.addEventListener('hardwareBackPress', onBack);
-      return () => sub.remove();
+      const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+      return () => subscription.remove();
     }, [router])
   );
 
-  const onRefresh = useCallback(() => void loadData(true), [loadData]);
-
-  // Logout handler
-  const handleLogout = useCallback(async () => {
+  const handleLogout = async () => {
+    if (loggingOut) return;
     Alert.alert(
-      'లాగ్అవుట్',
-      'మీరు లాగ్అవుట్ చేయాలనుకుంటున్నారా?',
+      'Logout',
+      'Are you sure you want to logout?',
       [
-        { text: 'రద్దు', style: 'cancel' },
+        { text: 'Cancel', style: 'cancel' },
         {
-          text: 'లాగ్అవుట్',
+          text: 'Logout',
           style: 'destructive',
           onPress: async () => {
+            setLoggingOut(true);
             try {
-              setLoggingOut(true);
-              const jwt = await AsyncStorage.getItem('jwt');
-              const mobile = await AsyncStorage.getItem('profile_mobile') || await AsyncStorage.getItem('last_login_mobile') || '';
-              if (jwt) { try { await logout(); } catch (e: any) { console.warn('[TenantDashboard] remote logout failed', e?.message); } }
-              
-              // Keep language, location, and push notification preferences
-              const keysToKeep = ['selectedLanguage', 'profile_location', 'profile_location_obj', 'push_notifications_enabled'];
-              await softLogout(keysToKeep, mobile || undefined);
-              
-              // Go to account tab
-              router.replace('/tech');
+              await logout();
+              await softLogout();
+              // Redirect to news feed as guest
+              router.replace('/news');
             } catch (e: any) {
-              console.error('[TenantDashboard] Logout failed:', e);
+              console.error('[Dashboard] Logout error:', e);
             } finally {
               setLoggingOut(false);
             }
@@ -192,60 +183,39 @@ export default function TenantDashboardScreen() {
         },
       ]
     );
-  }, [router]);
+  };
 
-  // Calculate stats - Use actual pending count from API for accuracy
-  const pendingArticles = useMemo(() => {
-    // Prefer actual count fetched from newspaper API (even if 0)
-    if (actualPendingCount !== null) {
-      console.log('[Dashboard] Using actual pending count:', actualPendingCount);
-      return actualPendingCount;
-    }
-    // Fallback to dashboard data only if newspaper API failed
-    if (!data) return 0;
-    const webPending = data.articles.web.byStatus.PENDING || 0;
-    const rawPending = data.articles.raw.pendingReview || 0;
-    const newspaperPending = data.articles.newspaper.byStatus.PENDING || 0;
-    const total = webPending + rawPending + newspaperPending;
-    console.log('[Dashboard] Pending from dashboard API:', { webPending, rawPending, newspaperPending, total });
-    return total;
-  }, [data, actualPendingCount]);
+  const onRefresh = useCallback(() => {
+    void loadData(true);
+  }, [loadData]);
 
-  const pendingKyc = useMemo(() => {
-    if (!data) return 0;
-    return (data.reporters.kyc.pending || 0) + (data.reporters.kyc.submitted || 0);
-  }, [data]);
+  const pendingArticles = actualPendingCount ?? data?.articles?.web?.byStatus?.PENDING ?? 0;
+  const pendingKyc = data?.reporters?.kycByStatus?.PENDING ?? 0;
 
-  /* ─────────────────────────────  Render  ───────────────────────────── */
-
-  if (loading) {
-    return (
-      <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['bottom']}>
-        <StatusBar barStyle="light-content" backgroundColor={c.muted} translucent={false} />
-        <DashboardSkeleton scheme={scheme} topInset={insets.top} c={c} />
-      </SafeAreaView>
-    );
+  if (loading && !data) {
+    return <DashboardSkeleton topInset={insets.top} c={c} />;
   }
 
   if (error || !data) {
     return (
-      <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={['top', 'bottom']}>
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+        <StatusBar barStyle="dark-content" backgroundColor="#fff" />
         <View style={styles.errorCenter}>
-          <View style={[styles.errorIcon, { backgroundColor: alphaBg('#ef4444', 0.1, c.background) }]}>
-            <MaterialIcons name="error-outline" size={48} color="#ef4444" />
+          <View style={[styles.errorIcon, { backgroundColor: '#FEE2E2' }]}>
+            <MaterialIcons name="error-outline" size={48} color="#DC2626" />
           </View>
-          <ThemedText type="defaultSemiBold" style={{ color: c.text, marginTop: 12 }}>
-            {error || 'Failed to load dashboard'}
+          <ThemedText style={{ fontSize: 18, fontWeight: '700', marginTop: 16, color: c.text }}>
+            {error || 'Failed to load'}
           </ThemedText>
           <Pressable
             onPress={() => loadData()}
-            style={({ pressed }) => [styles.retryBtn, { backgroundColor: primary }, pressed && { opacity: 0.9 }]}
+            style={({ pressed }) => [
+              styles.retryBtn,
+              { backgroundColor: primary, opacity: pressed ? 0.8 : 1 },
+            ]}
           >
-            <MaterialIcons name="refresh" size={18} color="#fff" />
-            <ThemedText style={{ color: '#fff', fontWeight: '600' }}>Try Again</ThemedText>
-          </Pressable>
-          <Pressable onPress={() => router.back()} style={{ marginTop: 8 }}>
-            <ThemedText style={{ color: primary }}>Go Back</ThemedText>
+            <MaterialIcons name="refresh" size={20} color="#fff" />
+            <ThemedText style={{ color: '#fff', fontSize: 16, fontWeight: '600' }}>Try Again</ThemedText>
           </Pressable>
         </View>
       </SafeAreaView>
@@ -255,448 +225,694 @@ export default function TenantDashboardScreen() {
   const { reporters, articles, payments, idCards } = data;
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: '#fff' }]} edges={['bottom']}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: '#F8F9FA' }]} edges={['bottom']}>
       <StatusBar barStyle="dark-content" backgroundColor="#fff" translucent={false} />
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[primary]} tintColor={primary} />}
-      >
-        {/* ══════════════════════════════════════════════════════════════════
-            CLEAN WHITE HEADER WITH LOGO, TOP ARTICLE & TOP REPORTER
-        ══════════════════════════════════════════════════════════════════ */}
-        <View style={[styles.header, { paddingTop: insets.top + 12, backgroundColor: '#fff' }]}>
-          
-          {/* Top Bar - Back, Title & Logout */}
-          <View style={styles.topBar}>
-            <Pressable
-              onPress={() => router.replace('/news')}
-              style={({ pressed }) => [styles.backBtnWhite, pressed && { opacity: 0.7 }]}
-            >
-              <MaterialIcons name="arrow-back" size={22} color={c.text} />
-            </Pressable>
-            <ThemedText style={[styles.headerTitle, { color: c.text }]}>Admin Dashboard</ThemedText>
-            <Pressable
-              onPress={handleLogout}
-              disabled={loggingOut}
-              style={({ pressed }) => [styles.refreshBtnWhite, pressed && { opacity: 0.7 }]}
-            >
-              {loggingOut ? (
-                <ActivityIndicator size="small" color={c.muted} />
-              ) : (
-                <MaterialIcons name="logout" size={22} color={c.muted} />
-              )}
-            </Pressable>
-          </View>
-
-          {/* BRAND LOGO - Large & Prominent */}
-          <View style={styles.brandLogoSection}>
-            <View style={[styles.logoBgWhite, { borderColor: alphaBg(primary, 0.2, '#eee') }]}>
-              {logoUrl ? (
-                <Image source={{ uri: logoUrl }} style={styles.logoImageLarge} contentFit="contain" />
-              ) : (
-                <View style={[styles.logoFallback, { backgroundColor: alphaBg(primary, 0.1, '#f5f5f5') }]}>
-                  <ThemedText style={[styles.logoTextLarge, { color: primary }]}>
-                    {initials(tenantName)}
-                  </ThemedText>
-                </View>
-              )}
-            </View>
-            <ThemedText style={[styles.brandNameLarge, { color: c.text }]} numberOfLines={1}>
-              {tenantName}
-            </ThemedText>
-            {data.tenant?.prgiNumber && (
-              <View style={[styles.verifiedBadgeWhite, { backgroundColor: alphaBg('#22C55E', 0.1, '#f0fdf4') }]}>
-                <MaterialIcons name="verified" size={14} color="#22C55E" />
-                <ThemedText style={styles.verifiedTextGreen}>{data.tenant.prgiNumber}</ThemedText>
-              </View>
-            )}
-          </View>
-
-          {/* HIGHLIGHT CARDS - Top Article & Top Reporter */}
-          <View style={styles.highlightCards}>
-            {/* Top Performing Article */}
-            <View style={[styles.highlightCard, { backgroundColor: alphaBg('#3B82F6', 0.08, '#f0f7ff'), borderColor: alphaBg('#3B82F6', 0.2, '#dbeafe') }]}>
-              <View style={styles.highlightIconRow}>
-                <MaterialIcons name="trending-up" size={20} color="#3B82F6" />
-                <ThemedText style={styles.highlightLabel}>Top Article</ThemedText>
-              </View>
-              <ThemedText style={[styles.highlightValue, { color: '#3B82F6' }]} numberOfLines={1}>
-                {formatNumber(articles.web.totalViews)} views
-              </ThemedText>
-              <ThemedText style={[styles.highlightSub, { color: c.muted }]} numberOfLines={1}>
-                {articles.web.byStatus.PUBLISHED || 0} published total
-              </ThemedText>
-            </View>
-
-            {/* Top Reporter */}
-            <View style={[styles.highlightCard, { backgroundColor: alphaBg('#8B5CF6', 0.08, '#faf5ff'), borderColor: alphaBg('#8B5CF6', 0.2, '#ede9fe') }]}>
-              <View style={styles.highlightIconRow}>
-                <MaterialIcons name="star" size={20} color="#8B5CF6" />
-                <ThemedText style={styles.highlightLabel}>Top Reporter</ThemedText>
-              </View>
-              <ThemedText style={[styles.highlightValue, { color: '#8B5CF6' }]} numberOfLines={1}>
-                {reporters.total > 0 ? `${reporters.total} members` : 'No reporters'}
-              </ThemedText>
-              <ThemedText style={[styles.highlightSub, { color: c.muted }]} numberOfLines={1}>
-                {reporters.active} active this month
-              </ThemedText>
-            </View>
-          </View>
-
-          {/* Quick Stats Row */}
-          <View style={[styles.quickStatsRow, { backgroundColor: c.card, borderColor: c.border }]}>
-            <View style={styles.quickStat}>
-              <ThemedText style={[styles.quickStatNum, { color: '#10B981' }]}>{articles.web.published7d}</ThemedText>
-              <ThemedText style={[styles.quickStatLabel, { color: c.muted }]}>This Week</ThemedText>
-            </View>
-            <View style={[styles.quickStatDivider, { backgroundColor: c.border }]} />
-            <View style={styles.quickStat}>
-              <ThemedText style={[styles.quickStatNum, { color: '#3B82F6' }]}>{articles.web.published30d}</ThemedText>
-              <ThemedText style={[styles.quickStatLabel, { color: c.muted }]}>This Month</ThemedText>
-            </View>
-            <View style={[styles.quickStatDivider, { backgroundColor: c.border }]} />
-            <View style={styles.quickStat}>
-              <ThemedText style={[styles.quickStatNum, pendingArticles > 0 ? { color: '#F59E0B' } : { color: c.text }]}>{pendingArticles}</ThemedText>
-              <ThemedText style={[styles.quickStatLabel, { color: c.muted }]}>Pending</ThemedText>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.content}>
-          {/* ══════════════════════════════════════════════════════════════════
-              � PENDING NEWS ALERT - SIMPLE & CLEAR
-          ══════════════════════════════════════════════════════════════════ */}
-          {pendingArticles > 0 && (
-            <Pressable
-              onPress={() => router.push('/tenant/news-approval' as any)}
-              style={({ pressed }) => [
-                styles.pendingBanner,
-                pressed && { opacity: 0.9 },
-              ]}
-            >
-              <View style={styles.pendingIconBox}>
-                <MaterialIcons name="notifications" size={28} color="#fff" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <ThemedText style={styles.pendingTitle}>
-                  {pendingArticles} News Waiting
-                </ThemedText>
-                <ThemedText style={styles.pendingSubtitle}>
-                  Tap here to approve
-                </ThemedText>
-              </View>
-              <MaterialIcons name="arrow-forward-ios" size={20} color="#fff" />
-            </Pressable>
-          )}
-
-          {/* ══════════════════════════════════════════════════════════════════
-              🎨 MAIN ACTIONS - BIG EASY BUTTONS
-          ══════════════════════════════════════════════════════════════════ */}
-          <ThemedText style={[styles.sectionLabel, { color: c.muted }]}>Main Actions</ThemedText>
-          
-          <View style={styles.bigButtonsGrid}>
-            <BigButton
-              icon="rate-review"
-              label="Approve News"
-              desc="Review & publish"
-              color="#F59E0B"
-              badge={pendingArticles}
-              onPress={() => router.push('/tenant/news-approval' as any)}
-              c={c}
-            />
-            <BigButton
-              icon="person-add"
-              label="Add Reporter"
-              desc="Create new member"
-              color="#6366F1"
-              onPress={() => router.push('/tenant/create-reporter' as any)}
-              c={c}
-            />
-            <BigButton
-              icon="edit"
-              label="Write News"
-              desc="Post article"
-              color="#10B981"
-              onPress={() => router.push('/post-news' as any)}
-              c={c}
-            />
-            <BigButton
-              icon="groups"
-              label="My Team"
-              desc={`${reporters.total} reporters`}
-              color="#8B5CF6"
-              onPress={() => router.push('/tenant/reporters' as any)}
-              c={c}
-            />
-            <BigButton
-              icon="campaign"
-              label="Reporter Wanted"
-              desc="Create poster"
-              color="#DC2626"
-              onPress={() => setShowReporterPoster(true)}
-              c={c}
-            />
-          </View>
-
-          {/* ══════════════════════════════════════════════════════════════════
-              📄 MORE OPTIONS - SIMPLE LIST
-          ══════════════════════════════════════════════════════════════════ */}
-          <ThemedText style={[styles.sectionLabel, { color: c.muted }]}>More Options</ThemedText>
-          
-          <View style={[styles.optionsList, { backgroundColor: c.card, borderColor: c.border }]}>
-            <SimpleOption
-              icon="verified-user"
-              label="KYC Verification"
-              badge={pendingKyc}
-              badgeColor="#EF4444"
-              onPress={() => (router.push as any)({ pathname: '/tenant/reporters', params: { kycFilter: 'PENDING' } })}
-              c={c}
-            />
-            <View style={[styles.optionDivider, { backgroundColor: c.border }]} />
-            <SimpleOption
-              icon="badge"
-              label="ID Cards"
-              subtitle={`${idCards.issued} issued`}
-              onPress={() => router.push('/tenant/reporters' as any)}
-              c={c}
-            />
-            <View style={[styles.optionDivider, { backgroundColor: c.border }]} />
-            <SimpleOption
-              icon="check-circle"
-              label="Published Articles"
-              subtitle={`${articles.web.byStatus.PUBLISHED || 0} total`}
-              onPress={() => (router.push as any)({ pathname: '/tenant/news-approval', params: { status: 'PUBLISHED' } })}
-              c={c}
-            />
-            <View style={[styles.optionDivider, { backgroundColor: c.border }]} />
-            <SimpleOption
-              icon="account-balance-wallet"
-              label="Payments"
-              subtitle={formatMoney(payments.revenue30d)}
-              onPress={() => {}}
-              c={c}
-            />
-          </View>
-
-          {/* ══════════════════════════════════════════════════════════════════
-              📊 QUICK STATS - SIMPLE VIEW
-          ══════════════════════════════════════════════════════════════════ */}
-          <ThemedText style={[styles.sectionLabel, { color: c.muted }]}>This Month</ThemedText>
-          
-          <View style={styles.statsCards}>
-            <View style={[styles.statBox, { backgroundColor: c.card, borderColor: c.border }]}>
-              <ThemedText style={[styles.statBoxNum, { color: '#10B981' }]}>+{articles.web.published7d}</ThemedText>
-              <ThemedText style={[styles.statBoxLabel, { color: c.muted }]}>This Week</ThemedText>
-            </View>
-            <View style={[styles.statBox, { backgroundColor: c.card, borderColor: c.border }]}>
-              <ThemedText style={[styles.statBoxNum, { color: '#3B82F6' }]}>+{articles.web.published30d}</ThemedText>
-              <ThemedText style={[styles.statBoxLabel, { color: c.muted }]}>This Month</ThemedText>
-            </View>
-            <View style={[styles.statBox, { backgroundColor: c.card, borderColor: c.border }]}>
-              <ThemedText style={[styles.statBoxNum, { color: '#8B5CF6' }]}>{formatNumber(articles.web.totalViews)}</ThemedText>
-              <ThemedText style={[styles.statBoxLabel, { color: c.muted }]}>Total Views</ThemedText>
-            </View>
-          </View>
-
-          <View style={{ height: 40 }} />
-        </View>
-      </ScrollView>
-
-      {/* Reporter Wanted Poster Modal */}
+      
       <ReporterWantedPoster
         visible={showReporterPoster}
         onClose={() => setShowReporterPoster(false)}
         tenantName={tenantName}
         tenantLogo={logoUrl}
-        primaryColor={primary}
-        secondaryColor={secondary}
+        brandColor={primary}
       />
+
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[primary]} tintColor={primary} />}
+      >
+        {/* ══════════════════════════════════════════════════════════════════
+            SIMPLE HEADER - CLEAN & MINIMAL
+        ══════════════════════════════════════════════════════════════════ */}
+        <View style={[styles.header, { paddingTop: insets.top + 16 }]}>
+          <View style={styles.headerRow}>
+            <Pressable
+              onPress={() => router.replace('/news')}
+              style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.6 }]}
+            >
+              <MaterialIcons name="arrow-back" size={24} color="#374151" />
+            </Pressable>
+            
+            <View style={styles.headerCenter}>
+              {logoUrl ? (
+                <Image source={{ uri: logoUrl }} style={styles.headerLogo} contentFit="contain" />
+              ) : (
+                <View style={[styles.headerLogoFallback, { backgroundColor: alphaBg(primary, 0.12, '#f3f4f6') }]}>
+                  <ThemedText style={[styles.headerLogoText, { color: primary }]}>
+                    {initials(tenantName)}
+                  </ThemedText>
+                </View>
+              )}
+              <View style={styles.headerInfo}>
+                <ThemedText style={styles.headerName} numberOfLines={1}>
+                  {tenantName}
+                </ThemedText>
+                {data.tenant?.prgiNumber && (
+                  <View style={styles.headerVerified}>
+                    <MaterialIcons name="verified" size={14} color="#10B981" />
+                    <ThemedText style={styles.headerVerifiedText}>Verified</ThemedText>
+                  </View>
+                )}
+              </View>
+            </View>
+
+            <Pressable
+              onPress={handleLogout}
+              disabled={loggingOut}
+              style={({ pressed }) => [styles.logoutBtn, pressed && { opacity: 0.6 }]}
+            >
+              {loggingOut ? (
+                <ActivityIndicator size="small" color="#DC2626" />
+              ) : (
+                <MaterialIcons name="logout" size={24} color="#DC2626" />
+              )}
+            </Pressable>
+          </View>
+        </View>
+
+        <View style={styles.content}>
+          {/* ══════════════════════════════════════════════════════════════════
+              📊 QUICK STATS - AT A GLANCE
+          ══════════════════════════════════════════════════════════════════ */}
+          <View style={styles.statsCard}>
+            <View style={styles.stat}>
+              <ThemedText style={[styles.statNumber, { color: '#10B981' }]}>
+                {articles.web.published7d}
+              </ThemedText>
+              <ThemedText style={styles.statLabel}>Published This Week</ThemedText>
+            </View>
+            
+            <View style={styles.statDivider} />
+            
+            <View style={styles.stat}>
+              <ThemedText style={[styles.statNumber, { color: '#3B82F6' }]}>
+                {reporters.total}
+              </ThemedText>
+              <ThemedText style={styles.statLabel}>Total Reporters</ThemedText>
+            </View>
+            
+            <View style={styles.statDivider} />
+            
+            <View style={styles.stat}>
+              <ThemedText style={[styles.statNumber, pendingArticles > 0 ? { color: '#F59E0B' } : { color: '#6B7280' }]}>
+                {pendingArticles}
+              </ThemedText>
+              <ThemedText style={styles.statLabel}>Pending Review</ThemedText>
+            </View>
+          </View>
+
+          {/* ══════════════════════════════════════════════════════════════════
+              ⚠ PENDING ALERT - IF ANY
+          ══════════════════════════════════════════════════════════════════ */}
+          {pendingArticles > 0 && (
+            <Pressable
+              onPress={() => router.push('/tenant/news-approval' as any)}
+              style={({ pressed }) => [
+                styles.alertCard,
+                pressed && { opacity: 0.9 },
+              ]}
+            >
+              <View style={styles.alertIcon}>
+                <MaterialIcons name="error-outline" size={28} color="#fff" />
+              </View>
+              <View style={styles.alertContent}>
+                <ThemedText style={styles.alertTitle}>
+                  {pendingArticles} Article{pendingArticles > 1 ? 's' : ''} Waiting for Approval
+                </ThemedText>
+                <ThemedText style={styles.alertSubtitle}>
+                  Tap to review and publish
+                </ThemedText>
+              </View>
+              <MaterialIcons name="chevron-right" size={28} color="#fff" />
+            </Pressable>
+          )}
+
+          {/* ══════════════════════════════════════════════════════════════════
+              🎯 MAIN ACTIONS - SIMPLE & CLEAR
+          ══════════════════════════════════════════════════════════════════ */}
+          <ThemedText style={styles.sectionTitle}>Main Actions</ThemedText>
+          
+          <View style={styles.actionsGrid}>
+            <Pressable
+              onPress={() => router.push('/tenant/news-approval' as any)}
+              style={({ pressed }) => [
+                styles.actionCard,
+                pressed && { opacity: 0.8 },
+              ]}
+            >
+              <View style={[styles.actionIconBox, { backgroundColor: '#FEF3C7' }]}>
+                <MaterialIcons name="rate-review" size={32} color="#F59E0B" />
+              </View>
+              {pendingArticles > 0 && (
+                <View style={styles.actionBadge}>
+                  <ThemedText style={styles.actionBadgeText}>{pendingArticles}</ThemedText>
+                </View>
+              )}
+              <ThemedText style={styles.actionTitle}>Approve News</ThemedText>
+              <ThemedText style={styles.actionSubtitle}>Review & Publish</ThemedText>
+            </Pressable>
+
+            <Pressable
+              onPress={() => router.push('/tenant/create-reporter' as any)}
+              style={({ pressed }) => [
+                styles.actionCard,
+                pressed && { opacity: 0.8 },
+              ]}
+            >
+              <View style={[styles.actionIconBox, { backgroundColor: '#E0E7FF' }]}>
+                <MaterialIcons name="person-add" size={32} color="#6366F1" />
+              </View>
+              <ThemedText style={styles.actionTitle}>Add Reporter</ThemedText>
+              <ThemedText style={styles.actionSubtitle}>Create New</ThemedText>
+            </Pressable>
+
+            <Pressable
+              onPress={() => router.push('/tenant/reporters' as any)}
+              style={({ pressed }) => [
+                styles.actionCard,
+                pressed && { opacity: 0.8 },
+              ]}
+            >
+              <View style={[styles.actionIconBox, { backgroundColor: '#F3E8FF' }]}>
+                <MaterialIcons name="groups" size={32} color="#8B5CF6" />
+              </View>
+              <ThemedText style={styles.actionTitle}>My Reporters</ThemedText>
+              <ThemedText style={styles.actionSubtitle}>{reporters.total} Members</ThemedText>
+            </Pressable>
+
+            <Pressable
+              onPress={() => router.push('/post-news' as any)}
+              style={({ pressed }) => [
+                styles.actionCard,
+                pressed && { opacity: 0.8 },
+              ]}
+            >
+              <View style={[styles.actionIconBox, { backgroundColor: '#D1FAE5' }]}>
+                <MaterialIcons name="edit" size={32} color="#10B981" />
+              </View>
+              <ThemedText style={styles.actionTitle}>Write News</ThemedText>
+              <ThemedText style={styles.actionSubtitle}>Post Article</ThemedText>
+            </Pressable>
+
+            <Pressable
+              onPress={() => router.push('/tenant/daily-newspaper' as any)}
+              style={({ pressed }) => [
+                styles.actionCard,
+                pressed && { opacity: 0.8 },
+              ]}
+            >
+              <View style={[styles.actionIconBox, { backgroundColor: '#FEF3C7' }]}>
+                <MaterialIcons name="newspaper" size={32} color="#F59E0B" />
+              </View>
+              <ThemedText style={styles.actionTitle}>Daily Newspaper</ThemedText>
+              <ThemedText style={styles.actionSubtitle}>Today's Articles</ThemedText>
+            </Pressable>
+
+            <Pressable
+              onPress={() => router.push('/tenant/epaper' as any)}
+              style={({ pressed }) => [
+                styles.actionCard,
+                pressed && { opacity: 0.8 },
+              ]}
+            >
+              <View style={[styles.actionIconBox, { backgroundColor: '#DBEAFE' }]}>
+                <MaterialIcons name="menu-book" size={32} color="#3B82F6" />
+              </View>
+              <ThemedText style={styles.actionTitle}>E-Paper</ThemedText>
+              <ThemedText style={styles.actionSubtitle}>Digital Edition</ThemedText>
+            </Pressable>
+          </View>
+
+          {/* ══════════════════════════════════════════════════════════════════
+              📋 MORE OPTIONS - LIST VIEW
+          ══════════════════════════════════════════════════════════════════ */}
+          <ThemedText style={styles.sectionTitle}>More Options</ThemedText>
+          
+          <View style={styles.optionsCard}>
+            <Pressable
+              onPress={() => (router.push as any)({ pathname: '/tenant/reporters', params: { kycFilter: 'PENDING' } })}
+              style={({ pressed }) => [
+                styles.optionItem,
+                pressed && { backgroundColor: '#F9FAFB' },
+              ]}
+            >
+              <View style={[styles.optionIcon, { backgroundColor: '#FEE2E2' }]}>
+                <MaterialIcons name="verified-user" size={20} color="#DC2626" />
+              </View>
+              <View style={styles.optionContent}>
+                <ThemedText style={styles.optionTitle}>KYC Verification</ThemedText>
+                <ThemedText style={styles.optionSubtitle}>Review pending requests</ThemedText>
+              </View>
+              {pendingKyc > 0 && (
+                <View style={styles.optionBadge}>
+                  <ThemedText style={styles.optionBadgeText}>{pendingKyc}</ThemedText>
+                </View>
+              )}
+              <MaterialIcons name="chevron-right" size={24} color="#9CA3AF" />
+            </Pressable>
+
+            <View style={styles.optionDivider} />
+
+            <Pressable
+              onPress={() => router.push('/tenant/reporters' as any)}
+              style={({ pressed }) => [
+                styles.optionItem,
+                pressed && { backgroundColor: '#F9FAFB' },
+              ]}
+            >
+              <View style={[styles.optionIcon, { backgroundColor: '#DBEAFE' }]}>
+                <MaterialIcons name="badge" size={20} color="#3B82F6" />
+              </View>
+              <View style={styles.optionContent}>
+                <ThemedText style={styles.optionTitle}>ID Cards</ThemedText>
+                <ThemedText style={styles.optionSubtitle}>{idCards.issued} issued</ThemedText>
+              </View>
+              <MaterialIcons name="chevron-right" size={24} color="#9CA3AF" />
+            </Pressable>
+
+            <View style={styles.optionDivider} />
+
+            <Pressable
+              onPress={() => (router.push as any)({ pathname: '/tenant/news-approval', params: { status: 'PUBLISHED' } })}
+              style={({ pressed }) => [
+                styles.optionItem,
+                pressed && { backgroundColor: '#F9FAFB' },
+              ]}
+            >
+              <View style={[styles.optionIcon, { backgroundColor: '#D1FAE5' }]}>
+                <MaterialIcons name="article" size={20} color="#10B981" />
+              </View>
+              <View style={styles.optionContent}>
+                <ThemedText style={styles.optionTitle}>Published Articles</ThemedText>
+                <ThemedText style={styles.optionSubtitle}>{articles.web.byStatus.PUBLISHED || 0} total</ThemedText>
+              </View>
+              <MaterialIcons name="chevron-right" size={24} color="#9CA3AF" />
+            </Pressable>
+
+            <View style={styles.optionDivider} />
+
+            <Pressable
+              onPress={() => router.push('/tenant/epaper' as any)}
+              style={({ pressed }) => [
+                styles.optionItem,
+                pressed && { backgroundColor: '#F9FAFB' },
+              ]}
+            >
+              <View style={[styles.optionIcon, { backgroundColor: '#DBEAFE' }]}>
+                <MaterialIcons name="menu-book" size={20} color="#3B82F6" />
+              </View>
+              <View style={styles.optionContent}>
+                <ThemedText style={styles.optionTitle}>E-Paper</ThemedText>
+                <ThemedText style={styles.optionSubtitle}>View digital editions</ThemedText>
+              </View>
+              <MaterialIcons name="chevron-right" size={24} color="#9CA3AF" />
+            </Pressable>
+
+            <View style={styles.optionDivider} />
+
+            <Pressable
+              onPress={() => setShowReporterPoster(true)}
+              style={({ pressed }) => [
+                styles.optionItem,
+                pressed && { backgroundColor: '#F9FAFB' },
+              ]}
+            >
+              <View style={[styles.optionIcon, { backgroundColor: '#FCE7F3' }]}>
+                <MaterialIcons name="campaign" size={20} color="#EC4899" />
+              </View>
+              <View style={styles.optionContent}>
+                <ThemedText style={styles.optionTitle}>Reporter Wanted Poster</ThemedText>
+                <ThemedText style={styles.optionSubtitle}>Create recruitment post</ThemedText>
+              </View>
+              <MaterialIcons name="chevron-right" size={24} color="#9CA3AF" />
+            </Pressable>
+
+            <View style={styles.optionDivider} />
+
+            <Pressable
+              onPress={() => {}}
+              style={({ pressed }) => [
+                styles.optionItem,
+                pressed && { backgroundColor: '#F9FAFB' },
+              ]}
+            >
+              <View style={[styles.optionIcon, { backgroundColor: '#FEF3C7' }]}>
+                <MaterialIcons name="account-balance-wallet" size={20} color="#F59E0B" />
+              </View>
+              <View style={styles.optionContent}>
+                <ThemedText style={styles.optionTitle}>Payments & Revenue</ThemedText>
+                <ThemedText style={styles.optionSubtitle}>{formatMoney(payments.revenue30d)} this month</ThemedText>
+              </View>
+              <MaterialIcons name="chevron-right" size={24} color="#9CA3AF" />
+            </Pressable>
+          </View>
+
+          <View style={{ height: 40 }} />
+        </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
-/* ─────────────────────────────  Components  ───────────────────────────── */
+/* ─────────────────────────────────────────────────────────────
+   Loading Skeleton
+───────────────────────────────────────────────────────────── */
 
-function BigButton({
-  icon, label, desc, color, badge, onPress, c,
-}: {
-  icon: keyof typeof MaterialIcons.glyphMap;
-  label: string;
-  desc: string;
-  color: string;
-  badge?: number;
-  onPress: () => void;
-  c: typeof Colors.light;
-}) {
+function DashboardSkeleton({ topInset, c }: { topInset: number; c: typeof Colors.light }) {
   return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.bigBtn,
-        { backgroundColor: c.card, borderColor: c.border },
-        pressed && { opacity: 0.9, transform: [{ scale: 0.98 }] },
-      ]}
-    >
-      <View style={[styles.bigBtnIcon, { backgroundColor: alphaBg(color, 0.12, c.background) }]}>
-        <MaterialIcons name={icon} size={28} color={color} />
-      </View>
-      <ThemedText style={[styles.bigBtnLabel, { color: c.text }]}>{label}</ThemedText>
-      <ThemedText style={[styles.bigBtnDesc, { color: c.muted }]}>{desc}</ThemedText>
-      {badge !== undefined && badge > 0 && (
-        <View style={[styles.bigBtnBadge, { backgroundColor: color }]}>
-          <ThemedText style={styles.bigBtnBadgeText}>{badge}</ThemedText>
-        </View>
-      )}
-    </Pressable>
-  );
-}
-
-function SimpleOption({
-  icon, label, subtitle, badge, badgeColor, onPress, c,
-}: {
-  icon: keyof typeof MaterialIcons.glyphMap;
-  label: string;
-  subtitle?: string;
-  badge?: number;
-  badgeColor?: string;
-  onPress: () => void;
-  c: typeof Colors.light;
-}) {
-  return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.simpleOpt,
-        pressed && { opacity: 0.8 },
-      ]}
-    >
-      <MaterialIcons name={icon} size={22} color={c.muted} />
-      <View style={{ flex: 1, marginLeft: 14 }}>
-        <ThemedText style={[styles.simpleOptLabel, { color: c.text }]}>{label}</ThemedText>
-        {subtitle && <ThemedText style={[styles.simpleOptSub, { color: c.muted }]}>{subtitle}</ThemedText>}
-      </View>
-      {badge !== undefined && badge > 0 && (
-        <View style={[styles.simpleOptBadge, { backgroundColor: badgeColor || '#EF4444' }]}>
-          <ThemedText style={styles.simpleOptBadgeText}>{badge}</ThemedText>
-        </View>
-      )}
-      <MaterialIcons name="chevron-right" size={20} color={c.border} />
-    </Pressable>
-  );
-}
-
-function DashboardSkeleton({ topInset, c }: { scheme: 'light' | 'dark'; topInset: number; c: typeof Colors.light }) {
-  return (
-    <ScrollView showsVerticalScrollIndicator={false}>
-      <View style={[styles.header, { paddingTop: topInset + 12, backgroundColor: '#fff' }]}>
-        <View style={styles.topBar}>
-          <Skeleton width={40} height={40} borderRadius={20} />
-          <Skeleton width={120} height={18} borderRadius={9} />
-          <Skeleton width={40} height={40} borderRadius={20} />
-        </View>
-        <View style={styles.brandLogoSection}>
-          <Skeleton width={100} height={100} borderRadius={24} />
-          <Skeleton width={180} height={24} borderRadius={12} style={{ marginTop: 14 }} />
-          <Skeleton width={100} height={28} borderRadius={14} style={{ marginTop: 8 }} />
-        </View>
-        <View style={styles.highlightCards}>
-          <Skeleton width={'48%' as any} height={90} borderRadius={16} />
-          <Skeleton width={'48%' as any} height={90} borderRadius={16} />
-        </View>
-        <Skeleton width={'100%' as any} height={60} borderRadius={14} />
-      </View>
-      <View style={styles.content}>
-        <Skeleton width={100} height={14} borderRadius={7} style={{ marginBottom: 12 }} />
-        <View style={styles.bigButtonsGrid}>
-          {[1, 2, 3, 4].map((i) => (
-            <View key={i} style={[styles.bigBtn, { backgroundColor: c.card, borderColor: c.border }]}>
-              <Skeleton width={56} height={56} borderRadius={16} />
-              <Skeleton width={70} height={14} borderRadius={7} style={{ marginTop: 10 }} />
-              <Skeleton width={50} height={10} borderRadius={5} style={{ marginTop: 4 }} />
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#F8F9FA' }} edges={['bottom']}>
+      <StatusBar barStyle="dark-content" backgroundColor="#fff" />
+      <ScrollView showsVerticalScrollIndicator={false}>
+        <View style={[styles.header, { paddingTop: topInset + 16 }]}>
+          <View style={styles.headerRow}>
+            <Skeleton width={40} height={40} borderRadius={20} />
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <Skeleton width={48} height={48} borderRadius={24} />
+              <Skeleton width={140} height={20} borderRadius={10} />
             </View>
-          ))}
+            <Skeleton width={40} height={40} borderRadius={20} />
+          </View>
         </View>
-      </View>
-    </ScrollView>
+        <View style={styles.content}>
+          <Skeleton width={'100%' as any} height={90} borderRadius={16} style={{ marginBottom: 20 }} />
+          <Skeleton width={100} height={16} borderRadius={8} style={{ marginBottom: 16 }} />
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 14 }}>
+            {[1, 2, 3, 4].map((i) => (
+              <Skeleton key={i} width={'47%' as any} height={130} borderRadius={16} />
+            ))}
+          </View>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
-/* ─────────────────────────────  Styles  ───────────────────────────── */
+/* ─────────────────────────────────────────────────────────────
+   Styles
+───────────────────────────────────────────────────────────── */
 
 const styles = StyleSheet.create({
-  safe: { flex: 1 },
+  safe: { 
+    flex: 1 
+  },
 
-  // Clean White Header
-  header: { paddingHorizontal: 20, paddingBottom: 20, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
-  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
-  backBtnWhite: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#f5f5f5', alignItems: 'center', justifyContent: 'center' },
-  refreshBtnWhite: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#f5f5f5', alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { fontSize: 17, fontWeight: '700' },
-  
-  // Brand Logo Section - Centered & Prominent
-  brandLogoSection: { alignItems: 'center', marginBottom: 24 },
-  logoBgWhite: { width: 100, height: 100, borderRadius: 24, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', borderWidth: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 12, elevation: 6, marginBottom: 14 },
-  logoImageLarge: { width: 70, height: 70 },
-  logoFallback: { width: 94, height: 94, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
-  logoTextLarge: { fontSize: 36, fontWeight: '800' },
-  brandNameLarge: { fontSize: 24, fontWeight: '800', textAlign: 'center', marginBottom: 8 },
-  verifiedBadgeWhite: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20 },
-  verifiedTextGreen: { color: '#22C55E', fontSize: 12, fontWeight: '600' },
-  
-  // Highlight Cards - Top Article & Top Reporter
-  highlightCards: { flexDirection: 'row', gap: 12, marginBottom: 16 },
-  highlightCard: { flex: 1, padding: 14, borderRadius: 16, borderWidth: 1 },
-  highlightIconRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
-  highlightLabel: { fontSize: 12, fontWeight: '600', color: '#64748b' },
-  highlightValue: { fontSize: 18, fontWeight: '800' },
-  highlightSub: { fontSize: 11, marginTop: 4 },
-  
-  // Quick Stats Row
-  quickStatsRow: { flexDirection: 'row', borderRadius: 14, paddingVertical: 14, paddingHorizontal: 8, borderWidth: 1 },
-  quickStat: { flex: 1, alignItems: 'center' },
-  quickStatNum: { fontSize: 20, fontWeight: '800' },
-  quickStatLabel: { fontSize: 10, fontWeight: '500', marginTop: 2, textTransform: 'uppercase' },
-  quickStatDivider: { width: 1, height: 28, alignSelf: 'center' },
+  /* Header */
+  header: {
+    backgroundColor: '#fff',
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  backBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerCenter: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 14,
+    marginRight: 14,
+    gap: 12,
+  },
+  headerLogo: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+  },
+  headerLogoFallback: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerLogoText: {
+    fontSize: 20,
+    fontWeight: '800',
+  },
+  headerInfo: {
+    flex: 1,
+  },
+  headerName: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 4,
+  },
+  headerVerified: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  headerVerifiedText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#10B981',
+  },
+  logoutBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#FEE2E2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
-  // Content
-  content: { paddingHorizontal: 16, paddingTop: 20 },
+  /* Content */
+  content: {
+    padding: 20,
+  },
 
-  // Section Label
-  sectionLabel: { fontSize: 13, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 12, marginTop: 8 },
+  /* Stats Card */
+  statsCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 20,
+    flexDirection: 'row',
+    marginBottom: 20,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  stat: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  statNumber: {
+    fontSize: 28,
+    fontWeight: '800',
+    marginBottom: 6,
+  },
+  statLabel: {
+    fontSize: 12,
+    color: '#6B7280',
+    textAlign: 'center',
+    fontWeight: '600',
+  },
+  statDivider: {
+    width: 1,
+    backgroundColor: '#E5E7EB',
+    marginHorizontal: 8,
+  },
 
-  // Pending Banner
-  pendingBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F59E0B', borderRadius: 16, padding: 16, marginBottom: 20, gap: 12 },
-  pendingIconBox: { width: 48, height: 48, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' },
-  pendingTitle: { color: '#fff', fontSize: 17, fontWeight: '700' },
-  pendingSubtitle: { color: 'rgba(255,255,255,0.85)', fontSize: 13, marginTop: 2 },
+  /* Alert Card */
+  alertCard: {
+    backgroundColor: '#F59E0B',
+    borderRadius: 16,
+    padding: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    marginBottom: 24,
+    shadowColor: '#F59E0B',
+    shadowOpacity: 0.3,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 12,
+    elevation: 6,
+  },
+  alertIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  alertContent: {
+    flex: 1,
+  },
+  alertTitle: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  alertSubtitle: {
+    color: 'rgba(255, 255, 255, 0.9)',
+    fontSize: 13,
+    fontWeight: '500',
+  },
 
-  // Big Buttons Grid
-  bigButtonsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  bigBtn: { width: '47%', flexGrow: 1, alignItems: 'center', paddingVertical: 20, paddingHorizontal: 12, borderRadius: 20, borderWidth: 1, position: 'relative' },
-  bigBtnIcon: { width: 56, height: 56, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginBottom: 10 },
-  bigBtnLabel: { fontSize: 14, fontWeight: '700', textAlign: 'center' },
-  bigBtnDesc: { fontSize: 11, marginTop: 4, textAlign: 'center' },
-  bigBtnBadge: { position: 'absolute', top: 10, right: 10, minWidth: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
-  bigBtnBadgeText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+  /* Section Title */
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 16,
+  },
 
-  // Options List
-  optionsList: { borderRadius: 16, borderWidth: 1, overflow: 'hidden', marginBottom: 20 },
-  simpleOpt: { flexDirection: 'row', alignItems: 'center', padding: 16 },
-  simpleOptLabel: { fontSize: 15, fontWeight: '600' },
-  simpleOptSub: { fontSize: 12, marginTop: 2 },
-  simpleOptBadge: { minWidth: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6, marginRight: 8 },
-  simpleOptBadgeText: { color: '#fff', fontSize: 11, fontWeight: '700' },
-  optionDivider: { height: 1, marginLeft: 52 },
+  /* Actions Grid */
+  actionsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 14,
+    marginBottom: 32,
+  },
+  actionCard: {
+    width: '47%',
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 20,
+    alignItems: 'center',
+    position: 'relative',
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  actionIconBox: {
+    width: 64,
+    height: 64,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  actionBadge: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    minWidth: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#DC2626',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+  },
+  actionBadgeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  actionTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#111827',
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+  actionSubtitle: {
+    fontSize: 12,
+    color: '#6B7280',
+    textAlign: 'center',
+    fontWeight: '500',
+  },
 
-  // Stats Cards
-  statsCards: { flexDirection: 'row', gap: 10, marginBottom: 16 },
-  statBox: { flex: 1, alignItems: 'center', paddingVertical: 16, borderRadius: 14, borderWidth: 1 },
-  statBoxNum: { fontSize: 20, fontWeight: '700' },
-  statBoxLabel: { fontSize: 10, marginTop: 4, textTransform: 'uppercase' },
+  /* Options Card */
+  optionsCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    overflow: 'hidden',
+    marginBottom: 20,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  optionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    gap: 12,
+  },
+  optionIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  optionContent: {
+    flex: 1,
+  },
+  optionTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#111827',
+    marginBottom: 2,
+  },
+  optionSubtitle: {
+    fontSize: 13,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  optionBadge: {
+    minWidth: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#DC2626',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+    marginRight: 8,
+  },
+  optionBadgeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  optionDivider: {
+    height: 1,
+    backgroundColor: '#F3F4F6',
+    marginLeft: 68,
+  },
 
-  // Error
-  errorCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
-  errorIcon: { width: 96, height: 96, borderRadius: 48, alignItems: 'center', justifyContent: 'center' },
-  retryBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 12, marginTop: 12 },
+  /* Error State */
+  errorCenter: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  errorIcon: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  retryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 12,
+    marginTop: 16,
+  },
 });
-

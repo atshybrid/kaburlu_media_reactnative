@@ -1370,7 +1370,10 @@ export async function loginWithGoogle(payload: {
     if (err && typeof err === 'object' && 'status' in err) {
       const status = (err as any).status;
       const serverMsg = (err as any).body?.message || (err as any).message || `HTTP ${status}`;
-      throw new Error(`Google login failed (${status}): ${serverMsg}`);
+      const e: any = new Error(`Google login failed (${status}): ${serverMsg}`);
+      e.status = status;
+      e.body = (err as any).body;
+      throw e;
     }
     throw err;
   }
@@ -1448,7 +1451,10 @@ export async function createCitizenReporterGoogle(payload: {
     if (err && typeof err === 'object' && 'status' in err) {
       const status = (err as any).status;
       const serverMsg = (err as any).body?.message || (err as any).message || `HTTP ${status}`;
-      throw new Error(`Citizen Reporter signup failed (${status}): ${serverMsg}`);
+      const e: any = new Error(`Citizen Reporter signup failed (${status}): ${serverMsg}`);
+      e.status = status;
+      e.body = (err as any).body;
+      throw e;
     }
     throw err;
   }
@@ -2439,6 +2445,7 @@ export async function createNewspaperArticle(input: CreateNewspaperArticleInput)
 export type CreateShortNewsInput = {
   title: string; // max 50 chars
   content: string; // max 60 words
+  caption?: string; // max 40 chars - reporter's comment for sharing
   categoryId: string;
   languageId: string;
   mediaUrls?: string[]; // uploaded URLs
@@ -2854,4 +2861,240 @@ export function getDigitalPaperPages(paper: DigitalPaper): string[] {
     pages.push(`${baseUrl}page-${pageNum}.webp`);
   }
   return pages;
+}
+
+// -------- Tenant E-Paper API --------
+
+export interface EpaperPage {
+  id: string;
+  issueId: string;
+  pageNumber: number;
+  imageUrl: string;
+  imageUrlWebp: string;
+  imageUrlJpeg: string;
+  createdAt: string;
+}
+
+export interface EpaperIssue {
+  id: string;
+  issueDate: string;
+  pdfUrl: string;
+  coverImageUrl: string;
+  coverImageUrlWebp: string;
+  coverImageUrlJpeg: string;
+  pageCount: number;
+  pages: EpaperPage[];
+  updatedAt: string;
+  canonicalUrl: string;
+  metaTitle: string;
+  metaDescription: string;
+  ogImage: string;
+  ogImageJpeg: string;
+}
+
+export interface EpaperEdition {
+  id: string;
+  name: string;
+  slug: string;
+  stateId: string | null;
+  coverImageUrl: string;
+  coverImageUrlWebp: string;
+  seoTitle: string;
+  seoDescription: string;
+  seoKeywords: string;
+  subEditions: any[];
+  issue: EpaperIssue;
+}
+
+export interface TenantEpaperResponse {
+  tenant: {
+    id: string;
+    slug: string;
+  };
+  mode: string;
+  issueDate: string;
+  includePages: boolean;
+  includeEmpty: boolean;
+  editions: EpaperEdition[];
+}
+
+/**
+ * Fetch tenant epaper by date
+ * @param issueDate Date in YYYY-MM-DD format
+ * @param tenantDomain Tenant domain like 'epaper.prashnaayudham.com' (required for domain identification)
+ */
+export async function getTenantEpaper(issueDate: string, tenantDomain?: string): Promise<TenantEpaperResponse | null> {
+  try {
+    const url = `/public/epaper/latest?issueDate=${issueDate}&includePages=true&includeEmpty=true`;
+    const headers: Record<string, string> = {};
+    if (tenantDomain) {
+      headers['X-Tenant-Domain'] = tenantDomain;
+    }
+    console.log('[API] getTenantEpaper - URL:', url);
+    console.log('[API] getTenantEpaper - X-Tenant-Domain:', tenantDomain || 'NOT PROVIDED');
+    return await request<TenantEpaperResponse>(url, { headers });
+  } catch (e: any) {
+    console.error('[API] Failed to fetch tenant epaper:', e?.message);
+    return null;
+  }
+}
+
+// ============================================================================
+// ShortNews Options API
+// ============================================================================
+
+export type ShortNewsOptionType = 'POSITIVE' | 'NEGATIVE';
+
+export interface ShortNewsOption {
+  id: string;
+  shortNewsId: string;
+  userId: string;
+  type: ShortNewsOptionType;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+  user?: {
+    id: string;
+    name: string;
+    profilePhotoUrl?: string;
+  };
+  shortNews?: {
+    id: string;
+    title: string;
+    content: string;
+    mediaUrls: string[];
+    createdAt: string;
+  };
+}
+
+export interface ShortNewsOptionCounts {
+  shortNewsId: string;
+  positive: number;
+  negative: number;
+  total: number;
+}
+
+export interface CreateShortNewsOptionInput {
+  shortNewsId: string;
+  content: string;
+  type?: ShortNewsOptionType; // defaults to POSITIVE if not sent
+}
+
+export interface UpdateShortNewsOptionInput {
+  content: string;
+}
+
+/**
+ * Create a new option for a short news article
+ * POST /shortnews-options
+ * Max 50 characters, one option per user per shortnews
+ */
+export async function createShortNewsOption(input: CreateShortNewsOptionInput): Promise<ShortNewsOption> {
+  const response = await request<{ success: boolean; data: ShortNewsOption }>('/shortnews-options', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+  return response.data;
+}
+
+/**
+ * Get option counts (positive vs negative) for a short news
+ * GET /shortnews-options/by-shortnews/:shortNewsId/counts
+ */
+export async function getShortNewsOptionCounts(shortNewsId: string): Promise<ShortNewsOptionCounts> {
+  const response = await request<{ success: boolean; data: ShortNewsOptionCounts }>(
+    `/shortnews-options/by-shortnews/${encodeURIComponent(shortNewsId)}/counts`,
+    { method: 'GET' }
+  );
+  return response.data;
+}
+
+/**
+ * List all options for a short news (includes user profile)
+ * GET /shortnews-options/by-shortnews/:shortNewsId
+ */
+export async function getShortNewsOptions(shortNewsId: string): Promise<ShortNewsOption[]> {
+  const response = await request<{ success: boolean; data: ShortNewsOption[] }>(
+    `/shortnews-options/by-shortnews/${encodeURIComponent(shortNewsId)}`,
+    { method: 'GET' }
+  );
+  return response.data;
+}
+
+/**
+ * Get my option for a specific short news
+ * GET /shortnews-options/by-shortnews/:shortNewsId/me
+ */
+export async function getMyShortNewsOption(shortNewsId: string): Promise<ShortNewsOption | null> {
+  try {
+    const response = await request<{ success: boolean; data: ShortNewsOption }>(
+      `/shortnews-options/by-shortnews/${encodeURIComponent(shortNewsId)}/me`,
+      { method: 'GET' }
+    );
+    return response.data;
+  } catch (err: any) {
+    // 404 means user hasn't posted an option yet
+    if (err?.status === 404) return null;
+    throw err;
+  }
+}
+
+/**
+ * List options created by a specific user (includes shortnews summary)
+ * GET /shortnews-options/by-user/:userId
+ */
+export async function getUserShortNewsOptions(userId: string): Promise<ShortNewsOption[]> {
+  const response = await request<{ success: boolean; data: ShortNewsOption[] }>(
+    `/shortnews-options/by-user/${encodeURIComponent(userId)}`,
+    { method: 'GET' }
+  );
+  return response.data;
+}
+
+/**
+ * Get a specific user's option for a shortnews
+ * GET /shortnews-options/by-user/:userId/shortnews/:shortNewsId
+ */
+export async function getUserShortNewsOptionForArticle(
+  userId: string,
+  shortNewsId: string
+): Promise<ShortNewsOption | null> {
+  try {
+    const response = await request<{ success: boolean; data: ShortNewsOption }>(
+      `/shortnews-options/by-user/${encodeURIComponent(userId)}/shortnews/${encodeURIComponent(shortNewsId)}`,
+      { method: 'GET' }
+    );
+    return response.data;
+  } catch (err: any) {
+    if (err?.status === 404) return null;
+    throw err;
+  }
+}
+
+/**
+ * Update an option (owner only)
+ * PUT /shortnews-options/:optionId
+ */
+export async function updateShortNewsOption(
+  optionId: string,
+  input: UpdateShortNewsOptionInput
+): Promise<ShortNewsOption> {
+  const response = await request<{ success: boolean; data: ShortNewsOption }>(
+    `/shortnews-options/${encodeURIComponent(optionId)}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    }
+  );
+  return response.data;
+}
+
+/**
+ * Delete an option (owner only)
+ * DELETE /shortnews-options/:optionId
+ */
+export async function deleteShortNewsOption(optionId: string): Promise<void> {
+  await request<{ success: boolean }>(`/shortnews-options/${encodeURIComponent(optionId)}`, {
+    method: 'DELETE',
+  });
 }

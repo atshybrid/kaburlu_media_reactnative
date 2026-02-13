@@ -293,9 +293,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       
       console.log('[AUTH] Logout completed', { reason });
       
-      // Navigate to appropriate screen
+      // Navigate to news feed (user can browse as guest)
       try {
-        router.replace('/');
+        router.replace('/news');
       } catch (error) {
         console.warn('[AUTH] Navigation after logout failed:', error);
       }

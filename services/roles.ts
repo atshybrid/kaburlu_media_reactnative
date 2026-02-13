@@ -16,6 +16,9 @@ export function canAccessPostNewsByRole(role: string | null | undefined): boolea
   // CITIZEN_REPORTER uses the old explore/short news flow
   if (r === 'CITIZEN_REPORTER' || r.includes('CITIZEN')) return false;
 
+  // PUBLIC_FIGURE has own dashboard, no post-news access
+  if (r === 'PUBLIC_FIGURE' || r.includes('PUBLIC_FIGURE')) return false;
+
   // These roles can access AI Rewrite (4 screens) post-news flow
   const allowed = new Set([
     'TENANT_ADMIN',
@@ -40,4 +43,17 @@ export async function getCachedProfileRole(): Promise<string> {
   } catch {
     return '';
   }
+}
+
+export function isPublicFigure(role: string | null | undefined): boolean {
+  const r = normalizeRole(role);
+  return r === 'PUBLIC_FIGURE' || r.includes('PUBLIC_FIGURE');
+}
+
+export function getPublicFigureIdFromName(name: string | null | undefined): string {
+  const n = String(name || '').toLowerCase().trim();
+  if (n.includes('bandi') || n.includes('sanjay')) return 'bandisanjay';
+  if (n.includes('revanth') || n.includes('cm') || n.includes('chief')) return 'cm';
+  if (n.includes('ktr') || n.includes('rama rao')) return 'ktr';
+  return 'bandisanjay'; // default
 }

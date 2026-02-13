@@ -22,6 +22,7 @@ import {
     Platform,
     Pressable,
     ScrollView,
+    Share,
     StyleSheet,
     Text,
     View
@@ -71,6 +72,7 @@ export interface ShareableArticleData {
     location?: string;
     district?: { name?: string } | string;
     mandal?: { name?: string } | string;
+    quote?: string; // Reporter's comment/quote about the article
   };
 }
 
@@ -285,14 +287,25 @@ const ShareableArticleImage = forwardRef<ShareableArticleImageRef, Props>(
       }
       
       try {
-        // Use react-native-share which supports image + text together
-        await RNShare.open({
-          title: article.title,
-          message: shareMessage,
-          url: Platform.OS === 'android' ? `file://${uri}` : uri,
-          type: 'image/png',
-          failOnCancel: false,
-        });
+        if (Platform.OS === 'ios') {
+          // iOS: Use React Native's built-in Share API which properly handles image + message together
+          await Share.share({
+            title: article.title,
+            url: uri,
+            message: shareMessage,
+          }, {
+            dialogTitle: 'Share article'
+          });
+        } else {
+          // Android: Use react-native-share which supports image + text together
+          await RNShare.open({
+            title: article.title,
+            message: shareMessage,
+            url: `file://${uri}`,
+            type: 'image/png',
+            failOnCancel: false,
+          });
+        }
       } catch (e: any) {
         // User cancelled is not an error
         if (e?.message !== 'User did not share') {
@@ -528,6 +541,56 @@ const ShareableArticleImage = forwardRef<ShareableArticleImageRef, Props>(
                     📍 {locationStr}
                   </Text>
                 ) : null}
+              </View>
+            </View>
+          ) : null}
+
+          {/* Reporter Quote Section - Bottom 20% */}
+          {hasReporter && reporter?.quote ? (
+            <View style={{ 
+              marginTop: 16,
+              paddingVertical: 16,
+              paddingHorizontal: 20,
+              backgroundColor: primaryColor + '10',
+              borderTopWidth: 3,
+              borderTopColor: primaryColor,
+              flexDirection: 'row',
+              gap: 14,
+              alignItems: 'center'
+            }}>
+              {reporter?.profilePhotoUrl ? (
+                <View style={{
+                  width: 50,
+                  height: 50,
+                  borderRadius: 25,
+                  overflow: 'hidden',
+                  borderWidth: 2,
+                  borderColor: primaryColor
+                }}>
+                  <ExpoImage
+                    source={{ uri: reporter.profilePhotoUrl }}
+                    style={{ width: 50, height: 50 }}
+                    contentFit="cover"
+                    onLoad={onImageLoad}
+                    onError={onImageLoad}
+                  />
+                </View>
+              ) : null}
+              <View style={{ flex: 1 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                  <MaterialCommunityIcons name="format-quote-open" size={16} color={primaryColor} />
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: primaryColor, marginLeft: 4 }}>
+                    {reporter?.fullName}'s Comment
+                  </Text>
+                </View>
+                <Text style={{ 
+                  fontSize: 13, 
+                  fontStyle: 'italic', 
+                  color: '#333',
+                  lineHeight: 18
+                }} numberOfLines={2}>
+                  {reporter.quote}
+                </Text>
               </View>
             </View>
           ) : null}
@@ -788,6 +851,53 @@ const ShareableArticleImage = forwardRef<ShareableArticleImageRef, Props>(
             ) : null}
           </View>
 
+          {/* Reporter Quote Section - Bottom 20% */}
+          {hasReporter && reporter?.quote ? (
+            <View style={{ 
+              marginHorizontal: 16,
+              marginTop: 12,
+              paddingVertical: 14,
+              paddingHorizontal: 16,
+              backgroundColor: '#FFFBF0',
+              borderLeftWidth: 4,
+              borderLeftColor: primaryColor,
+              borderRightWidth: 4,
+              borderRightColor: primaryColor,
+              flexDirection: 'row',
+              gap: 12,
+              alignItems: 'center'
+            }}>
+              {reporter?.profilePhotoUrl ? (
+                <View style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: 22,
+                  overflow: 'hidden',
+                  borderWidth: 2,
+                  borderColor: '#000'
+                }}>
+                  <ExpoImage
+                    source={{ uri: reporter.profilePhotoUrl }}
+                    style={{ width: 44, height: 44 }}
+                    contentFit="cover"
+                    onLoad={onImageLoad}
+                    onError={onImageLoad}
+                  />
+                </View>
+              ) : null}
+              <View style={{ flex: 1 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 3 }}>
+                  <Text style={{ fontSize: 10, fontWeight: '800', color: '#000', letterSpacing: 0.5 }}>
+                    "{reporter.quote}"
+                  </Text>
+                </View>
+                <Text style={{ fontSize: 9, color: '#666', fontWeight: '600' }}>
+                  — {reporter?.fullName}
+                </Text>
+              </View>
+            </View>
+          ) : null}
+
           {/* Bottom Footer - Newspaper Style */}
           <View style={{ 
             marginTop: 8,
@@ -1019,6 +1129,61 @@ const ShareableArticleImage = forwardRef<ShareableArticleImageRef, Props>(
                       📍 {locationStr}
                     </Text>
                   ) : null}
+                </View>
+              </View>
+            ) : null}
+
+            {/* Reporter Quote Section - Bottom 20% */}
+            {hasReporter && reporter?.quote ?(
+              <View style={{ 
+                marginTop: 16,
+                paddingVertical: 16,
+                paddingHorizontal: 18,
+                backgroundColor: 'linear-gradient(135deg, ' + primaryColor + '10 0%, ' + primaryColor + '05 100%)',
+                backgroundColor: primaryColor + '08',
+                borderRadius: 14,
+                borderLeftWidth: 4,
+                borderLeftColor: primaryColor,
+                flexDirection: 'row',
+                gap: 12,
+                alignItems: 'center',
+                marginBottom: 16
+              }}>
+                {reporter?.profilePhotoUrl ? (
+                  <View style={{
+                    width: 48,
+                    height: 48,
+                    borderRadius: 24,
+                    overflow: 'hidden',
+                    borderWidth: 2,
+                    borderColor: primaryColor
+                  }}>
+                    <ExpoImage
+                      source={{ uri: reporter.profilePhotoUrl }}
+                      style={{ width: 48, height: 48 }}
+                      contentFit="cover"
+                      onLoad={onImageLoad}
+                      onError={onImageLoad}
+                    />
+                  </View>
+                ) : null}
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 4 }}>
+                    <MaterialCommunityIcons name="format-quote-open" size={14} color={primaryColor} style={{ marginTop: 2 }} />
+                    <Text style={{ 
+                      flex: 1,
+                      fontSize: 13, 
+                      fontStyle: 'italic', 
+                      color: '#222',
+                      lineHeight: 19,
+                      marginLeft: 4
+                    }} numberOfLines={2}>
+                      {reporter.quote}
+                    </Text>
+                  </View>
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: primaryColor }}>
+                    — {reporter?.fullName}
+                  </Text>
                 </View>
               </View>
             ) : null}
@@ -1282,6 +1447,60 @@ const ShareableArticleImage = forwardRef<ShareableArticleImageRef, Props>(
                   borderRadius: 8
                 }}>
                   <Text style={{ fontSize: 9, color: '#FFF', fontWeight: '700' }}>LIVE</Text>
+                </View>
+              </View>
+            ) : null}
+
+            {/* Reporter Quote Section - Bottom 20% with Cyber Style */}
+            {hasReporter && reporter?.quote ? (
+              <View style={{ 
+                marginTop: 16,
+                paddingVertical: 14,
+                paddingHorizontal: 16,
+                backgroundColor: accentColor + '15',
+                borderRadius: 12,
+                borderWidth: 1,
+                borderColor: accentColor + '40',
+                flexDirection: 'row',
+                gap: 12,
+                alignItems: 'center'
+              }}>
+                {reporter?.profilePhotoUrl ? (
+                  <View style={{
+                    width: 46,
+                    height: 46,
+                    borderRadius: 23,
+                    overflow: 'hidden',
+                    borderWidth: 2,
+                    borderColor: accentColor
+                  }}>
+                    <ExpoImage
+                      source={{ uri: reporter.profilePhotoUrl }}
+                      style={{ width: 46, height: 46 }}
+                      contentFit="cover"
+                      onLoad={onImageLoad}
+                      onError={onImageLoad}
+                    />
+                  </View>
+                ) : null}
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 3 }}>
+                    <MaterialCommunityIcons name="format-quote-open" size={14} color={accentColor} />
+                    <Text style={{ fontSize: 10, fontWeight: '700', color: accentColor, marginLeft: 4 }}>
+                      REPORTER'S NOTE
+                    </Text>
+                  </View>
+                  <Text style={{ 
+                    fontSize: 12, 
+                    fontStyle: 'italic', 
+                    color: '#E0E0E0',
+                    lineHeight: 17
+                  }} numberOfLines={2}>
+                    {reporter.quote}
+                  </Text>
+                  <Text style={{ fontSize: 10, fontWeight: '600', color: '#888', marginTop: 3 }}>
+                    — {reporter?.fullName}
+                  </Text>
                 </View>
               </View>
             ) : null}
@@ -1598,6 +1817,59 @@ const ShareableArticleImage = forwardRef<ShareableArticleImageRef, Props>(
                     {locationStr}
                   </Text>
                 ) : null}
+              </View>
+            ) : null}
+
+            {/* Reporter Quote Section - Luxury Style */}
+            {hasReporter && reporter?.quote ? (
+              <View style={{ 
+                width: '90%',
+                marginTop: 20,
+                paddingVertical: 18,
+                paddingHorizontal: 20,
+                backgroundColor: elegantGray,
+                borderTopWidth: 2,
+                borderBottomWidth: 2,
+                borderColor: luxuryGold,
+                flexDirection: 'row',
+                gap: 14,
+                alignItems: 'center'
+              }}>
+                {reporter?.profilePhotoUrl ? (
+                  <View style={{
+                    width: 50,
+                    height: 50,
+                    borderRadius: 25,
+                    overflow: 'hidden',
+                    borderWidth: 2,
+                    borderColor: luxuryGold
+                  }}>
+                    <ExpoImage
+                      source={{ uri: reporter.profilePhotoUrl }}
+                      style={{ width: 50, height: 50 }}
+                      contentFit="cover"
+                      onLoad={onImageLoad}
+                      onError={onImageLoad}
+                    />
+                  </View>
+                ) : null}
+                <View style={{ flex: 1 }}>
+                  <View style={{ marginBottom: 6, alignItems: 'flex-start' }}>
+                    <MaterialCommunityIcons name="format-quote-open" size={16} color={luxuryGold} />
+                  </View>
+                  <Text style={{ 
+                    fontSize: 12, 
+                    fontStyle: 'italic', 
+                    color: deepNavy,
+                    lineHeight: 18,
+                    marginBottom: 6
+                  }} numberOfLines={2}>
+                    {reporter.quote}
+                  </Text>
+                  <Text style={{ fontSize: 10, fontWeight: '600', color: '#777', letterSpacing: 0.5 }}>
+                    — {reporter?.fullName}
+                  </Text>
+                </View>
               </View>
             ) : null}
           </View>

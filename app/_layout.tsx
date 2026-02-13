@@ -200,8 +200,7 @@ function ThemedApp() {
               <Stack.Screen
                 name="language"
                 options={{
-                  headerShown: true,
-                  header: () => <CustomHeader />,
+                  headerShown: false,
                 }}
               />
               {/* Keep previous screen attached to avoid blank screen when swiping back from article */}

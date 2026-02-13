@@ -67,6 +67,7 @@ export default function AccountScreen() {
   const [tenantLogoUrl, setTenantLogoUrl] = useState<string>('');
   const [tenantPrimary, setTenantPrimary] = useState<string>('');
   const [tenantSecondary, setTenantSecondary] = useState<string>('');
+  const [redirecting, setRedirecting] = useState(true);
 
   const isTenantAdmin = loggedIn && role === 'TENANT_ADMIN';
   const isReporter = loggedIn && (role === 'REPORTER' || role === 'TENANT_REPORTER' || role === 'CITIZEN_REPORTER');
@@ -193,43 +194,46 @@ export default function AccountScreen() {
     return () => setTabBarVisible(true);
   }, [setTabBarVisible]);
 
-  useEffect(() => { refreshProfile(); }, [refreshProfile]);
+  useEffect(() => {
+    // Initial load sets redirecting to false after checking
+    setRedirecting(false);
+  }, []);
 
-  // Refresh location when coming back from picker
-  useFocusEffect(React.useCallback(() => { refreshProfile(); return () => {}; }, [refreshProfile]));
+  // Auto-redirect dashboard users whenever this tab is focused
+  useFocusEffect(React.useCallback(() => {
+    let active = true;
+    (async () => {
+      try {
+        const t = await loadTokens();
+        if (!active || !t?.jwt) return;
+        
+        const userRole = t?.user?.role || '';
+        const normalizedRole = userRole.toUpperCase().trim();
+        
+        // Tenant Admin -> Tenant Dashboard
+        if (normalizedRole === 'TENANT_ADMIN') {
+          router.replace('/tenant/dashboard');
+          return;
+        }
+        
+        // Reporter -> Reporter Dashboard  
+        if (normalizedRole === 'REPORTER' || normalizedRole === 'TENANT_REPORTER') {
+          router.replace('/reporter/dashboard');
+          return;
+        }
 
-  // Auto-redirect to dashboard for Reporter/TenantAdmin
-  useFocusEffect(
-    React.useCallback(() => {
-      (async () => {
-        try {
-          const t = await loadTokens();
-          
-          // Only redirect if user has valid JWT token
-          if (!t?.jwt) {
-            console.log('[Account] No JWT, staying on account page');
-            return;
-          }
-          
-          const userRole = t?.user?.role || '';
-          const normalizedRole = userRole.toUpperCase().trim();
-          
-          // Tenant Admin -> Tenant Dashboard
-          if (normalizedRole === 'TENANT_ADMIN') {
-            router.replace('/tenant/dashboard');
-            return;
-          }
-          
-          // Reporter (not Citizen Reporter) -> Reporter Dashboard
-          if (normalizedRole === 'REPORTER' || normalizedRole === 'TENANT_REPORTER') {
-            router.replace('/reporter/dashboard');
-            return;
-          }
-        } catch {}
-      })();
-      return () => {};
-    }, [router])
-  );
+        // Public Figure -> Public Figure Dashboard
+        if (normalizedRole === 'PUBLIC_FIGURE') {
+          router.replace('/public-figure/dashboard');
+          return;
+        }
+        
+        // Regular users stay on account page
+        refreshProfile();
+      } catch {}
+    })();
+    return () => { active = false; };
+  }, [router, refreshProfile]));
 
   // Android back: go to News instead of blank route
   useFocusEffect(
@@ -258,8 +262,8 @@ export default function AccountScreen() {
       const keysToKeep = ['selectedLanguage', 'profile_location', 'profile_location_obj', 'push_notifications_enabled'];
       await softLogout(keysToKeep, mobile || undefined);
       setLoggedIn(false);
-      // Refresh to show guest state
-      await refreshProfile();
+      // Redirect to news feed as guest
+      router.replace('/news');
     } catch (e) {
       try { console.warn('[UI] logout failed locally', (e as any)?.message); } catch {}
     }
@@ -313,6 +317,17 @@ export default function AccountScreen() {
     }
   }, [loggedIn, router]);
 
+  // Show minimal loading state while checking redirect
+  if (redirecting) {
+    return (
+      <SafeAreaView style={[styles.safe, { backgroundColor: bg }]}>
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+          <ActivityIndicator size="large" color={Colors.light.primary} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: bg }]}>
       {/* Fixed app bar (does not scroll) */}
@@ -324,57 +339,75 @@ export default function AccountScreen() {
         <View style={{ width: 60 }} />
       </View>
       <ScrollView contentContainerStyle={styles.container}>
-        <View style={[styles.profileHeader, { backgroundColor: card, borderColor: border }]}>
-          <Pressable onPress={pickAndUploadAvatar} disabled={!isProperLogin || uploadingPhoto} accessibilityLabel="Change profile photo">
-            <View style={styles.avatar}>
+        {/* Redesigned Profile Header Card */}
+        <View style={[styles.profileCard, { backgroundColor: card, borderColor: border }]}>
+          <Pressable 
+            onPress={pickAndUploadAvatar} 
+            disabled={!isProperLogin || uploadingPhoto} 
+            accessibilityLabel="Change profile photo"
+            style={styles.avatarSection}
+          >
+            <View style={[styles.avatarContainer, { borderColor: scheme === 'dark' ? '#334155' : '#e2e8f0' }]}>
               {photoUrl && isProperLogin ? (
-                <Image source={{ uri: photoUrl }} style={styles.avatarImg} />
+                <Image source={{ uri: photoUrl }} style={styles.avatarImage} />
               ) : (
-                <Text style={[styles.avatarText, { color: scheme === 'dark' ? '#fff' : Colors.light.primary }]}>{isProperLogin ? (name || 'U').charAt(0).toUpperCase() : '👤'}</Text>
-              )}
-              {uploadingPhoto ? (
-                <View style={[styles.avatarOverlay, { backgroundColor: scheme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.6)' }]}>
-                  <ActivityIndicator color={Colors.light.primary} />
+                <View style={[styles.avatarPlaceholder, { backgroundColor: scheme === 'dark' ? '#1e293b' : '#f1f5f9' }]}>
+                  <MaterialIcons 
+                    name={isProperLogin ? 'person' : 'person-outline'} 
+                    size={40} 
+                    color={scheme === 'dark' ? '#64748b' : '#94a3b8'} 
+                  />
                 </View>
-              ) : null}
+              )}
+              {uploadingPhoto && (
+                <View style={[styles.avatarOverlay, { backgroundColor: 'rgba(0,0,0,0.5)' }]}>
+                  <ActivityIndicator color="#fff" size="small" />
+                </View>
+              )}
+              {isProperLogin && (
+                <View style={[styles.editBadge, { backgroundColor: Colors.light.primary }]}>
+                  <MaterialIcons name="photo-camera" size={14} color="#fff" />
+                </View>
+              )}
             </View>
           </Pressable>
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.displayName, { color: text }]}>{isProperLogin ? name || 'User' : 'రీడర్'}</Text>
-            <Text style={[styles.subtleText, { color: muted }]}>{isProperLogin ? (role || 'Member') : 'లాగిన్ చేయలేదు'}</Text>
+          
+          <View style={styles.profileInfo}>
+            <Text style={[styles.userName, { color: text }]} numberOfLines={1}>
+              {isProperLogin ? (name || 'User') : 'రీడర్'}
+            </Text>
+            <Text style={[styles.userRole, { color: muted }]} numberOfLines={1}>
+              {isProperLogin ? (role || 'Reader') : 'లాగిన్ చేయలేదు'}
+            </Text>
           </View>
+          
           {isProperLogin ? (
-            <Pressable onPress={doLogout} style={[styles.button, styles.secondary, { width: 100, backgroundColor: card, borderColor: border }]}>
-              <Text style={[styles.buttonText, { color: scheme === 'dark' ? '#fff' : Colors.light.primary }]}>Logout</Text>
+            <Pressable 
+              onPress={doLogout} 
+              style={({ pressed }) => [
+                styles.signInButton,
+                styles.outlineButton,
+                { borderColor: border, backgroundColor: card },
+                pressed && { opacity: 0.7 }
+              ]}
+            >
+              <MaterialIcons name="logout" size={18} color={scheme === 'dark' ? '#fff' : Colors.light.primary} />
+              <Text style={[styles.buttonLabel, { color: scheme === 'dark' ? '#fff' : Colors.light.primary }]}>Logout</Text>
             </Pressable>
           ) : (
-            <Pressable onPress={gotoLogin} style={[styles.button, styles.primary, { width: 100 }]}>
-              <Text style={[styles.buttonText, { color: '#fff' }]}>Sign In</Text>
+            <Pressable 
+              onPress={gotoLogin} 
+              style={({ pressed }) => [
+                styles.signInButton,
+                styles.primaryButton,
+                { backgroundColor: Colors.light.primary },
+                pressed && { opacity: 0.85 }
+              ]}
+            >
+              <Text style={[styles.buttonLabel, { color: '#fff' }]}>Sign In</Text>
             </Pressable>
           )}
         </View>
-
-        {/* Sign In Prompt Card for Guests */}
-        {!isProperLogin && (
-          <Pressable 
-            onPress={gotoLogin}
-            style={[styles.card, { backgroundColor: scheme === 'dark' ? '#1e3a5f' : '#EBF5FF', borderColor: scheme === 'dark' ? '#2563eb' : '#93C5FD' }]}
-          >
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-              <MaterialIcons name="login" size={24} color={Colors.light.primary} />
-              <Text style={{ fontSize: 16, fontWeight: '600', color: text, marginLeft: 10 }}>లాగిన్ చేయండి</Text>
-            </View>
-            <Text style={{ fontSize: 13, color: muted, lineHeight: 20, marginBottom: 12 }}>
-              📱 <Text style={{ fontWeight: '500' }}>Citizen Reporter</Text> - మీ వార్తలు పోస్ట్ చేయండి{'\n'}
-              📰 <Text style={{ fontWeight: '500' }}>Reporter</Text> - AI-powered న్యూస్ రాయండి{'\n'}
-              🏢 <Text style={{ fontWeight: '500' }}>Tenant Admin</Text> - న్యూస్‌పేపర్ మేనేజ్ చేయండి
-            </Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Text style={{ fontSize: 14, fontWeight: '600', color: Colors.light.primary }}>Sign In / Register →</Text>
-            </View>
-          </Pressable>
-        )}
-        {/* Welcome card removed as requested */}
 
         {isTenantRole ? (
           <View style={[styles.card, { backgroundColor: tenantCardBg, borderColor: tenantBorder }]}>
@@ -614,26 +647,201 @@ export default function AccountScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1 },
-  appBar: { height: 56, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, borderBottomWidth: 1 },
+  appBar: { 
+    height: 56, 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'space-between', 
+    paddingHorizontal: 12, 
+    borderBottomWidth: 1 
+  },
   backRow: { flexDirection: 'row', alignItems: 'center', gap: 6, padding: 6 },
   backText: { color: Colors.light.primary, fontWeight: '600' },
-  appBarTitle: { color: Colors.light.primary, fontSize: 16, fontWeight: '700' },
-  container: { padding: 16, gap: 12 },
-  profileHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 12, padding: 16, borderWidth: 1, shadowColor: '#000', shadowOpacity: 0.04, shadowOffset: { width: 0, height: 2 }, shadowRadius: 6, elevation: 1 },
-  avatar: { width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
+  appBarTitle: { 
+    color: Colors.light.primary, 
+    fontSize: 18, 
+    fontWeight: '700', 
+    letterSpacing: -0.3 
+  },
+  container: { 
+    padding: 16, 
+    gap: 14 
+  },
+  
+  // Redesigned Profile Card
+  profileCard: {
+    borderRadius: 16,
+    padding: 20,
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowOffset: { width: 0, height: 3 },
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  avatarSection: {
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  avatarContainer: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    borderWidth: 3,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  avatarImage: {
+    width: '100%',
+    height: '100%',
+  },
+  avatarPlaceholder: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 44,
+  },
+  editBadge: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  profileInfo: {
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  userName: {
+    fontSize: 20,
+    fontWeight: '700',
+    letterSpacing: -0.3,
+    marginBottom: 4,
+  },
+  userRole: {
+    fontSize: 14,
+    fontWeight: '500',
+    letterSpacing: 0.1,
+  },
+  signInButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 10,
+    gap: 6,
+  },
+  primaryButton: {
+    shadowColor: Colors.light.primary,
+    shadowOpacity: 0.2,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  outlineButton: {
+    borderWidth: 1.5,
+  },
+  buttonLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    letterSpacing: 0.2,
+  },
+  
+  // Legacy styles (kept for other components)
+  profileHeader: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    gap: 12, 
+    borderRadius: 12, 
+    padding: 16, 
+    borderWidth: 1, 
+    shadowColor: '#000', 
+    shadowOpacity: 0.04, 
+    shadowOffset: { width: 0, height: 2 }, 
+    shadowRadius: 6, 
+    elevation: 1 
+  },
+  avatar: { 
+    width: 56, 
+    height: 56, 
+    borderRadius: 28, 
+    alignItems: 'center', 
+    justifyContent: 'center', 
+    borderWidth: 1 
+  },
   avatarImg: { width: 56, height: 56, borderRadius: 28 },
-  avatarOverlay: { position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center', borderRadius: 28 },
   avatarText: { color: Colors.light.primary, fontWeight: '800', fontSize: 20 },
   displayName: { fontSize: 18, fontWeight: '800' },
   subtleText: { marginTop: 2 },
-  locationChip: { marginTop: 6, alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 4, paddingHorizontal: 8, borderRadius: 999, borderWidth: 1 },
+  locationChip: { 
+    marginTop: 6, 
+    alignSelf: 'flex-start', 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    gap: 6, 
+    paddingVertical: 4, 
+    paddingHorizontal: 8, 
+    borderRadius: 999, 
+    borderWidth: 1 
+  },
   locationText: { color: Colors.light.primary, fontWeight: '600', fontSize: 12 },
-  card: { borderRadius: 12, padding: 16, borderWidth: 1, shadowColor: '#000', shadowOpacity: 0.04, shadowOffset: { width: 0, height: 2 }, shadowRadius: 6, elevation: 1 },
-  cardTitle: { fontSize: 16, fontWeight: '700', marginBottom: 8 },
-  input: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, marginBottom: 10 },
-  rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 },
-  label: { fontSize: 15 },
-  helper: { fontSize: 12, marginTop: 2 },
+  
+  // Setting Cards
+  card: { 
+    borderRadius: 14, 
+    padding: 18, 
+    borderWidth: 1, 
+    shadowColor: '#000', 
+    shadowOpacity: 0.05, 
+    shadowOffset: { width: 0, height: 2 }, 
+    shadowRadius: 8, 
+    elevation: 1 
+  },
+  cardTitle: { 
+    fontSize: 15, 
+    fontWeight: '700', 
+    marginBottom: 12, 
+    letterSpacing: -0.2 
+  },
+  input: { 
+    borderWidth: 1, 
+    borderRadius: 10, 
+    paddingHorizontal: 12, 
+    paddingVertical: 10, 
+    marginBottom: 10 
+  },
+  rowBetween: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'space-between', 
+    marginTop: 10 
+  },
+  label: { 
+    fontSize: 15, 
+    fontWeight: '600', 
+    letterSpacing: -0.1 
+  },
+  helper: { 
+    fontSize: 13, 
+    marginTop: 3, 
+    lineHeight: 18 
+  },
   tenantHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 0 },
   tenantLogoWrap: { width: 52, height: 52, borderRadius: 16, borderWidth: 1, alignItems: 'center', justifyContent: 'center', overflow: 'hidden', padding: 4 },
   tenantLogoImg: { width: '100%', height: '100%' },

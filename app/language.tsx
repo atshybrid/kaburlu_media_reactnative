@@ -7,13 +7,16 @@ import {
     Text,
     TouchableOpacity,
     View,
+    Animated,
 } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 // import * as Location from 'expo-location';
 // import * as Notifications from 'expo-notifications';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { LanguageSkeleton } from '@/components/ui/LanguageSkeleton';
 import { getLanguageIcon } from '@/icons/languageIcons';
+import { getStateSymbol } from '@/components/languageSymbols';
 import { saveTokens } from '@/services/auth';
 import { getDeviceIdentity } from '@/services/device';
 import { Language } from '../constants/languages';
@@ -73,6 +76,7 @@ const LanguageSelectionScreen = () => {
 
     try {
       setSubmitting(true);
+      // Don't show errors to user
       setSubmitError(null);
       // If we already have tokens, skip re-registering
       const existingJwt = await AsyncStorage.getItem('jwt');
@@ -143,7 +147,8 @@ const LanguageSelectionScreen = () => {
             ? 'Server error (500). Please try again in a moment.'
             : rawMsg || 'Failed to register. Please try again.';
 
-      setSubmitError(friendlyMsg);
+      // Silent error - don't show to user, just log it
+      console.log('[AUTH] Registration error (silent):', friendlyMsg);
     } finally {
       setSubmitting(false);
     }
@@ -174,49 +179,77 @@ const LanguageSelectionScreen = () => {
     // console.log('FCM Token:', token);
   // };
 
-  const renderLanguageItem = (item: Language, isSelected: boolean) => (
-    <TouchableOpacity
-      key={item.id}
-      onPress={() => handleLanguageSelect(item)}
-      style={isSelected ? styles.fullWidthContainer : styles.gridItemContainer}
-    >
-      <View
-        style={[
-          styles.item,
-          { borderBottomColor: item.color },
-          isSelected && styles.selectedItem,
-        ]}
+  const renderLanguageItem = (item: Language, isSelected: boolean) => {
+    const StateSymbol = getStateSymbol(item.code);
+    
+    // Professional gradient - subtle and elegant
+    const gradientColors = [
+      '#FFFFFF',
+      '#FFFFFF',
+      item.color + '15',
+    ];
+
+    return (
+      <TouchableOpacity
+        key={item.id}
+        onPress={() => handleLanguageSelect(item)}
+        style={isSelected ? styles.fullWidthContainer : styles.gridItemContainer}
+        activeOpacity={0.8}
       >
-        <View style={styles.languageNames}>
-          <Text style={[styles.nativeName, { color: item.color }]}>{item.nativeName}</Text>
-          <Text style={styles.englishName}>{item.name}</Text>
-        </View>
-        <View style={styles.rightMeta}>
-          {/* Language SVG Icon (optional) */}
-          {(() => {
-            const Icon = getLanguageIcon(item.code);
-            if (!Icon) return null;
-            return (
-              <View style={styles.langIconWrap}>
-                <Icon width={28} height={28} />
+        <LinearGradient
+          colors={gradientColors}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={[
+            styles.item,
+            isSelected && styles.selectedItem,
+            { borderLeftColor: item.color },
+          ]}
+        >
+          {/* State Symbol as elegant background */}
+          {StateSymbol && (
+            <View style={styles.symbolBackground}>
+              <StateSymbol size={isSelected ? 120 : 90} color={item.color} />
+            </View>
+          )}
+          
+          {/* Content with professional spacing */}
+          <View style={styles.cardContent}>
+            <View style={styles.languageInfo}>
+              <View style={[styles.colorDot, { backgroundColor: item.color }]} />
+              <View style={styles.languageNames}>
+                <Text style={[styles.nativeName, { color: '#1a1a1a' }]}>{item.nativeName}</Text>
+                <Text style={styles.englishName}>{item.name}</Text>
               </View>
-            );
-          })()}
-          <View style={styles.checkmarkContainer}>
+            </View>
+            
+            {/* Checkmark for selected */}
             {isSelected && (
-              <MaterialCommunityIcons name="check-circle" size={24} color="green" />        
+              <View style={styles.checkmarkContainer}>
+                <View style={[styles.checkmarkCircle, { backgroundColor: item.color }]}>
+                  <MaterialCommunityIcons name="check" size={18} color="#fff" />
+                </View>
+              </View>
             )}
           </View>
-        </View>
-      </View>
-    </TouchableOpacity>
-  );
+        </LinearGradient>
+      </TouchableOpacity>
+    );
+  };
 
   // Show only the first language as the top card; remaining languages follow as grid, in the same API order
   const otherLanguages = (languages || []).slice(1);
 
   return (
     <View style={styles.container}>
+      {/* Header */}
+      {!loading && !loadError && (
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Choose your language</Text>
+          <Text style={styles.headerSubtitle}>మీకు ఇష్టమైన భాష ఎంచుకోండి</Text>
+        </View>
+      )}
+      
       {loading && <LanguageSkeleton />}
       {!loading && loadError && (
         <View style={styles.errorBox}>
@@ -259,17 +292,6 @@ const LanguageSelectionScreen = () => {
           <View style={styles.gridContainer}>
             {otherLanguages.map((item) => renderLanguageItem(item, false))}
           </View>
-          {submitError && (
-            <View style={styles.errorBox}>
-              <Text style={styles.errorText}>{submitError}</Text>
-              <TouchableOpacity
-                onPress={() => selectedLanguage && handleLanguageSelect(selectedLanguage)}
-                style={styles.retryBtn}
-              >
-                <Text style={{ color: '#fff', fontWeight: '600' }}>Retry Register</Text>
-              </TouchableOpacity>
-            </View>
-          )}
         </ScrollView>
       )}
 
@@ -288,7 +310,30 @@ const LanguageSelectionScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fcfcff',
+    backgroundColor: '#f5f7fa',
+  },
+  header: {
+    paddingTop: 55,
+    paddingBottom: 20,
+    paddingHorizontal: 24,
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  headerTitle: {
+    fontSize: 22,
+    fontWeight: '600',
+    color: '#1a1a1a',
+    textAlign: 'center',
+    marginBottom: 4,
+    letterSpacing: 0.3,
+  },
+  headerSubtitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#f1c40f',
+    textAlign: 'center',
+    letterSpacing: 0.2,
   },
   continueBox: {
     marginHorizontal: 14,
@@ -319,10 +364,11 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContainer: {
-    padding: 10,
+    padding: 12,
   },
   fullWidthContainer: {
-    margin: 10,
+    marginHorizontal: 8,
+    marginVertical: 10,
   },
   gridContainer: {
     flexDirection: 'row',
@@ -332,56 +378,85 @@ const styles = StyleSheet.create({
   },
   gridItemContainer: {
     width: '50%',
-    padding: 5,
+    padding: 6,
   },
   item: {
-    backgroundColor: '#fff',
-    padding: 20,
-    borderRadius: 8,
-    borderBottomWidth: 4,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    elevation: 2, // for Android shadow
-    shadowColor: '#000', // for iOS shadow
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: '#FFFFFF',
+    borderLeftWidth: 5,
+    elevation: 2,
+    shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 1.41,
-    height: 110, // Fixed height for all cards
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    minHeight: 140,
+    position: 'relative',
   },
   selectedItem: {
-    // Add any style for selected item if needed, like a border
+    minHeight: 180,
+    elevation: 4,
+    shadowOpacity: 0.12,
+    shadowRadius: 4,
+    borderWidth: 2,
+    borderColor: '#e8e8e8',
+  },
+  symbolBackground: {
+    position: 'absolute',
+    right: -15,
+    bottom: -10,
+    opacity: 0.08,
+  },
+  cardContent: {
+    padding: 18,
+    minHeight: 140,
+    justifyContent: 'space-between',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  languageInfo: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  colorDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
   },
   languageNames: {
     flex: 1,
     justifyContent: 'center',
+    zIndex: 1,
   },
   nativeName: {
     fontSize: 24,
-    fontWeight: 'bold',
+    fontWeight: '700',
+    color: '#1a1a1a',
+    marginBottom: 4,
+    letterSpacing: 0.3,
   },
   englishName: {
-    fontSize: 16,
-    color: '#888',
-    marginTop: 4,
+    fontSize: 13,
+    color: '#6b7280',
+    fontWeight: '500',
+    letterSpacing: 0.2,
   },
   checkmarkContainer: {
-      width: 24, // same as the icon size
-      height: 24, // same as the icon size
-      alignItems: 'center',
-      justifyContent: 'center',
+    marginLeft: 8,
   },
-  rightMeta: {
-    width: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-  },
-  langIconWrap: {
+  checkmarkCircle: {
     width: 28,
     height: 28,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.15,
+    shadowRadius: 2,
   },
   // Error and retry UI
   errorBox: {

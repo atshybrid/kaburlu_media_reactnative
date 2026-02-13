@@ -313,9 +313,9 @@ export async function request<T = any>(path: string, options: { method?: HttpMet
           // retry immediately with refreshed token
           continue;
         } catch {
-          // Refresh failed: clear tokens and navigate to language
+          // Refresh failed: clear tokens and navigate to login (preserve user data)
           await clearStoredTokens();
-          try { router.replace('/language'); } catch {}
+          try { router.replace('/auth/login'); } catch {}
           emitError(err, { path, method });
           throw err;
         }

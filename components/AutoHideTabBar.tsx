@@ -283,6 +283,17 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
               const onPress = async () => {
                 // Special case: "Post" tab - route based on role
                 if (route.name === 'explore') {
+                  // Check if user is logged in first
+                  const { loadTokens } = await import('@/services/auth');
+                  const tokens = await loadTokens();
+                  
+                  // Guest user - redirect to login
+                  if (!tokens?.jwt) {
+                    router.push('/auth/login' as any);
+                    return;
+                  }
+                  
+                  // Logged in - check role for routing
                   const role = profileRole || (await getCachedProfileRole());
                   if (canAccessPostNewsByRole(role)) {
                     // Tenant editorial roles go to post-news

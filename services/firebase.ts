@@ -1,5 +1,5 @@
 import { FirebaseApp, getApps, initializeApp } from 'firebase/app';
-import { getAuth, onAuthStateChanged, signInWithCustomToken, Unsubscribe, User } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithCredential, signInWithCustomToken, Unsubscribe, User } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import { FIREBASE_CONFIG } from '../config/firebase';
 
@@ -28,6 +28,13 @@ export async function firebaseSignInWithCustomToken(token: string): Promise<User
   const auth = getAuthInstance();
   const cred = await signInWithCustomToken(auth, token);
   return cred.user;
+}
+
+export async function firebaseIdTokenFromGoogleIdToken(googleIdToken: string): Promise<string> {
+  const auth = getAuthInstance();
+  const credential = GoogleAuthProvider.credential(String(googleIdToken));
+  const signedIn = await signInWithCredential(auth, credential);
+  return signedIn.user.getIdToken();
 }
 
 export function onFirebaseUser(cb: (user: User | null) => void): Unsubscribe {

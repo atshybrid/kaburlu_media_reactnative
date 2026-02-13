@@ -38,6 +38,7 @@ export default function PostCreateScreen() {
   const [languageName, setLanguageName] = useState<string>('');
   const titleTx = useTransliteration({ languageCode: languageCode, enabled: true, mode: 'on-boundary', debounceMs: 140 });
   const contentTx = useTransliteration({ languageCode: languageCode, enabled: true, mode: 'on-boundary', debounceMs: 140 });
+  const captionTx = useTransliteration({ languageCode: languageCode, enabled: true, mode: 'on-boundary', debounceMs: 140 });
   // showLogin state removed - now uses direct navigation to /auth/login
   // showUpgrade state removed - now uses direct navigation to /auth/login
   const [showLottie, setShowLottie] = useState<string | boolean>(false);
@@ -50,6 +51,7 @@ export default function PostCreateScreen() {
   // Refs to focus inputs when tapping validation chips
   const titleInputRef = useRef<TextInput>(null);
   const contentInputRef = useRef<TextInput>(null);
+  const captionInputRef = useRef<TextInput>(null);
 
   // Parallel upload processor: starts upload for each pending item immediately
   const processUploads = React.useCallback(() => {
@@ -264,7 +266,8 @@ export default function PostCreateScreen() {
         }
         
         // Role-based redirect: Reporter/TenantAdmin → AI Post-News flow
-        if (canAccessPostNewsByRole(effectiveRole)) {
+        // BUT only if they have a valid JWT token (not logged out)
+        if (t?.jwt && canAccessPostNewsByRole(effectiveRole)) {
           router.replace('/post-news');
           return; // Don't continue loading this screen
         }
@@ -511,6 +514,7 @@ export default function PostCreateScreen() {
       const payload = {
   title: titleTx.value.trim(),
   content: contentTx.value.trim(),
+        caption: captionTx.value.trim() || undefined,
         languageId: langIdEff!,
         categoryId: localCategoryId!,
         mediaUrls: uploadedUrls.length ? uploadedUrls : undefined,
@@ -539,6 +543,7 @@ export default function PostCreateScreen() {
         setSubmitting(false);
   titleTx.onChangeText('');
   contentTx.onChangeText('');
+        captionTx.onChangeText('');
         setMedia([]);
         setLocalCategoryId(null);
   router.replace('/congrats');
@@ -722,7 +727,7 @@ export default function PostCreateScreen() {
             <View style={{ flexDirection:'row', alignItems:'center', justifyContent:'space-between' }}>
               <Text style={[styles.selectorValue, { color: theme.text }]}>{languageName || 'Auto'}</Text>
               <TouchableOpacity
-                onPress={() => { titleTx.toggle(); contentTx.toggle(); }}
+                onPress={() => { titleTx.toggle(); contentTx.toggle(); captionTx.toggle(); }}
                 style={{ marginLeft:8, backgroundColor: translitBg, paddingHorizontal:10, paddingVertical:4, borderRadius:999 }}
               >
                 <Text style={{ fontSize:11, fontWeight:'600', color: translitColor }}>{titleTx.enabled ? 'Translit ON' : 'Translit OFF'}</Text>
@@ -762,6 +767,23 @@ export default function PostCreateScreen() {
             onChangeText={contentTx.onChangeText}
             placeholderTextColor={theme.muted}
             ref={contentInputRef}
+          />
+        </View>
+
+        {/* Caption/Write Option Input */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.sectionLabel}>Your Comment (for share)</Text>
+            <Text style={styles.counter}>{captionTx.value.length}/40</Text>
+          </View>
+          <TextInput
+            style={[styles.titleInput, { backgroundColor: theme.card, borderColor: theme.border, color: theme.text }]}
+            placeholder="Add your comment to appear when shared..."
+            value={captionTx.value}
+            maxLength={40}
+            onChangeText={captionTx.onChangeText}
+            placeholderTextColor={theme.muted}
+            ref={captionInputRef}
           />
         </View>
 

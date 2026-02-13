@@ -419,6 +419,27 @@ export default function PostNewsScreen() {
     navigateBack(router);
   }, [router]);
 
+  // Auth guard: Redirect to login if not authenticated
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      (async () => {
+        try {
+          const tokens = await loadTokens();
+          if (active && !tokens?.jwt) {
+            // No valid token - redirect to login
+            router.replace('/auth/login' as any);
+          }
+        } catch {
+          if (active) {
+            router.replace('/auth/login' as any);
+          }
+        }
+      })();
+      return () => { active = false; };
+    }, [router])
+  );
+
   // Handle Android hardware back button
   useFocusEffect(
     useCallback(() => {

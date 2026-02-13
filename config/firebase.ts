@@ -27,6 +27,21 @@ const extra = (Constants.expoConfig?.extra || {}) as any;
 const firebaseCfg = extra.firebase || {};
 const googleCfg = extra.google || {};
 
+function isPlaceholder(v: any): boolean {
+  const s = String(v || '').trim();
+  if (!s) return true;
+  if (s === '__AUTO_FROM_GOOGLE_SERVICES_JSON__') return true;
+  if (/^YOUR_/i.test(s) || /YOUR_/i.test(s)) return true;
+  return false;
+}
+
+function pickNonPlaceholder<T>(...values: T[]): T | undefined {
+  for (const v of values) {
+    if (!isPlaceholder(v)) return v;
+  }
+  return undefined;
+}
+
 // Environment fallbacks
 const envFirebase = {
   webApiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
@@ -66,8 +81,9 @@ try {
 } catch {}
 
 // Sanitize / normalize Google OAuth client IDs
-const rawWebId = googleCfg.webClientId || envGoogle.webClientId || gsWebOAuth;
-let rawAndroidId = googleCfg.androidClientId || envGoogle.androidClientId || gsAndroidOAuth;
+// Prefer IDs derived from google-services.json so we don't accidentally mix projects.
+const rawWebId = pickNonPlaceholder(gsWebOAuth, googleCfg.webClientId, envGoogle.webClientId);
+let rawAndroidId = pickNonPlaceholder(gsAndroidOAuth, googleCfg.androidClientId, envGoogle.androidClientId);
 
 // Treat placeholders or obviously wrong values as undefined so we can fall back.
 const PLACEHOLDER_ANDROID_VALUES = [
@@ -84,13 +100,14 @@ if (rawAndroidId) {
 }
 
 export const FIREBASE_CONFIG: FirebaseConfig = {
-  webApiKey: firebaseCfg.webApiKey || envFirebase.webApiKey || gsApiKey || '',
-  projectId: firebaseCfg.projectId || envFirebase.projectId || gsProjectId || '',
-  appId: firebaseCfg.appId || envFirebase.appId || gsAppId,
-  messagingSenderId: firebaseCfg.messagingSenderId || envFirebase.messagingSenderId || gsSenderId,
-  storageBucket: firebaseCfg.storageBucket || envFirebase.storageBucket || gsBucket,
+  // Prefer google-services.json; ignore placeholders in app.json extra.
+  webApiKey: String(pickNonPlaceholder(gsApiKey, envFirebase.webApiKey, firebaseCfg.webApiKey) || ''),
+  projectId: String(pickNonPlaceholder(gsProjectId, envFirebase.projectId, firebaseCfg.projectId) || ''),
+  appId: pickNonPlaceholder(gsAppId, envFirebase.appId, firebaseCfg.appId),
+  messagingSenderId: pickNonPlaceholder(gsSenderId, envFirebase.messagingSenderId, firebaseCfg.messagingSenderId),
+  storageBucket: pickNonPlaceholder(gsBucket, envFirebase.storageBucket, firebaseCfg.storageBucket),
   googleAndroidClientId: rawAndroidId,
-  googleIosClientId: googleCfg.iosClientId,
+  googleIosClientId: isPlaceholder(googleCfg.iosClientId) ? undefined : googleCfg.iosClientId,
   googleWebClientId: rawWebId,
 };
 

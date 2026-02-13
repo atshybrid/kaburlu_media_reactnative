@@ -11,9 +11,14 @@
  */
 
 import { Colors } from '@/constants/Colors';
+import { FIREBASE_CONFIG } from '@/config/firebase';
 import { useColorScheme } from '@/hooks/useColorScheme';
-import { createCitizenReporterMobile, getMpinStatus, loginWithMpin, PaymentRequiredError, requestOtpForMpinReset, setNewMpin, verifyOtpForMpinReset } from '@/services/api';
+import { createCitizenReporterGoogle, createCitizenReporterMobile, getMpinStatus, loginWithGoogle, loginWithMpin, PaymentRequiredError, requestOtpForMpinReset, setNewMpin, verifyOtpForMpinReset } from '@/services/api';
 import { getLastMobile, saveTokens } from '@/services/auth';
+import { getDeviceIdentity } from '@/services/device';
+import { requestLocationPermissionOnly } from '@/services/permissions';
+import { firebaseIdTokenFromGoogleIdToken } from '@/services/firebase';
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BlurView } from 'expo-blur';
@@ -224,6 +229,7 @@ export default function LoginScreen() {
   const [attemptsLeft, setAttemptsLeft] = useState(3);
   const [showCongrats, setShowCongrats] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [googleLoading, setGoogleLoading] = useState(false);
   
   // Reset flow
   const [showReset, setShowReset] = useState(false);
@@ -447,6 +453,9 @@ export default function LoginScreen() {
         } else if (role === 'REPORTER') {
           router.replace('/reporter/dashboard');
           return;
+        } else if (role === 'PUBLIC_FIGURE') {
+          router.replace('/public-figure/dashboard');
+          return;
         }
       }
       
@@ -627,6 +636,138 @@ export default function LoginScreen() {
     }
      
   }, [mobile, fullName, mpin, persistAuth, navigateAfterAuth]);
+  
+  // Handle Google Sign-In
+  const handleGoogleSignIn = useCallback(async () => {
+    if (googleLoading || submitting) return;
+    
+    setGoogleLoading(true);
+    setError(null);
+    Keyboard.dismiss();
+    
+    try {
+      // 1. Configure Google Sign-In
+      const webClientId = FIREBASE_CONFIG.googleWebClientId;
+      if (!webClientId || /YOUR_/i.test(String(webClientId))) {
+        throw new Error('Google Sign-In is not configured (missing Web Client ID).');
+      }
+      await GoogleSignin.configure({ webClientId: String(webClientId).trim() });
+      
+      // 2. Check Play Services
+      await GoogleSignin.hasPlayServices();
+      
+      // 3. Sign in and get ID token
+      const userInfo = await GoogleSignin.signIn();
+      const googleIdToken = userInfo.idToken;
+      
+      if (!googleIdToken) {
+        throw new Error('Google Sign-In failed. No token received.');
+      }
+
+      // 3b. Prefer Firebase ID token (backend can verify via Firebase Admin without needing Google client ID env)
+      let firebaseIdToken: string | undefined;
+      try {
+        firebaseIdToken = await firebaseIdTokenFromGoogleIdToken(googleIdToken);
+      } catch (e: any) {
+        // Non-fatal: fall back to raw Google token if Firebase Auth isn't enabled/configured
+        try { console.warn('[Google Sign-In] Firebase token exchange failed, falling back to googleIdToken:', e?.message || e); } catch {}
+      }
+      
+      // 4. Get device ID
+      const device = await getDeviceIdentity();
+      
+      // 5. Try login first (existing user)
+      try {
+        const res = await loginWithGoogle({ 
+          ...(firebaseIdToken ? { firebaseIdToken } : { googleIdToken }),
+          deviceId: device.deviceId 
+        });
+        
+        await persistAuth(res);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        setSuccess('Login successful!');
+        setShowCongrats(true);
+        
+        setTimeout(() => {
+          setShowCongrats(false);
+          navigateAfterAuth();
+        }, 1800);
+        
+      } catch (loginErr: any) {
+        // 6. If 404 or USER_NOT_FOUND, create new citizen reporter
+        const is404 = loginErr.status === 404 || loginErr.message?.includes('USER_NOT_FOUND') || loginErr.message?.includes('404');
+        
+        if (is404) {
+          // Get language
+          let languageId: string | undefined;
+          try { 
+            const raw = await AsyncStorage.getItem('selectedLanguage'); 
+            if (raw) languageId = JSON.parse(raw)?.id; 
+          } catch {}
+          if (!languageId) languageId = 'en';
+          
+          // Request location permission
+          let location: any;
+          try {
+            const perms = await requestLocationPermissionOnly();
+            if (perms.coordsDetailed) {
+              location = {
+                latitude: perms.coordsDetailed.latitude,
+                longitude: perms.coordsDetailed.longitude,
+                accuracyMeters: perms.coordsDetailed.accuracy,
+                provider: 'fused',
+                timestampUtc: new Date(perms.coordsDetailed.timestamp || Date.now()).toISOString(),
+                placeId: null,
+                placeName: perms.place?.fullName || perms.place?.name || null,
+                address: perms.place?.fullName || null,
+                source: 'foreground',
+              };
+            }
+          } catch (locErr) {
+            console.warn('Location error:', locErr);
+            // Location is optional for registration, continue without it
+          }
+          
+          // Create citizen reporter account
+          const res = await createCitizenReporterGoogle({
+            ...(firebaseIdToken ? { firebaseIdToken } : { googleIdToken }),
+            email: userInfo.user.email,
+            languageId,
+            location,
+          });
+          
+          await persistAuth(res);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          setSuccess('Account created!');
+          setShowCongrats(true);
+          
+          setTimeout(() => {
+            setShowCongrats(false);
+            navigateAfterAuth();
+          }, 1800);
+        } else {
+          // Other login errors
+          throw loginErr;
+        }
+      }
+    } catch (error: any) {
+      console.error('[Google Sign-In] Error:', error);
+      
+      // Handle user cancellation gracefully
+      if (error.code === 'SIGN_IN_CANCELLED' || error.message?.includes('cancelled')) {
+        // User cancelled, don't show error
+        setError(null);
+      } else if (error.code === 'IN_PROGRESS') {
+        setError('Sign-In already in progress. Please wait.');
+      } else {
+        setError(error.message || 'Google Sign-In failed. Please try again.');
+      }
+      
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      setGoogleLoading(false);
+    }
+  }, [googleLoading, submitting, persistAuth, navigateAfterAuth]);
   
   // MPIN value change handler - single string approach for fast input
   const handleMpinValueChange = useCallback((val: string) => {
@@ -1007,6 +1148,36 @@ export default function LoginScreen() {
                 <Ionicons name="checkmark-circle" size={18} color="#10B981" />
                 <Text style={styles.successText}>{success}</Text>
               </View>
+            )}
+            
+            {/* Divider */}
+            {!status && (
+              <View style={styles.divider}>
+                <View style={[styles.dividerLine, { backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' }]} />
+                <Text style={[styles.dividerText, { color: mutedColor }]}>OR</Text>
+                <View style={[styles.dividerLine, { backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' }]} />
+              </View>
+            )}
+            
+            {/* Google Sign-In Button */}
+            {!status && (
+              <TouchableOpacity 
+                onPress={handleGoogleSignIn}
+                disabled={googleLoading || submitting}
+                style={[styles.googleButton, { 
+                  backgroundColor: isDark ? 'rgba(255,255,255,0.95)' : '#fff',
+                  borderColor: isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.1)'
+                }]}
+              >
+                {googleLoading ? (
+                  <ActivityIndicator size="small" color="#666" />
+                ) : (
+                  <>
+                    <Ionicons name="logo-google" size={20} color="#DB4437" />
+                    <Text style={styles.googleButtonText}>Continue with Google</Text>
+                  </>
+                )}
+              </TouchableOpacity>
             )}
           </Animated.View>
           
@@ -1478,6 +1649,41 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textAlign: 'center',
     lineHeight: 18,
+  },
+  divider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 24,
+    gap: 12,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+  },
+  dividerText: {
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 0.5,
+  },
+  googleButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    gap: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  googleButtonText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#1F2937',
   },
   securityBadge: {
     flexDirection: 'row',

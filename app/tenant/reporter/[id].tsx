@@ -1012,7 +1012,7 @@ export default function TenantReporterDetailsScreen() {
         showsVerticalScrollIndicator={false}
       >
         {/* ── Quick Actions Section ── */}
-        <Text style={[styles.sectionTitle, { color: c.text }]}>⚡ త్వరిత చర్యలు</Text>
+        <Text style={[styles.sectionTitle, { color: c.text }]}>Quick Actions</Text>
 
         {/* Row 1: Subscription & Manual Login */}
         <View style={styles.actionRow}>
@@ -1442,19 +1442,22 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   headerName: {
-    fontSize: 20,
-    fontWeight: '700',
+    fontSize: 22,
+    fontWeight: '800',
     color: '#fff',
+    letterSpacing: -0.3,
   },
   headerDesig: {
-    fontSize: 14,
-    color: 'rgba(255,255,255,0.85)',
-    marginTop: 2,
+    fontSize: 15,
+    color: 'rgba(255,255,255,0.9)',
+    fontWeight: '500',
+    marginTop: 3,
   },
   headerLevel: {
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.7)',
-    marginTop: 2,
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.75)',
+    marginTop: 3,
+    fontWeight: '500',
   },
 
   // Toast
@@ -1486,16 +1489,18 @@ const styles = StyleSheet.create({
 
   // Section Title
   sectionTitle: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '700',
-    marginBottom: 12,
+    marginBottom: 14,
+    marginTop: 4,
+    letterSpacing: -0.3,
   },
 
   // Action Cards
   actionRow: {
     flexDirection: 'row',
     gap: 12,
-    marginBottom: 12,
+    marginBottom: 14,
   },
   actionCard: {
     flex: 1,
@@ -1503,19 +1508,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     borderWidth: 1,
-    borderRadius: 12,
-    padding: 12,
+    borderRadius: 14,
+    padding: 14,
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 6,
+    elevation: 1,
   },
   actionCardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 12,
     flex: 1,
   },
   actionIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
+    width: 40,
+    height: 40,
+    borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1523,12 +1533,14 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   actionCardTitle: {
-    fontSize: 13,
-    fontWeight: '600',
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: -0.1,
   },
   actionCardSubtitle: {
-    fontSize: 11,
-    marginTop: 2,
+    fontSize: 12,
+    marginTop: 3,
+    fontWeight: '500',
   },
   miniBtn: {
     width: 32,
@@ -1654,16 +1666,21 @@ const styles = StyleSheet.create({
   // Photo Upload Badge
   photoUploadBadge: {
     position: 'absolute',
-    bottom: 0,
-    right: 0,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    bottom: -2,
+    right: -2,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     backgroundColor: PRIMARY_COLOR,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
+    borderWidth: 3,
     borderColor: '#fff',
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
+    elevation: 3,
   },
 
   // Modal Styles

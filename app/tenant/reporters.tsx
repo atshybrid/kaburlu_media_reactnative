@@ -308,8 +308,8 @@ export default function TenantReportersScreen() {
             />
           ) : (
             <View style={styles.headerTitleSection}>
-              <Text style={[styles.simpleTitle, { color: c.text }]}>మై రిపోర్టర్స్</Text>
-              <Text style={[styles.simpleCount, { color: c.muted }]}>{reporters.length} మంది</Text>
+              <Text style={[styles.simpleTitle, { color: c.text }]}>My Reporters</Text>
+              <Text style={[styles.simpleCount, { color: c.muted }]}>{reporters.length} Active Members</Text>
             </View>
           )}
           
@@ -703,8 +703,8 @@ const styles = StyleSheet.create({
 
   /* Simple Header */
   simpleHeader: {
-    paddingTop: 12,
-    paddingBottom: 16,
+    paddingTop: 16,
+    paddingBottom: 18,
     paddingHorizontal: 16,
     borderBottomWidth: 1,
   },
@@ -724,12 +724,14 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   simpleTitle: {
-    fontSize: 22,
+    fontSize: 24,
     fontWeight: '700',
+    letterSpacing: -0.5,
   },
   simpleCount: {
-    fontSize: 13,
-    marginTop: 2,
+    fontSize: 14,
+    marginTop: 3,
+    fontWeight: '500',
   },
   headerSearchBtn: {
     width: 40,
@@ -799,28 +801,33 @@ const styles = StyleSheet.create({
   card: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 14,
+    padding: 16,
     marginBottom: 12,
-    borderRadius: 14,
+    borderRadius: 16,
     borderWidth: 1,
-    gap: 14,
+    gap: 16,
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 8,
+    elevation: 1,
   },
   cardPressed: { opacity: 0.9 },
   avatar: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    borderWidth: 2,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    borderWidth: 2.5,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
   },
   avatarImg: { width: '100%', height: '100%' },
-  cardContent: { flex: 1, gap: 3 },
-  cardName: { fontSize: 16, fontWeight: '600' },
-  cardSub: { fontSize: 13 },
-  cardPhone: { fontSize: 13, marginTop: 2 },
-  statusDot: { width: 10, height: 10, borderRadius: 5 },
+  cardContent: { flex: 1, gap: 4 },
+  cardName: { fontSize: 17, fontWeight: '700', letterSpacing: -0.2 },
+  cardSub: { fontSize: 14, fontWeight: '500', marginTop: 2 },
+  cardPhone: { fontSize: 13, marginTop: 2, opacity: 0.8 },
+  statusDot: { width: 12, height: 12, borderRadius: 6 },
 
   /* Empty / Error */
   emptyState: { alignItems: 'center', paddingVertical: 48, paddingHorizontal: 24 },

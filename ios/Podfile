@@ -21,17 +21,12 @@ platform :ios, podfile_properties['ios.deploymentTarget'] || '15.1'
 prepare_react_native_project!
 
 target 'kaburlu' do
-  use_expo_modules!
+  # Fix for CocoaPods error:
+  # "The Swift pod 'FirebaseCoreInternal' depends upon 'GoogleUtilities', which does not define modules"
+  # When pods are integrated as static libraries, Swift pods require modular headers.
+  use_modular_headers!
 
-  # Firebase pods include Swift targets that depend on non-modular Objective-C pods.
-  # Enable modular headers only for those transitive deps to avoid global modulemap conflicts.
-  pod 'FirebaseCore', :modular_headers => true
-  pod 'FirebaseCoreExtension', :modular_headers => true
-  pod 'FirebaseCoreInternal', :modular_headers => true
-  pod 'FirebaseInstallations', :modular_headers => true
-  pod 'GoogleUtilities', :modular_headers => true
-  pod 'GoogleDataTransport', :modular_headers => true
-  pod 'nanopb', :modular_headers => true
+  use_expo_modules!
 
   if ENV['EXPO_USE_COMMUNITY_AUTOLINKING'] == '1'
     config_command = ['node', '-e', "process.argv=['', '', 'config'];require('@react-native-community/cli').run()"];
