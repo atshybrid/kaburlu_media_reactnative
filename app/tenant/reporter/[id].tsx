@@ -41,6 +41,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Dimensions,
   Image,
   KeyboardAvoidingView,
   Modal,
@@ -106,6 +107,18 @@ export default function TenantReporterDetailsScreen() {
   const secondaryText = c.muted;
   const params = useLocalSearchParams();
   const reporterId = String(params?.id || '');
+
+  // Responsive layout
+  const [screenWidth, setScreenWidth] = useState(Dimensions.get('window').width);
+  const isSmallScreen = screenWidth < 400;
+  const isMediumScreen = screenWidth >= 400 && screenWidth < 600;
+
+  useEffect(() => {
+    const subscription = Dimensions.addEventListener('change', ({ window }) => {
+      setScreenWidth(window.width);
+    });
+    return () => subscription?.remove();
+  }, []);
 
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -719,10 +732,10 @@ export default function TenantReporterDetailsScreen() {
           {/* Avatar */}
           <View style={styles.avatarContainer}>
             {hasPhoto ? (
-              <Image source={{ uri: reporter.profilePhotoUrl! }} style={styles.avatar} />
+              <Image source={{ uri: reporter.profilePhotoUrl! }} style={[styles.avatar, isSmallScreen && styles.avatarSmall]} />
             ) : (
-              <View style={[styles.avatarPlaceholder, { backgroundColor: '#fff' }]}>
-                <Text style={[styles.avatarInitials, { color: PRIMARY_COLOR }]}>{initials(reporter.fullName)}</Text>
+              <View style={[styles.avatarPlaceholder, isSmallScreen && styles.avatarSmall, { backgroundColor: '#fff' }]}>
+                <Text style={[styles.avatarInitials, isSmallScreen && styles.avatarInitialsSmall, { color: PRIMARY_COLOR }]}>{initials(reporter.fullName)}</Text>
               </View>
             )}
             {/* Photo Upload Button - Always visible for admin */}
@@ -741,13 +754,13 @@ export default function TenantReporterDetailsScreen() {
 
           {/* Name & Info */}
           <View style={styles.headerText}>
-            <Text style={styles.headerName} numberOfLines={1}>
+            <Text style={[styles.headerName, isSmallScreen && styles.headerNameSmall]} numberOfLines={1}>
               {reporter.fullName || 'Unknown'}
             </Text>
-            <Text style={styles.headerDesig} numberOfLines={1}>
+            <Text style={[styles.headerDesig, isSmallScreen && styles.headerDesigSmall]} numberOfLines={isSmallScreen ? 2 : 1}>
               {reporter.designation?.name || '—'} • {location}
             </Text>
-            <Text style={styles.headerLevel}>{levelLabel}</Text>
+            <Text style={[styles.headerLevel, isSmallScreen && styles.headerLevelSmall]}>{levelLabel}</Text>
           </View>
         </View>
       </View>
@@ -784,7 +797,7 @@ export default function TenantReporterDetailsScreen() {
           <Pressable style={styles.modalDismiss} onPress={() => setShowSubscriptionModal(false)} />
           <Pressable style={[styles.modalContent, { backgroundColor: c.background }]} onPress={(e) => e.stopPropagation()}>
               <View style={styles.modalHeader}>
-                <Text style={[styles.modalTitle, { color: c.text }]}>💳 Subscription సెట్టింగ్స్</Text>
+                <Text style={[styles.modalTitle, isSmallScreen && styles.modalTitleSmall, { color: c.text }]}>💳 Subscription సెట్టింగ్స్</Text>
                 <Pressable onPress={() => setShowSubscriptionModal(false)}>
                   <Ionicons name="close" size={24} color={c.text} />
                 </Pressable>
@@ -896,7 +909,7 @@ export default function TenantReporterDetailsScreen() {
           <Pressable style={styles.modalDismiss} onPress={() => setShowLoginDaysModal(false)} />
           <Pressable style={[styles.modalContent, { backgroundColor: c.background }]} onPress={(e) => e.stopPropagation()}>
               <View style={styles.modalHeader}>
-                <Text style={[styles.modalTitle, { color: c.text }]}>🔐 Login Access</Text>
+                <Text style={[styles.modalTitle, isSmallScreen && styles.modalTitleSmall, { color: c.text }]}>🔐 Login Access</Text>
                 <Pressable onPress={() => setShowLoginDaysModal(false)}>
                   <Ionicons name="close" size={24} color={c.text} />
                 </Pressable>
@@ -1012,12 +1025,12 @@ export default function TenantReporterDetailsScreen() {
         showsVerticalScrollIndicator={false}
       >
         {/* ── Quick Actions Section ── */}
-        <Text style={[styles.sectionTitle, { color: c.text }]}>Quick Actions</Text>
+        <Text style={[styles.sectionTitle, isSmallScreen && styles.sectionTitleSmall, { color: c.text }]}>Quick Actions</Text>
 
         {/* Row 1: Subscription & Manual Login */}
-        <View style={styles.actionRow}>
+        <View style={[styles.actionRow, isSmallScreen && styles.actionRowVertical]}>
           {/* Subscription Toggle */}
-          <View style={[styles.actionCard, { backgroundColor: c.card, borderColor: paymentDue ? '#DC2626' : c.border }]}>
+          <View style={[styles.actionCard, isSmallScreen && styles.actionCardVertical, { backgroundColor: c.card, borderColor: paymentDue ? '#DC2626' : c.border }]}>
             <View style={styles.actionCardHeader}>
               <View style={[styles.actionIcon, { backgroundColor: subscriptionActive ? (paymentDue ? '#DC262620' : SUCCESS_COLOR + '20') : isScheduled ? WARNING_COLOR + '20' : '#9CA3AF20' }]}>
                 <MaterialCommunityIcons
@@ -1027,8 +1040,8 @@ export default function TenantReporterDetailsScreen() {
                 />
               </View>
               <View style={styles.actionCardInfo}>
-                <Text style={[styles.actionCardTitle, { color: c.text }]}>Subscription</Text>
-                <Text style={[styles.actionCardSubtitle, { color: subscriptionActive ? (paymentDue ? '#DC2626' : SUCCESS_COLOR) : isScheduled ? WARNING_COLOR : secondaryText }]}>
+                <Text style={[styles.actionCardTitle, isSmallScreen && styles.smallText, { color: c.text }]}>Subscription</Text>
+                <Text style={[styles.actionCardSubtitle, isSmallScreen && styles.smallSubtitle, { color: subscriptionActive ? (paymentDue ? '#DC2626' : SUCCESS_COLOR) : isScheduled ? WARNING_COLOR : secondaryText }]}>
                   {subscriptionActive 
                     ? paymentDue 
                       ? `⚠️ పేమెంట్ పెండింగ్` 
@@ -1053,7 +1066,7 @@ export default function TenantReporterDetailsScreen() {
           </View>
 
           {/* Manual Login Toggle */}
-          <View style={[styles.actionCard, { backgroundColor: c.card, borderColor: c.border }]}>
+          <View style={[styles.actionCard, isSmallScreen && styles.actionCardVertical, { backgroundColor: c.card, borderColor: c.border }]}>
             <View style={styles.actionCardHeader}>
               <View style={[styles.actionIcon, { backgroundColor: manualLoginEnabled ? INFO_COLOR + '20' : '#9CA3AF20' }]}>
                 <MaterialIcons
@@ -1063,8 +1076,8 @@ export default function TenantReporterDetailsScreen() {
                 />
               </View>
               <View style={styles.actionCardInfo}>
-                <Text style={[styles.actionCardTitle, { color: c.text }]}>Login Access</Text>
-                <Text style={[styles.actionCardSubtitle, { color: secondaryText }]}>
+                <Text style={[styles.actionCardTitle, isSmallScreen && styles.smallText, { color: c.text }]}>Login Access</Text>
+                <Text style={[styles.actionCardSubtitle, isSmallScreen && styles.smallSubtitle, { color: secondaryText }]}>
                   {subscriptionActive
                     ? 'Subscription ద్వారా'
                     : manualLoginEnabled
@@ -1093,9 +1106,9 @@ export default function TenantReporterDetailsScreen() {
         </View>
 
         {/* Row 2: Auto Publish & KYC */}
-        <View style={styles.actionRow}>
+        <View style={[styles.actionRow, isSmallScreen && styles.actionRowVertical]}>
           {/* Auto Publish Toggle */}
-          <View style={[styles.actionCard, { backgroundColor: c.card, borderColor: c.border }]}>
+          <View style={[styles.actionCard, isSmallScreen && styles.actionCardVertical, { backgroundColor: c.card, borderColor: c.border }]}>
             <View style={styles.actionCardHeader}>
               <View style={[styles.actionIcon, { backgroundColor: autoPublish ? WARNING_COLOR + '20' : '#9CA3AF20' }]}>
                 <MaterialIcons
@@ -1105,8 +1118,8 @@ export default function TenantReporterDetailsScreen() {
                 />
               </View>
               <View style={styles.actionCardInfo}>
-                <Text style={[styles.actionCardTitle, { color: c.text }]}>Auto Publish</Text>
-                <Text style={[styles.actionCardSubtitle, { color: secondaryText }]}>
+                <Text style={[styles.actionCardTitle, isSmallScreen && styles.smallText, { color: c.text }]}>Auto Publish</Text>
+                <Text style={[styles.actionCardSubtitle, isSmallScreen && styles.smallSubtitle, { color: secondaryText }]}>
                   {autoPublish ? 'ఆటో పబ్లిష్' : 'అప్రూవల్ అవసరం'}
                 </Text>
               </View>
@@ -1124,7 +1137,7 @@ export default function TenantReporterDetailsScreen() {
           </View>
 
           {/* KYC Status */}
-          <View style={[styles.actionCard, { backgroundColor: c.card, borderColor: c.border }]}>
+          <View style={[styles.actionCard, isSmallScreen && styles.actionCardVertical, { backgroundColor: c.card, borderColor: c.border }]}>
             <View style={styles.actionCardHeader}>
               <View style={[styles.actionIcon, { backgroundColor: kycInfo.color + '20' }]}>
                 <MaterialIcons 
@@ -1134,8 +1147,8 @@ export default function TenantReporterDetailsScreen() {
                 />
               </View>
               <View style={styles.actionCardInfo}>
-                <Text style={[styles.actionCardTitle, { color: c.text }]}>KYC</Text>
-                <Text style={[styles.actionCardSubtitle, { color: kycInfo.color }]}>{kycInfo.label}</Text>
+                <Text style={[styles.actionCardTitle, isSmallScreen && styles.smallText, { color: c.text }]}>KYC</Text>
+                <Text style={[styles.actionCardSubtitle, isSmallScreen && styles.smallSubtitle, { color: kycInfo.color }]}>{kycInfo.label}</Text>
               </View>
             </View>
             {updating === 'kyc' ? (
@@ -1155,9 +1168,9 @@ export default function TenantReporterDetailsScreen() {
         </View>
 
         {/* ── ID Card Section ── */}
-        <Text style={[styles.sectionTitle, { color: c.text, marginTop: 24 }]}>🎫 ID కార్డ్</Text>
+        <Text style={[styles.sectionTitle, isSmallScreen && styles.sectionTitleSmall, { color: c.text, marginTop: 24 }]}>🎫 ID కార్డ్</Text>
 
-        <View style={[styles.idCardSection, { backgroundColor: c.card, borderColor: c.border }]}>
+        <View style={[styles.idCardSection, isSmallScreen && styles.idCardSectionSmall, { backgroundColor: c.card, borderColor: c.border }]}>
           {hasIdCard ? (
             <>
               <View style={styles.idCardInfo}>
@@ -1170,10 +1183,10 @@ export default function TenantReporterDetailsScreen() {
                 </View>
               </View>
 
-              <View style={styles.idCardActions}>
+              <View style={[styles.idCardActions, isSmallScreen && styles.idCardActionsVertical]}>
                 {/* Download PDF */}
                 <Pressable
-                  style={[styles.idCardBtn, { backgroundColor: PRIMARY_COLOR }]}
+                  style={[styles.idCardBtn, isSmallScreen && styles.idCardBtnVertical, { backgroundColor: PRIMARY_COLOR }]}
                   onPress={handleDownloadPdf}
                   disabled={downloading}
                 >
@@ -1189,7 +1202,7 @@ export default function TenantReporterDetailsScreen() {
 
                 {/* WhatsApp */}
                 <Pressable
-                  style={[styles.idCardBtn, { backgroundColor: WHATSAPP_COLOR }]}
+                  style={[styles.idCardBtn, isSmallScreen && styles.idCardBtnVertical, { backgroundColor: WHATSAPP_COLOR }]}
                   onPress={handleSendWhatsApp}
                   disabled={updating === 'whatsapp'}
                 >
@@ -1205,7 +1218,7 @@ export default function TenantReporterDetailsScreen() {
 
                 {/* Regenerate */}
                 <Pressable
-                  style={[styles.idCardBtn, { backgroundColor: WARNING_COLOR }]}
+                  style={[styles.idCardBtn, isSmallScreen && styles.idCardBtnVertical, { backgroundColor: WARNING_COLOR }]}
                   onPress={handleRegenerateIdCard}
                   disabled={updating === 'idCard'}
                 >
@@ -1304,31 +1317,31 @@ export default function TenantReporterDetailsScreen() {
         </View>
 
         {/* ── Reporter Details ── */}
-        <Text style={[styles.sectionTitle, { color: c.text, marginTop: 24 }]}>📋 వివరాలు</Text>
+        <Text style={[styles.sectionTitle, isSmallScreen && styles.sectionTitleSmall, { color: c.text, marginTop: 24 }]}>📋 వివరాలు</Text>
 
-        <View style={[styles.detailsCard, { backgroundColor: c.card, borderColor: c.border }]}>
+        <View style={[styles.detailsCard, isSmallScreen && styles.detailsCardSmall, { backgroundColor: c.card, borderColor: c.border }]}>
           <View style={styles.detailRow}>
-            <Text style={[styles.detailLabel, { color: secondaryText }]}>📱 ఫోన్</Text>
-            <Text style={[styles.detailValue, { color: c.text }]}>+91 {reporter.mobileNumber || '—'}</Text>
+            <Text style={[styles.detailLabel, isSmallScreen && styles.detailLabelSmall, { color: secondaryText }]}>📱 ఫోన్</Text>
+            <Text style={[styles.detailValue, isSmallScreen && styles.detailValueSmall, { color: c.text }]}>+91 {reporter.mobileNumber || '—'}</Text>
           </View>
           <View style={styles.detailRow}>
-            <Text style={[styles.detailLabel, { color: secondaryText }]}>🏢 హోదా</Text>
-            <Text style={[styles.detailValue, { color: c.text }]}>{reporter.designation?.name || '—'}</Text>
+            <Text style={[styles.detailLabel, isSmallScreen && styles.detailLabelSmall, { color: secondaryText }]}>🏢 హోదా</Text>
+            <Text style={[styles.detailValue, isSmallScreen && styles.detailValueSmall, { color: c.text }]}>{reporter.designation?.name || '—'}</Text>
           </View>
           <View style={styles.detailRow}>
-            <Text style={[styles.detailLabel, { color: secondaryText }]}>📍 ప్రాంతం</Text>
-            <Text style={[styles.detailValue, { color: c.text }]}>{location}</Text>
+            <Text style={[styles.detailLabel, isSmallScreen && styles.detailLabelSmall, { color: secondaryText }]}>📍 ప్రాంతం</Text>
+            <Text style={[styles.detailValue, isSmallScreen && styles.detailValueSmall, { color: c.text }]}>{location}</Text>
           </View>
           <View style={styles.detailRow}>
-            <Text style={[styles.detailLabel, { color: secondaryText }]}>📸 ఫోటో</Text>
-            <Text style={[styles.detailValue, { color: hasPhoto ? SUCCESS_COLOR : WARNING_COLOR }]}>
+            <Text style={[styles.detailLabel, isSmallScreen && styles.detailLabelSmall, { color: secondaryText }]}>📸 ఫోటో</Text>
+            <Text style={[styles.detailValue, isSmallScreen && styles.detailValueSmall, { color: hasPhoto ? SUCCESS_COLOR : WARNING_COLOR }]}>
               {hasPhoto ? '✓ అప్‌లోడ్ అయింది' : '⚠️ లేదు'}
             </Text>
           </View>
           {subscriptionActive && (
             <View style={styles.detailRow}>
-              <Text style={[styles.detailLabel, { color: secondaryText }]}>💰 నెలవారీ ఫీ</Text>
-              <Text style={[styles.detailValue, { color: c.text }]}>
+              <Text style={[styles.detailLabel, isSmallScreen && styles.detailLabelSmall, { color: secondaryText }]}>💰 నెలవారీ ఫీ</Text>
+              <Text style={[styles.detailValue, isSmallScreen && styles.detailValueSmall, { color: c.text }]}>
                 ₹{reporter.monthlySubscriptionAmount || 0}
               </Text>
             </View>
@@ -1336,9 +1349,9 @@ export default function TenantReporterDetailsScreen() {
         </View>
 
         {/* Help Box */}
-        <View style={styles.helpBox}>
+        <View style={[styles.helpBox, isSmallScreen && styles.helpBoxSmall]}>
           <Ionicons name="information-circle" size={18} color={INFO_COLOR} />
-          <Text style={styles.helpText}>
+          <Text style={[styles.helpText, isSmallScreen && styles.helpTextSmall]}>
             Subscription ON → నెలవారీ చెల్లింపు అవసరం{'\n'}
             Subscription OFF → Manual Login ఆటోమేటిక్‌గా ON (365 రోజులు)
           </Text>
@@ -1412,6 +1425,11 @@ const styles = StyleSheet.create({
     borderWidth: 3,
     borderColor: '#fff',
   },
+  avatarSmall: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+  },
   avatarPlaceholder: {
     width: 64,
     height: 64,
@@ -1424,6 +1442,9 @@ const styles = StyleSheet.create({
   avatarInitials: {
     fontSize: 22,
     fontWeight: '700',
+  },
+  avatarInitialsSmall: {
+    fontSize: 19,
   },
   noPhotoBadge: {
     position: 'absolute',
@@ -1447,17 +1468,26 @@ const styles = StyleSheet.create({
     color: '#fff',
     letterSpacing: -0.3,
   },
+  headerNameSmall: {
+    fontSize: 18,
+  },
   headerDesig: {
     fontSize: 15,
     color: 'rgba(255,255,255,0.9)',
     fontWeight: '500',
     marginTop: 3,
   },
+  headerDesigSmall: {
+    fontSize: 13,
+  },
   headerLevel: {
     fontSize: 13,
     color: 'rgba(255,255,255,0.75)',
     marginTop: 3,
     fontWeight: '500',
+  },
+  headerLevelSmall: {
+    fontSize: 11,
   },
 
   // Toast
@@ -1495,12 +1525,19 @@ const styles = StyleSheet.create({
     marginTop: 4,
     letterSpacing: -0.3,
   },
+  sectionTitleSmall: {
+    fontSize: 16,
+    marginBottom: 12,
+  },
 
   // Action Cards
   actionRow: {
     flexDirection: 'row',
     gap: 12,
     marginBottom: 14,
+  },
+  actionRowVertical: {
+    flexDirection: 'column',
   },
   actionCard: {
     flex: 1,
@@ -1515,6 +1552,12 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowRadius: 6,
     elevation: 1,
+    minHeight: 68,
+  },
+  actionCardVertical: {
+    width: '100%',
+    minHeight: 72,
+    padding: 16,
   },
   actionCardHeader: {
     flexDirection: 'row',
@@ -1542,6 +1585,12 @@ const styles = StyleSheet.create({
     marginTop: 3,
     fontWeight: '500',
   },
+  smallText: {
+    fontSize: 13,
+  },
+  smallSubtitle: {
+    fontSize: 11,
+  },
   miniBtn: {
     width: 32,
     height: 32,
@@ -1560,6 +1609,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 16,
     padding: 16,
+  },
+  idCardSectionSmall: {
+    padding: 14,
+    borderRadius: 14,
   },
   idCardInfo: {
     flexDirection: 'row',
@@ -1585,6 +1638,11 @@ const styles = StyleSheet.create({
   idCardActions: {
     flexDirection: 'row',
     gap: 10,
+    flexWrap: 'wrap',
+  },
+  idCardActionsVertical: {
+    flexDirection: 'column',
+    gap: 10,
   },
   idCardBtn: {
     flex: 1,
@@ -1594,6 +1652,11 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingVertical: 10,
     borderRadius: 10,
+    minWidth: 80,
+  },
+  idCardBtnVertical: {
+    width: '100%',
+    paddingVertical: 12,
   },
   idCardBtnText: {
     color: '#fff',
@@ -1634,16 +1697,30 @@ const styles = StyleSheet.create({
     padding: 14,
     gap: 10,
   },
+  detailsCardSmall: {
+    padding: 12,
+    gap: 8,
+  },
   detailRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
+    flexWrap: 'wrap',
   },
   detailLabel: {
     fontSize: 14,
   },
+  detailLabelSmall: {
+    fontSize: 13,
+  },
   detailValue: {
     fontSize: 14,
     fontWeight: '600',
+    textAlign: 'right',
+    flexShrink: 1,
+  },
+  detailValueSmall: {
+    fontSize: 13,
   },
 
   // Help Box
@@ -1656,11 +1733,19 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     marginTop: 20,
   },
+  helpBoxSmall: {
+    padding: 10,
+    gap: 6,
+  },
   helpText: {
     color: '#4338CA',
     fontSize: 12,
     lineHeight: 18,
     flex: 1,
+  },
+  helpTextSmall: {
+    fontSize: 11,
+    lineHeight: 16,
   },
 
   // Photo Upload Badge
@@ -1698,6 +1783,7 @@ const styles = StyleSheet.create({
     paddingTop: 20,
     paddingHorizontal: 20,
     paddingBottom: 40,
+    maxHeight: '85%',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -1708,6 +1794,9 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 18,
     fontWeight: '700',
+  },
+  modalTitleSmall: {
+    fontSize: 16,
   },
   modalBody: {
     gap: 16,

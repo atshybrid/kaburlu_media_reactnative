@@ -1,6 +1,10 @@
 import React, { useCallback, useState } from 'react';
 import { Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { ThemedText } from '../ThemedText';
+import { Colors } from '@/constants/Colors';
+import { useColorScheme } from '@/hooks/useColorScheme';
+import { BorderRadius } from '@/constants/BorderRadius';
+import { Spacing } from '@/constants/Spacing';
 
 interface MessageInputProps {
   onSend: (text: string) => void | Promise<void>;
@@ -8,6 +12,8 @@ interface MessageInputProps {
 }
 
 export const MessageInput: React.FC<MessageInputProps> = ({ onSend, placeholder = 'Message' }) => {
+  const scheme = useColorScheme() ?? 'light';
+  const c = Colors[scheme];
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
 
@@ -19,16 +25,26 @@ export const MessageInput: React.FC<MessageInputProps> = ({ onSend, placeholder 
   }, [text, sending, onSend]);
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: c.background, borderColor: c.border }]}
+    >
       <TextInput
-        style={styles.input}
+        style={[styles.input, { backgroundColor: c.card, color: c.text, borderColor: c.border }]}
         value={text}
         placeholder={placeholder}
         onChangeText={setText}
         multiline
-        placeholderTextColor="#999"
+        placeholderTextColor={c.muted}
       />
-      <Pressable style={({ pressed }) => [styles.sendBtn, pressed && { opacity: 0.7 }, sending && { opacity: 0.5 }]} onPress={handleSend} disabled={sending}>
+      <Pressable
+        style={({ pressed }) => [
+          styles.sendBtn,
+          { backgroundColor: sending || !text.trim() ? c.border : c.tint, borderColor: c.border },
+          pressed && { opacity: 0.8 },
+          sending && { opacity: 0.7 },
+        ]}
+        onPress={handleSend}
+        disabled={sending || !text.trim()}
+      >
         <ThemedText style={styles.sendLabel}>{sending ? '...' : 'Send'}</ThemedText>
       </Pressable>
     </View>
@@ -36,8 +52,26 @@ export const MessageInput: React.FC<MessageInputProps> = ({ onSend, placeholder 
 };
 
 const styles = StyleSheet.create({
-  container: { flexDirection: 'row', alignItems: 'flex-end', padding: 8, gap: 8, borderTopWidth: StyleSheet.hairlineWidth, borderColor: '#333', backgroundColor: '#111' },
-  input: { flex: 1, minHeight: 40, maxHeight: 120, color: 'white', padding: 8, borderRadius: 12, backgroundColor: '#222' },
-  sendBtn: { paddingHorizontal: 16, paddingVertical: 10, backgroundColor: '#2563eb', borderRadius: 12 },
+  container: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    padding: Spacing.md,
+    gap: Spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  input: {
+    flex: 1,
+    minHeight: 44,
+    maxHeight: 140,
+    padding: Spacing.md,
+    borderRadius: BorderRadius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  sendBtn: {
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: 12,
+    borderRadius: BorderRadius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
   sendLabel: { color: 'white', fontWeight: '600' },
 });

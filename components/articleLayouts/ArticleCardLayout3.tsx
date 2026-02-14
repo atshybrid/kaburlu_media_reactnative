@@ -108,7 +108,8 @@ const ArticleCardLayout3: React.FC<Props> = ({
 
       <View style={styles.footer}>
         <View style={styles.footerLeft}>
-          {item.reporterType === 'citizen' && item.reporterProfilePic ? (
+          {/* Show reporter profile photo if reporter exists, otherwise show tenant brand icon */}
+          {item.reporterProfilePic ? (
             <Image source={{ uri: item.reporterProfilePic }} style={styles.avatar} />
           ) : item.reporterLogo ? (
             <Image source={{ uri: item.reporterLogo }} style={styles.avatar} />
@@ -116,10 +117,23 @@ const ArticleCardLayout3: React.FC<Props> = ({
             <View style={[styles.avatar, styles.avatarPlaceholder, { backgroundColor: palette.border }]} />
           )}
           <View style={{ marginLeft: 8 }}>
-            <Text style={[styles.brandText, { color: palette.text }, compact && { fontSize: 12 }]} numberOfLines={1}>
-              {(item.brandName ?? 'Reporter Name') + (item.location ? ` • ${item.location}` : '')}
-            </Text>
-            {item.authorName ? <Text style={[styles.byText, { color: palette.muted }, compact && { fontSize: 11 }]} numberOfLines={1}>{item.authorName}</Text> : null}
+            {/* Show reporter name if available, otherwise show "Source: {brandName}" */}
+            {item.authorName ? (
+              <>
+                <Text style={[styles.brandText, { color: palette.text }, compact && { fontSize: 12 }]} numberOfLines={1}>
+                  {item.authorName}
+                </Text>
+                {item.location && (
+                  <Text style={[styles.byText, { color: palette.muted }, compact && { fontSize: 11 }]} numberOfLines={1}>
+                    {item.location}
+                  </Text>
+                )}
+              </>
+            ) : (
+              <Text style={[styles.brandText, { color: palette.text }, compact && { fontSize: 12 }]} numberOfLines={1}>
+                Source: {item.brandName || 'Unknown'}
+              </Text>
+            )}
           </View>
         </View>
         {!!item.time && <Text style={[styles.timeText, { color: palette.muted }, compact && { fontSize: 11 }]} numberOfLines={1}>{item.time}</Text>}

@@ -75,9 +75,10 @@ export async function requestAddLocation(
 
 export type SmartAddLocationRequest = {
   areaName: string;
-  stateName: string;
-  languageCode: string;
-  forceType: 'mandal' | 'village' | 'town';
+  languageCode?: string;
+  forceType?: 'district' | 'mandal' | 'village' | 'town';
+  stateId?: string;
+  stateName?: string;
   parentDistrictName?: string;
   parentDistrictId?: string;
 };

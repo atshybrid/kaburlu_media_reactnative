@@ -49,6 +49,9 @@ const TabloidBoldLayout: ArticleLayoutComponent = ({ article, index, totalArticl
   const isTelugu = (text?: string) => /[\u0C00-\u0C7F]/.test(String(text || ''));
   const isTeluguTitle = isTelugu(article.title);
 
+  const publisherName = article.publisherName || 'Kaburlu';
+  const publisherLogo = article.publisherLogo || '';
+
   // Tab bar visibility
   const { isTabBarVisible, setTabBarVisible } = useTabBarVisibility();
   const { show, hide } = useAutoHideBottomBar(
@@ -98,7 +101,7 @@ const TabloidBoldLayout: ArticleLayoutComponent = ({ article, index, totalArticl
     : (article.category as any)?.name || 'Trending';
 
   // Publisher
-  const publisherName = article.publisherName || 'Kaburlu';
+  // publisherName defined above
 
   // Summary text clamped
   const summaryText = clampText(article.summary || article.body || '', 150);
@@ -186,14 +189,16 @@ const TabloidBoldLayout: ArticleLayoutComponent = ({ article, index, totalArticl
 
         {/* Publisher row */}
         <View style={styles.publisherRow}>
-          <View style={[styles.publisherAvatar, { backgroundColor: tagSecondaryColor }]}>
-            <Text style={styles.publisherInitial}>
-              {publisherName.charAt(0).toUpperCase()}
-            </Text>
-          </View>
-          <Text style={styles.publisherName}>
-            {publisherName}
-          </Text>
+          {publisherLogo ? (
+            <Image source={{ uri: publisherLogo }} style={styles.publisherAvatarImg} contentFit="cover" />
+          ) : (
+            <View style={[styles.publisherAvatar, { backgroundColor: tagSecondaryColor }]}>
+              <Text style={styles.publisherInitial}>
+                {publisherName.charAt(0).toUpperCase()}
+              </Text>
+            </View>
+          )}
+          <Text style={styles.publisherName}>{publisherName}</Text>
         </View>
 
         {/* Side-by-side images or single large image */}
@@ -231,7 +236,7 @@ const TabloidBoldLayout: ArticleLayoutComponent = ({ article, index, totalArticl
         {/* Source and Article indicator - always at bottom */}
         <View style={styles.bottomRow}>
           <Text style={styles.sourceText}>
-            {publisherName}
+            Source News • {publisherName}
           </Text>
           <Text style={styles.indicatorText}>
             {index + 1} / {totalArticles}
@@ -344,6 +349,12 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     justifyContent: 'center',
     alignItems: 'center',
+    marginRight: 10,
+  },
+  publisherAvatarImg: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     marginRight: 10,
   },
   publisherInitial: {

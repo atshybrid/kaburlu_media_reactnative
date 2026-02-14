@@ -565,25 +565,32 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
                 const a: any = article.author;
                 const fullName: string = a.fullName || a.name || 'Reporter';
                 const photo: string | null = a.profilePhotoUrl || a.avatar || null;
-                const roleName: string | null = a.roleName || null;
+                const roleName: string | null = a.roleName || (a.role ? String(a.role) : null);
                 const placeName: string | null = a.placeName || null;
+                const isTenantReporter = !!roleName && /TENANT/i.test(String(roleName));
+                const tenantName: string | null = (article as any)?.publisherName || null;
+                const tenantLogo: string | null = (article as any)?.publisherLogo || null;
+                const displayPhoto = isTenantReporter ? tenantLogo : photo;
+                const displayName = isTenantReporter ? `Source News${tenantName ? ` • ${tenantName}` : ''}` : fullName;
                 const initials = fullName
                   .split(/\s+/)
                   .filter(Boolean)
                   .slice(0,2)
                   .map((p: string) => p[0]?.toUpperCase())
                   .join('');
-                const humanRole = roleName ? String(roleName).replace(/_/g,' ').toLowerCase().replace(/\b([a-z])/g,(m)=>m.toUpperCase()) : null;
+                const humanRole = !isTenantReporter && roleName
+                  ? String(roleName).replace(/_/g,' ').toLowerCase().replace(/\b([a-z])/g,(m)=>m.toUpperCase())
+                  : null;
                 return (
                   <View style={styles.authorCompact}>
-                    {photo ? (
-                      <Image source={{ uri: photo }} style={styles.avatarSmallImg} cachePolicy="memory-disk" />
+                    {displayPhoto ? (
+                      <Image source={{ uri: displayPhoto }} style={styles.avatarSmallImg} cachePolicy="memory-disk" />
                     ) : (
                       <View style={[styles.avatarSmall, styles.avatarFallbackSmall]}>
                         <Text style={styles.avatarInitialsSmall}>{initials || 'R'}</Text>
                       </View>
                     )}
-                    <Text style={styles.authorNameCompact} numberOfLines={1}>{fullName}</Text>
+                    <Text style={styles.authorNameCompact} numberOfLines={1}>{displayName}</Text>
                     {humanRole && (
                       <Text style={styles.roleTiny} numberOfLines={1}>{humanRole}</Text>
                     )}

@@ -87,6 +87,8 @@ export default function KaChatScreen() {
     }, [navigation])
   );
 
+  const canGoBack = (navigation as any)?.canGoBack?.() === true;
+
   const onSend = async () => {
     const text = input.trim();
     if (!text) return;
@@ -279,7 +281,14 @@ export default function KaChatScreen() {
           </>
         ) : (
           <>
-            <Text style={styles.brandName}>Kaburlu</Text>
+            <View style={styles.brandRow}>
+              {canGoBack ? (
+                <Pressable onPress={() => (navigation as any)?.goBack?.()} style={styles.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                  <Text style={styles.backBtnText}>‹</Text>
+                </Pressable>
+              ) : null}
+              <Text style={styles.brandName}>Kaburlu</Text>
+            </View>
             <View style={styles.appBarActions}>
               <Pressable style={styles.iconBtn}><Text style={{ fontSize: 16, color: Colors.light.primary }}>🛟</Text></Pressable>
             </View>

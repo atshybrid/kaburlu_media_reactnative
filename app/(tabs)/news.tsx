@@ -1,5 +1,7 @@
 import AnimatedArticle from '@/components/AnimatedArticle';
 import { ArticleSkeleton } from '@/components/ui/ArticleSkeleton';
+import EmptyState from '@/components/ui/EmptyState';
+import ErrorState from '@/components/ui/ErrorState';
 import { Colors } from '@/constants/Colors';
 import { useCategory } from '@/context/CategoryContext';
 import { useColorScheme } from '@/hooks/useColorScheme';
@@ -9,11 +11,14 @@ import { getNews } from '@/services/api';
 import { ensureNotificationsSetupOnceAfterSplash } from '@/services/notifications';
 import type { Article } from '@/types';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import LottieView from 'lottie-react-native';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { InteractionManager, LayoutChangeEvent, StyleSheet, Text, View } from 'react-native';
 import { useSharedValue, withSpring } from 'react-native-reanimated';
+import Spacing from '@/constants/Spacing';
+import Typography from '@/constants/Typography';
+import BorderRadius from '@/constants/BorderRadius';
 
 const DEV_MODE = (() => {
   const raw = String(process.env.EXPO_PUBLIC_DEVELOPER_MODE ?? '').toLowerCase();
@@ -31,6 +36,22 @@ const NewsScreen = () => {
     // especially when there are 0 items (no swipe gestures available).
     try { setTabBarVisible(true); } catch {}
   }, []);
+
+  // Handle screen focus - restore state when returning from comments modal
+  useFocusEffect(
+    useCallback(() => {
+      console.log('[NAV] News screen focused - ensuring tab bar visible');
+      // Ensure tab bar is visible when returning to news screen
+      try { setTabBarVisible(true); } catch {}
+      
+      // Force a re-render to prevent blank screen after gesture back
+      // This helps restore the animated article positions
+      return () => {
+        // Cleanup if needed
+        console.log('[NAV] News screen unfocused');
+      };
+    }, [setTabBarVisible])
+  );
 
   // Ask for push notification permission AFTER splash/intro (and only once).
   useEffect(() => {
@@ -55,6 +76,9 @@ const NewsScreen = () => {
   }, []);
   const [activeIndex, setActiveIndex] = useState(0);
   const activeIndexShared = useSharedValue(0);
+  // Preserve active index ref to prevent reset on re-render after navigation
+  const activeIndexRef = useRef(0);
+  
   const [articles, setArticles] = useState<Article[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -65,6 +89,19 @@ const NewsScreen = () => {
   const [pageHeight, setPageHeight] = useState<number | undefined>(undefined);
   const loadSeqRef = useRef(0);
   const lastHeightRef = useRef(0);
+  
+  // Restore active index when screen regains focus (after returning from comments)
+  useFocusEffect(
+    useCallback(() => {
+      // Restore the saved index position to prevent blank screen
+      if (activeIndexRef.current !== activeIndex) {
+        console.log('[NAV] Restoring activeIndex:', activeIndexRef.current);
+        setActiveIndex(activeIndexRef.current);
+        activeIndexShared.value = activeIndexRef.current;
+      }
+    }, [activeIndex, activeIndexShared])
+  );
+  
   const onLayout = (e: LayoutChangeEvent) => {
     const h = Math.round(e.nativeEvent.layout.height);
     if (h && Math.abs(h - lastHeightRef.current) > 1) {
@@ -184,6 +221,7 @@ const NewsScreen = () => {
       const newIndex = activeIndex + 1;
       setActiveIndex(newIndex);
       activeIndexShared.value = withSpring(newIndex);
+      activeIndexRef.current = newIndex; // Preserve for navigation back
     }
   };
 
@@ -192,6 +230,7 @@ const NewsScreen = () => {
       const newIndex = activeIndex - 1;
       setActiveIndex(newIndex);
       activeIndexShared.value = withSpring(newIndex);
+      activeIndexRef.current = newIndex; // Preserve for navigation back
     }
   };
 
@@ -214,28 +253,15 @@ const NewsScreen = () => {
           <ArticleSkeleton />
         )}
         {!loading && !error && articles.length === 0 && (
-          <View style={styles.centerMessage}>
-            <Text style={[styles.messageText, { color: theme.text }]}>No short news published yet{langLabel ? ` in ${langLabel}` : ''}.</Text>
-            <Text style={[styles.messageSubText, { color: theme.muted }]}>Try changing language or refresh.</Text>
-            <View style={styles.actionsRow}>
-              <Text
-                style={[styles.actionBtn, { color: theme.text, borderColor: theme.border }]}
-                onPress={() => {
-                  try { router.replace('/language'); } catch {}
-                }}
-              >
-                Change language
-              </Text>
-              <Text
-                style={[styles.actionBtn, { color: theme.text, borderColor: theme.border }]}
-                onPress={() => {
-                  loadNews();
-                }}
-              >
-                Retry
-              </Text>
-            </View>
-          </View>
+          <EmptyState
+            icon="article"
+            title={`No short news published yet${langLabel ? ` in ${langLabel}` : ''}`}
+            description="Try changing language or pull to refresh"
+            actionLabel="Change Language"
+            onAction={() => {
+              try { router.replace('/language'); } catch {}
+            }}
+          />
         )}
         {!loading && !error && articles.map((article, index) => (
           <AnimatedArticle
@@ -251,10 +277,13 @@ const NewsScreen = () => {
           />
         ))}
         {!loading && error && (
-          <View style={styles.centerMessage}>
-            <Text style={[styles.messageText, { color: theme.text }]}>Failed to load news.</Text>
-            <Text style={[styles.messageSubText, { color: theme.muted }]} numberOfLines={3}>{error}</Text>
-          </View>
+          <ErrorState
+            title="Failed to load news"
+            message={error}
+            onRetry={loadNews}
+            retryLabel="Retry"
+            variant="error"
+          />
         )}
         {__DEV__ && DEV_MODE && (
           <View style={styles.debugOverlay} pointerEvents="none">
@@ -274,37 +303,19 @@ const styles = StyleSheet.create({
     flex: 1,
     // background is set from theme inline
   },
-  centerMessage: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 20,
-  },
-  messageText: { fontSize: 16, fontWeight: '600', textAlign: 'center' },
-  messageSubText: { marginTop: 8, fontSize: 13, textAlign: 'center' },
-  actionsRow: {
-    marginTop: 14,
-    flexDirection: 'row',
-    gap: 10,
-  },
-  actionBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 10,
-    overflow: 'hidden',
-    fontWeight: '600',
-  },
   debugOverlay: {
     position: 'absolute',
-    top: 8,
-    left: 8,
+    top: Spacing.sm,
+    left: Spacing.sm,
     backgroundColor: 'rgba(0,0,0,0.45)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: Spacing.xs,
+    borderRadius: BorderRadius.sm,
   },
-  debugText: { color: '#fff', fontSize: 12 },
+  debugText: { 
+    color: '#fff', 
+    fontSize: Typography.caption,
+  },
 });
 
 export default NewsScreen;

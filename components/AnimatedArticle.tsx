@@ -51,7 +51,8 @@ const AnimatedArticle: React.FC<AnimatedArticleProps> = ({
       transform: [{ translateY: translate }],
       // Show the current and immediate neighbor to be robust against tiny float drift
       // Use a tighter threshold so neighbors don't "peek" when idle
-      opacity: distance < 1.01 ? 1 : 0,
+      // Increased tolerance to prevent blank screens during navigation transitions
+      opacity: distance < 1.5 ? 1 : 0,
       // Keep the most relevant page on top
       zIndex: distance < 0.5 ? 2 : 1,
       // On Android, elevation participates in stacking; mirror zIndex for reliability

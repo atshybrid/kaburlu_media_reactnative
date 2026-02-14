@@ -1,8 +1,10 @@
 
 import { useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useState } from 'react';
-import { View, Text, ActivityIndicator, StyleSheet, ScrollView } from 'react-native';
+import { View, StyleSheet, ScrollView } from 'react-native';
 import ArticleDetailCard from '@/components/ui/ArticleDetailCard';
+import LoadingSpinner from '@/components/ui/LoadingSpinner';
+import ErrorState from '@/components/ui/ErrorState';
 import { Article } from '@/types';
 import { getArticleById } from '@/services/api';
 
@@ -29,13 +31,14 @@ export default function ArticleDetailScreen() {
           console.log('[ARTICLE] API response:', response ? 'Got article' : 'No article', response?.id);
           if (response) {
             setArticle(response);
+            setError(null);
           } else {
-            setError("Article not found.");
+            setError("Article not found. It may have been removed or doesn't exist.");
           }
         })
         .catch(err => {
           console.error('[ARTICLE] API error:', err);
-          setError(err.message)
+          setError(err.message || "Failed to load article. Please check your connection.")
         })
         .finally(() => {
           setLoading(false);
@@ -47,22 +50,66 @@ export default function ArticleDetailScreen() {
     }
   }, [id, isShortId]);
 
+  const handleRetry = () => {
+    setLoading(true);
+    setError(null);
+    
+    if (id) {
+      const shouldResolveShortId = isShortId === 'true';
+      
+      getArticleById(id, shouldResolveShortId)
+        .then(response => {
+          if (response) {
+            setArticle(response);
+            setError(null);
+          } else {
+            setError("Article not found. It may have been removed or doesn't exist.");
+          }
+        })
+        .catch(err => {
+          console.error('[ARTICLE] API error:', err);
+          setError(err.message || "Failed to load article. Please check your connection.")
+        })
+        .finally(() => {
+          setLoading(false);
+        });
+    }
+  };
+
   if (loading) {
-    return <ActivityIndicator size="large" style={styles.center} />;
+    return (
+      <View style={styles.container}>
+        <LoadingSpinner 
+          fullScreen 
+          text="Loading article..." 
+          size="large"
+        />
+      </View>
+    );
   }
 
   if (error) {
     return (
-      <View style={styles.center}>
-        <Text style={styles.errorText}>Error: {error}</Text>
+      <View style={styles.container}>
+        <ErrorState
+          title="Failed to load article"
+          message={error}
+          icon="error"
+          variant="error"
+        />
       </View>
     );
   }
 
   if (!article) {
     return (
-      <View style={styles.center}>
-        <Text>Article not found.</Text>
+      <View style={styles.container}>
+        <ErrorState
+          title="Article not found"
+          message="This article may have been removed or doesn't exist."
+          icon="article"
+          variant="info"
+        />
       </View>
     );
   }

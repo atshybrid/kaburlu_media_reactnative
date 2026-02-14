@@ -290,7 +290,7 @@ export default function DailyNewspaperScreen() {
     return (
       <Pressable
         onPress={() => {
-          // Navigate to article detail
+          router.push((`/tenant/article/${item.id}` as any));
         }}
         style={[styles.articleCard, { backgroundColor: c.card }]}
       >

@@ -21,6 +21,10 @@ import { saveTokens } from '@/services/auth';
 import { getDeviceIdentity } from '@/services/device';
 import { Language } from '../constants/languages';
 import { afterPreferencesUpdated, getLanguages, registerGuestUser, updatePreferences } from '../services/api';
+import Spacing from '@/constants/Spacing';
+import Typography from '@/constants/Typography';
+import BorderRadius from '@/constants/BorderRadius';
+import Shadows from '@/constants/Shadows';
 
 const LanguageSelectionScreen = () => {
   // use expo-router to navigate to the News tab after selection
@@ -195,6 +199,11 @@ const LanguageSelectionScreen = () => {
         onPress={() => handleLanguageSelect(item)}
         style={isSelected ? styles.fullWidthContainer : styles.gridItemContainer}
         activeOpacity={0.8}
+        accessible={true}
+        accessibilityLabel={`Select ${item.nativeName} language`}
+        accessibilityRole="button"
+        accessibilityState={{ selected: isSelected }}
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
       >
         <LinearGradient
           colors={gradientColors}
@@ -314,61 +323,65 @@ const styles = StyleSheet.create({
   },
   header: {
     paddingTop: 55,
-    paddingBottom: 20,
-    paddingHorizontal: 24,
+    paddingBottom: Spacing.xl,
+    paddingHorizontal: Spacing.xxl,
     backgroundColor: '#ffffff',
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
   },
   headerTitle: {
-    fontSize: 22,
+    fontSize: Typography.h3,
     fontWeight: '600',
     color: '#1a1a1a',
     textAlign: 'center',
-    marginBottom: 4,
+    marginBottom: Spacing.xs,
     letterSpacing: 0.3,
   },
   headerSubtitle: {
-    fontSize: 18,
+    fontSize: Typography.h4,
     fontWeight: '600',
     color: '#f1c40f',
     textAlign: 'center',
     letterSpacing: 0.2,
   },
   continueBox: {
-    marginHorizontal: 14,
-    marginTop: 10,
-    marginBottom: 14,
-    padding: 12,
+    marginHorizontal: Spacing.md + 2,
+    marginTop: Spacing.sm + 2,
+    marginBottom: Spacing.md + 2,
+    padding: Spacing.md,
     backgroundColor: '#ffffff',
-    borderRadius: 12,
+    borderRadius: BorderRadius.md,
     borderWidth: 1,
     borderColor: 'rgba(2, 60, 105, 0.12)',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 10,
+    gap: Spacing.sm + 2,
+    ...Shadows.sm,
   },
   continueText: {
     flex: 1,
     color: '#1a1a1a',
     fontWeight: '600',
+    fontSize: Typography.bodySmall,
   },
   continueBtn: {
     backgroundColor: '#023c69',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 10,
+    paddingHorizontal: Spacing.md + 2,
+    paddingVertical: Spacing.sm + 2,
+    borderRadius: BorderRadius.md,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   scrollView: {
     flex: 1,
   },
   scrollContainer: {
-    padding: 12,
+    padding: Spacing.md,
   },
   fullWidthContainer: {
-    marginHorizontal: 8,
-    marginVertical: 10,
+    marginHorizontal: Spacing.sm,
+    marginVertical: Spacing.sm + 2,
   },
   gridContainer: {
     flexDirection: 'row',
@@ -378,26 +391,20 @@ const styles = StyleSheet.create({
   },
   gridItemContainer: {
     width: '50%',
-    padding: 6,
+    padding: Spacing.xs + 2,
   },
   item: {
-    borderRadius: 12,
+    borderRadius: BorderRadius.md,
     overflow: 'hidden',
     backgroundColor: '#FFFFFF',
     borderLeftWidth: 5,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
-    shadowRadius: 2,
+    ...Shadows.sm,
     minHeight: 140,
     position: 'relative',
   },
   selectedItem: {
     minHeight: 180,
-    elevation: 4,
-    shadowOpacity: 0.12,
-    shadowRadius: 4,
+    ...Shadows.md,
     borderWidth: 2,
     borderColor: '#e8e8e8',
   },
@@ -460,10 +467,10 @@ const styles = StyleSheet.create({
   },
   // Error and retry UI
   errorBox: {
-    margin: 16,
-    padding: 16,
+    margin: Spacing.lg,
+    padding: Spacing.lg,
     backgroundColor: '#fdecea',
-    borderRadius: 8,
+    borderRadius: BorderRadius.md,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#f5c6cb',
     alignItems: 'center',
@@ -471,15 +478,30 @@ const styles = StyleSheet.create({
   },
   errorText: {
     color: '#b00020',
-    fontSize: 14,
-    marginBottom: 12,
+    fontSize: Typography.body,
+    fontWeight: '600',
+    marginBottom: Spacing.xs,
+    textAlign: 'center',
+  },
+  errorHint: {
+    color: '#666',
+    fontSize: Typography.bodySmall,
+    marginBottom: Spacing.md,
     textAlign: 'center',
   },
   retryBtn: {
     backgroundColor: '#007AFF',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 6,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.md,
+    borderRadius: BorderRadius.md,
+    minHeight: 44,
+    justifyContent: 'center',
+    ...Shadows.sm,
+  },
+  retryBtnText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: Typography.body,
   },
   // Submitting overlay
   overlay: {
@@ -494,21 +516,18 @@ const styles = StyleSheet.create({
   },
   overlayCard: {
     backgroundColor: '#fff',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 10,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    borderRadius: BorderRadius.md,
     flexDirection: 'row',
     alignItems: 'center',
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 1.41,
+    ...Shadows.lg,
   },
   overlayText: {
-    marginLeft: 10,
+    marginLeft: Spacing.sm + 2,
     color: '#333',
     fontWeight: '600',
+    fontSize: Typography.bodySmall,
   },
 });
 

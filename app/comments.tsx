@@ -8,6 +8,9 @@ import { Stack, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, FlatList, Keyboard, KeyboardAvoidingView, LayoutAnimation, Platform, StyleSheet, Text, TextInput, ToastAndroid, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Spacing from '@/constants/Spacing';
+import Typography from '@/constants/Typography';
+import BorderRadius from '@/constants/BorderRadius';
 
 type User = { id: string; name: string; avatar: string };
 type CommentNode = {
@@ -301,13 +304,27 @@ export default function CommentsScreen() {
             <Text style={styles.text}>{item.text}</Text>
           </View>
           <View style={styles.actionsRow}>
-            <TouchableOpacity onPress={() => startReply(item.id, item.user.name)} style={styles.actionBtn}>
-              <Feather name="message-circle" size={16} color="#666" />
+            <TouchableOpacity 
+              onPress={() => startReply(item.id, item.user.name)} 
+              style={styles.actionBtn}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              accessible={true}
+              accessibilityLabel="Reply to comment"
+              accessibilityRole="button"
+            >
+              <Feather name="message-circle" size={18} color="#666" />
               <Text style={styles.actionText}>Reply</Text>
             </TouchableOpacity>
             {hasReplies && (
-              <TouchableOpacity onPress={() => toggleExpand(item.id)} style={styles.actionBtn}>
-                <Feather name={isExpanded ? 'chevron-up' : 'chevron-down'} size={16} color="#666" />
+              <TouchableOpacity 
+                onPress={() => toggleExpand(item.id)} 
+                style={styles.actionBtn}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                accessible={true}
+                accessibilityLabel={isExpanded ? 'Hide replies' : `View ${item.replies!.length} replies`}
+                accessibilityRole="button"
+              >
+                <Feather name={isExpanded ? 'chevron-up' : 'chevron-down'} size={18} color="#666" />
                 <Text style={styles.actionText}>
                   {isExpanded ? 'Hide replies' : `View replies (${item.replies!.length})`}
                 </Text>
@@ -371,8 +388,15 @@ export default function CommentsScreen() {
         {replyTo && (
           <View style={styles.replyChip}>
             <Text style={styles.replyChipText}>Replying to {replyTo.name}</Text>
-            <TouchableOpacity onPress={() => setReplyTo(null)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
-              <Feather name="x" size={16} color="#475569" />
+            <TouchableOpacity 
+              onPress={() => setReplyTo(null)} 
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              accessible={true}
+              accessibilityLabel="Cancel reply"
+              accessibilityRole="button"
+              style={styles.closeReplyBtn}
+            >
+              <Feather name="x" size={18} color="#475569" />
             </TouchableOpacity>
           </View>
         )}
@@ -397,7 +421,16 @@ export default function CommentsScreen() {
             multiline
             maxLength={500}
           />
-          <TouchableOpacity onPress={onSend} disabled={sendDisabled} style={[styles.sendBtn, sendDisabled && styles.sendBtnDisabled]} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <TouchableOpacity 
+            onPress={onSend} 
+            disabled={sendDisabled} 
+            style={[styles.sendBtn, sendDisabled && styles.sendBtnDisabled]} 
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            accessible={true}
+            accessibilityLabel="Send comment"
+            accessibilityRole="button"
+            accessibilityState={{ disabled: sendDisabled }}
+          >
             <Feather name="send" size={20} color="#fff" />
           </TouchableOpacity>
         </View>
@@ -411,26 +444,34 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
   },
-  avatar: { width: 36, height: 36, borderRadius: 18, marginRight: 12 },
+  avatar: { width: 36, height: 36, borderRadius: 18, marginRight: Spacing.md },
   bubbleArea: { flex: 1 },
   bubble: {
     backgroundColor: '#F6F7F9',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm + 2,
   },
   replyBubble: {
     backgroundColor: '#F9FAFB',
   },
-  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
-  name: { fontWeight: '600', color: '#111', fontSize: 14 },
-  time: { color: '#777', fontSize: 12, marginLeft: 8 },
-  text: { color: '#222', fontSize: 15, lineHeight: 20 },
-  actionsRow: { flexDirection: 'row', alignItems: 'center', gap: 16, marginTop: 8 },
-  actionBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6, paddingHorizontal: 4 },
-  actionText: { color: '#666', fontSize: 13 },
-  repliesBlock: { marginTop: 8, borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: '#E5E7EB', paddingLeft: 12 },
-  repliesBlockNested: { marginTop: 8, paddingLeft: 0, borderLeftWidth: 0 },
+  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: Spacing.xs },
+  name: { fontWeight: '600', color: '#111', fontSize: Typography.bodySmall },
+  time: { color: '#777', fontSize: Typography.caption, marginLeft: Spacing.sm },
+  text: { color: '#222', fontSize: Typography.body, lineHeight: 22 },
+  actionsRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.lg, marginTop: Spacing.sm },
+  actionBtn: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    gap: Spacing.xs + 2, 
+    paddingVertical: Spacing.sm, 
+    paddingHorizontal: Spacing.xs,
+    minHeight: 44, // Accessibility minimum
+    justifyContent: 'center',
+  },
+  actionText: { color: '#666', fontSize: Typography.bodySmall },
+  repliesBlock: { marginTop: Spacing.sm, borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: '#E5E7EB', paddingLeft: Spacing.md },
+  repliesBlockNested: { marginTop: Spacing.sm, paddingLeft: 0, borderLeftWidth: 0 },
 
   inputBar: {
     position: 'absolute',
@@ -440,27 +481,28 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: '#E5E7EB',
-    padding: 12,
+    padding: Spacing.md,
     flexDirection: 'column',
     alignItems: 'stretch',
-    gap: 8,
+    gap: Spacing.sm,
   },
-  inputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 12 },
+  inputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: Spacing.md },
   meAvatar: { width: 28, height: 28, borderRadius: 14 },
   input: {
     flex: 1,
     maxHeight: 100,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    minHeight: 44, // Accessibility minimum
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm + 2,
     backgroundColor: '#F6F7F9',
-    borderRadius: 18,
+    borderRadius: BorderRadius.xl,
     color: '#111',
-    fontSize: 15,
+    fontSize: Typography.body,
   },
   sendBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44, // Increased from 40
+    height: 44, // Increased from 40
+    borderRadius: BorderRadius.full,
     backgroundColor: '#0a84ff',
     alignItems: 'center',
     justifyContent: 'center',
@@ -472,11 +514,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF7ED',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#FDBA74',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 10,
+    paddingHorizontal: Spacing.sm + 2,
+    paddingVertical: Spacing.sm - 2,
+    borderRadius: BorderRadius.md,
   },
-  hintChipText: { color: '#9A3412', fontSize: 12 },
+  hintChipText: { color: '#9A3412', fontSize: Typography.caption },
   replyChip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -484,9 +526,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#EEF2FF',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#D0D7EA',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 10,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    borderRadius: BorderRadius.md,
   },
-  replyChipText: { color: '#334155', fontSize: 12 },
+  replyChipText: { color: '#334155', fontSize: Typography.caption, flex: 1 },
+  closeReplyBtn: {
+    padding: Spacing.xs,
+    minWidth: 44,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });

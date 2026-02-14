@@ -176,6 +176,17 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
   // Backend-provided brand/publisher
   const brandName = article.publisherName || 'Kaburlu';
   const location = (article as any)?.author?.placeName || '—';
+  const authorAny: any = (article as any)?.author || {};
+  const roleRaw = String(authorAny?.roleName || authorAny?.role || '');
+  const isTenantReporter = /TENANT/i.test(roleRaw) || /NEWSPAPER/i.test(roleRaw);
+  const reporterName = String(authorAny?.fullName || authorAny?.name || article.author?.name || 'Reporter');
+  const reporterPhoto = authorAny?.profilePhotoUrl || article.author?.avatar || null;
+  const tenantLogo = article.publisherLogo || null;
+  const avatarUri = (isTenantReporter ? (tenantLogo || reporterPhoto) : (reporterPhoto || tenantLogo)) || '';
+  const primaryLine = isTenantReporter ? `Source News • ${brandName}` : reporterName;
+  const secondaryLine = isTenantReporter
+    ? (location && location !== '—' ? location : '')
+    : `${brandName}${location && location !== '—' ? ` • ${location}` : ''}`;
   const time = new Date(article.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const articleIndex1 = ((typeof index === 'number' ? index : 0) + 1);
   const totalCount = (typeof totalArticles === 'number' ? totalArticles : undefined);
@@ -626,12 +637,14 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
         {shareMode ? (
           <View style={styles.footer} onLayout={(e) => setHFooterCapture(e.nativeEvent.layout.height)}>
             <View style={styles.footerLeft}>
-              <Image source={{ uri: article.author?.avatar || article.publisherLogo || '' }} style={styles.avatar} />
+              {avatarUri ? (
+                <Image source={{ uri: avatarUri }} style={styles.avatar} />
+              ) : (
+                <View style={[styles.avatar, { backgroundColor: '#E5E7EB' }]} />
+              )}
               <View style={{ marginLeft: 8 }}>
-                <Text style={styles.brand} numberOfLines={1}>
-                  {brandName} • {location}
-                </Text>
-                <Text style={styles.authorSmall} numberOfLines={1}>{article.author?.name}</Text>
+                <Text style={styles.brand} numberOfLines={1}>{primaryLine}</Text>
+                {!!secondaryLine && <Text style={styles.authorSmall} numberOfLines={1}>{secondaryLine}</Text>}
               </View>
             </View>
             <Text style={styles.timeSmall}>{timeWithCount}</Text>
@@ -645,12 +658,14 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
   <View style={styles.bottomDock} onLayout={(e) => setHBottomDock(e.nativeEvent.layout.height)} pointerEvents="box-none">
         <View style={styles.footer}>
           <View style={styles.footerLeft}>
-            <Image source={{ uri: article.author?.avatar || article.publisherLogo || '' }} style={styles.avatar} />
+            {avatarUri ? (
+              <Image source={{ uri: avatarUri }} style={styles.avatar} />
+            ) : (
+              <View style={[styles.avatar, { backgroundColor: '#E5E7EB' }]} />
+            )}
             <View style={{ marginLeft: 8 }}>
-              <Text style={styles.brand} numberOfLines={1}>
-                {brandName} • {location}
-              </Text>
-              <Text style={styles.authorSmall} numberOfLines={1}>{article.author?.name}</Text>
+              <Text style={styles.brand} numberOfLines={1}>{primaryLine}</Text>
+              {!!secondaryLine && <Text style={styles.authorSmall} numberOfLines={1}>{secondaryLine}</Text>}
             </View>
           </View>
           <Text style={styles.timeSmall}>{timeWithCount}</Text>

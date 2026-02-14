@@ -213,7 +213,7 @@ function ThemedApp() {
                   contentStyle: { backgroundColor: effective === 'dark' ? DarkTheme.colors.background : DefaultTheme.colors.background },
                 }}
               />
-              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+              <Stack.Screen name="(tabs)" options={{ headerShown: false, freezeOnBlur: false }} />
               <Stack.Screen
                 name="comments"
                 options={{
@@ -222,6 +222,10 @@ function ThemedApp() {
                   animation: 'slide_from_bottom',
                   // iOS modal presentation style
                   presentation: 'modal',
+                  // Keep underlying screen alive to prevent blank screen on gesture back
+                  freezeOnBlur: false,
+                  // Solid background during transitions
+                  contentStyle: { backgroundColor: effective === 'dark' ? DarkTheme.colors.background : DefaultTheme.colors.background },
                 }}
               />
               <Stack.Screen 
