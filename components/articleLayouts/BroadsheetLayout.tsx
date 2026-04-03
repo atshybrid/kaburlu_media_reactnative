@@ -14,10 +14,15 @@
 import { useTabBarVisibility } from '@/context/TabBarVisibilityContext';
 import { useAutoHideBottomBar } from '@/hooks/useAutoHideBottomBar';
 import { useColorScheme } from '@/hooks/useColorScheme';
+import { useDeviceLayout } from '@/hooks/useDeviceLayout';
+import { useFocalPoint } from '@/hooks/useFocalPoint';
 import { useReaction } from '@/hooks/useReaction';
+import { computeAdaptiveBodyBaseFont, computeAdaptiveImageHeight } from '@/services/layoutSizing';
+import { buildArticleSharePayload } from '@/services/shareLinks';
+import KaburluEnglishLogo from '@/assets/spashlogos/english.svg';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { Image } from 'expo-image';
+import ImageWithSkeleton from '@/components/ui/ImageWithSkeleton';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo } from 'react';
 import {
@@ -30,6 +35,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import ArticleAuthorBar from './ArticleAuthorBar';
 import type { ArticleLayoutComponent } from './types';
 
 // Professional color palette
@@ -56,7 +62,8 @@ const BroadsheetLayout: ArticleLayoutComponent = ({ article, index, totalArticle
   const isDark = scheme === 'dark';
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const { scaleFontSize, scaleLineHeight, isTablet } = useDeviceLayout();
 
   // Fade-in animation
   const fadeAnim = React.useRef(new Animated.Value(0)).current;
@@ -106,30 +113,34 @@ const BroadsheetLayout: ArticleLayoutComponent = ({ article, index, totalArticle
     return d.toLocaleDateString('en-IN', options);
   }, [article.createdAt]);
 
-  // 16:9 responsive image sizing
-  const imageHeight = useMemo(() => {
-    const contentWidth = windowWidth - 40; // Account for padding
-    return Math.round(contentWidth * (9/16));
-  }, [windowWidth]);
   // Check if Telugu content
   const isTelugu = (text?: string) => /[\u0C00-\u0C7F]/.test(String(text || ''));
   const isTeluguTitle = isTelugu(article.title);
   const isTeluguBody = isTelugu(article.body || article.summary);
   // Body text with smart word limiting - 60 words max
-  const bodyText = clampWords(article.body || article.summary || '', 60);
+  const bodyText = clampWords(article.body || article.summary || '', 120);
+  const bodyWordCount = bodyText.split(/\s+/).filter(Boolean).length;
 
   // Get image
   const imageUrl = article.image || article.images?.[0] || null;
+  // Face-detection-based focal point for smart crop (falls back to 'center')
+  const imageFocalPoint = useFocalPoint(imageUrl || undefined);
 
   // Author info (simplified for Style 3)
   const authorName = (article as any)?.author?.name || article.publisherName || 'Staff Reporter';
   const authorPlace = (article as any)?.author?.placeName || '';
 
-  // Auto line height calculation - reduced for mobile fit
-  const titleSize = 26;  // Reduced from 32
-  const titleLineHeight = Math.round(titleSize * 1.30);  // Increased multiplier for better spacing
-  const bodySize = 15;  // Reduced from 16
-  const bodyLineHeight = Math.round(bodySize * 1.60);
+  // Dynamic font and image sizing tuned for content length and device.
+  const phoneBodySize = computeAdaptiveBodyBaseFont(bodyWordCount);
+  const imageHeight = computeAdaptiveImageHeight({
+    screenWidth: windowWidth - 40,
+    screenHeight: windowHeight - insets.top - insets.bottom,
+    wordCount: bodyWordCount,
+  });
+  const titleSize = scaleFontSize(isTablet ? 24 : 26);
+  const titleLineHeight = scaleLineHeight(isTablet ? 24 : 26, isTeluguTitle ? 1.50 : 1.30);
+  const bodySize = scaleFontSize(phoneBodySize);
+  const bodyLineHeight = scaleLineHeight(phoneBodySize, 1.60);
 
   const onLike = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -149,13 +160,11 @@ const BroadsheetLayout: ArticleLayoutComponent = ({ article, index, totalArticle
   const onShare = async () => {
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      const shareUrl = article.shortId 
-        ? `https://s.kaburlumedia.com/${article.shortId}`
-        : `https://kaburlumedia.com/article/${article.id}`;
+      const payload = buildArticleSharePayload(article);
       await Share.share({
-        title: article.title,
-        message: `${article.title}\n\nRead more: ${shareUrl}`,
-        url: shareUrl,
+        title: payload.title,
+        message: payload.message,
+        url: payload.url,
       });
     } catch (error) {
       console.warn('Share failed:', error);
@@ -174,9 +183,7 @@ const BroadsheetLayout: ArticleLayoutComponent = ({ article, index, totalArticle
       {/* Premium Masthead - Centered */}
       <View style={styles.masthead}>
         <View style={[styles.mastheadTopLine, { backgroundColor: isDark ? '#444' : THEME.primary }]} />
-        <Text style={[styles.mastheadTitle, { color: isDark ? '#fff' : THEME.primary }]}>
-          KABURLU
-        </Text>
+        <KaburluEnglishLogo width={210} height={Math.round(210 * 272 / 512)} style={styles.mastheadLogo} />
         <Text style={[styles.mastheadSubtitle, { color: isDark ? '#888' : THEME.secondary }]}>
           Premium Edition
         </Text>
@@ -203,20 +210,17 @@ const BroadsheetLayout: ArticleLayoutComponent = ({ article, index, totalArticle
           {article.title}
         </Text>
 
-        {/* Author Section - Simple */}
-        <View style={styles.authorSimple}>
-          <Text style={[styles.authorText, { color: isDark ? '#9CA3AF' : THEME.secondary }]}>
-            {authorName}{authorPlace ? ` • ${authorPlace}` : ''}
-          </Text>
-        </View>
+        {/* Author Section */}
+        <ArticleAuthorBar article={article} dark={isDark} style={{ marginBottom: 8 }} />
 
         {/* 16:9 Responsive Image */}
         {imageUrl && (
           <View style={[styles.imageContainer, { height: imageHeight }]}>
-            <Image 
-              source={{ uri: imageUrl }} 
-              style={styles.image} 
+            <ImageWithSkeleton
+              uri={imageUrl}
+              style={styles.image}
               contentFit="cover"
+              contentPosition={imageFocalPoint as any}
             />
           </View>
         )}
@@ -312,11 +316,8 @@ const styles = StyleSheet.create({
     width: '100%',
     marginBottom: 10,
   },
-  mastheadTitle: {
-    fontSize: 36,
-    fontWeight: '900',
-    letterSpacing: 8,
-    marginBottom: 2,
+  mastheadLogo: {
+    marginBottom: 4,
   },
   mastheadSubtitle: {
     fontSize: 10,
@@ -386,6 +387,7 @@ const styles = StyleSheet.create({
     textAlign: 'left',
     letterSpacing: 0.3,
     marginBottom: 16,
+    flex: 1,
   },
 
   // Footer - Modern Engagement Bar

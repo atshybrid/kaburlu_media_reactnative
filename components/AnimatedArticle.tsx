@@ -6,8 +6,11 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { runOnJS, SharedValue, useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 import { pickLayoutWithInfo } from './articleLayouts/registry';
 
-// DEBUG MODE: Set to true to show style labels on articles
-const SHOW_STYLE_LABELS = false;
+// DEBUG MODE: controlled via env var SHOW_STYLE_LABELS=true/1/on/yes
+const SHOW_STYLE_LABELS = (() => {
+  const raw = String(process.env.SHOW_STYLE_LABELS ?? '').toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'on' || raw === 'yes';
+})();
 
 interface AnimatedArticleProps {
   article: Article;
@@ -68,11 +71,17 @@ const AnimatedArticle: React.FC<AnimatedArticleProps> = ({
   });
 
   const gesture = Gesture.Pan()
-    .activeOffsetY([-20, 20]) // require a more intentional swipe
+    .activeOffsetY([-12, 12])
+    .failOffsetX([-28, 28])
     .onEnd((event) => {
-      if (event.translationY < -50 && event.velocityY < -500) { // Quick flick up
+      const movedUpEnough = event.translationY <= -70;
+      const movedDownEnough = event.translationY >= 70;
+      const flickedUp = event.translationY < -35 && event.velocityY <= -220;
+      const flickedDown = event.translationY > 35 && event.velocityY >= 220;
+
+      if (movedUpEnough || flickedUp) {
         runOnJS(onSwipeUp)();
-      } else if (event.translationY > 50 && event.velocityY > 500) { // Quick flick down
+      } else if (movedDownEnough || flickedDown) {
         runOnJS(onSwipeDown)();
       }
     });

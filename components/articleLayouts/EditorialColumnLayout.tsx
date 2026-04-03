@@ -12,10 +12,12 @@
 import { useTabBarVisibility } from '@/context/TabBarVisibilityContext';
 import { useAutoHideBottomBar } from '@/hooks/useAutoHideBottomBar';
 import { useColorScheme } from '@/hooks/useColorScheme';
+import { useDeviceLayout } from '@/hooks/useDeviceLayout';
 import { useReaction } from '@/hooks/useReaction';
+import { buildArticleSharePayload } from '@/services/shareLinks';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { Image } from 'expo-image';
+import ImageWithSkeleton from '@/components/ui/ImageWithSkeleton';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo } from 'react';
 import {
@@ -28,6 +30,7 @@ import {
   Animated,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import ArticleAuthorBar from './ArticleAuthorBar';
 import type { ArticleLayoutComponent } from './types';
 import {
   useFonts,
@@ -55,6 +58,7 @@ const EditorialColumnLayout: ArticleLayoutComponent = ({ article, index, totalAr
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { width: windowWidth } = useWindowDimensions();
+  const { scaleFontSize, scaleLineHeight } = useDeviceLayout();
 
   // Fade-in animation
   const fadeAnim = React.useRef(new Animated.Value(0)).current;
@@ -113,18 +117,20 @@ const EditorialColumnLayout: ArticleLayoutComponent = ({ article, index, totalAr
 
   // Full article text - 60 words max
   const bodyText = article.body || article.summary || '';
-  const fullArticleText = clampWords(bodyText, 60);
+  const fullArticleText = clampWords(bodyText, 120);
   const wordCount = fullArticleText.split(/\s+/).filter(w => w.length > 0).length;
 
   // Get image and caption
   const imageUrl = article.image || article.images?.[0] || null;
   const imageCaption = (article as any)?.imageCaption || (article as any)?.caption || '';
 
-  // Dynamic sizing based on content
-  const titleSize = 26;
-  const titleLineHeight = Math.round(titleSize * (isTeluguTitle ? 1.50 : 1.35));
-  const bodySize = 16;
-  const bodyLineHeight = Math.round(bodySize * 1.70);
+  // Dynamic sizing based on content — phone base sizes → scaled for tablet
+  const phoneTitleBase = 26;
+  const phoneBodyBase = wordCount >= 60 ? 16 : wordCount >= 40 ? 17 : wordCount >= 25 ? 18 : wordCount >= 15 ? 19 : 21;
+  const titleSize = scaleFontSize(phoneTitleBase);
+  const titleLineHeight = scaleLineHeight(phoneTitleBase, isTeluguTitle ? 1.50 : 1.35);
+  const bodySize = scaleFontSize(phoneBodyBase);
+  const bodyLineHeight = scaleLineHeight(phoneBodyBase, 1.70);
   
   // Dynamic image height based on word count
   // More words = smaller image to fit everything
@@ -149,14 +155,11 @@ const EditorialColumnLayout: ArticleLayoutComponent = ({ article, index, totalAr
   const onShare = async () => {
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      // Use short URL if available, fallback to full URL
-      const shareUrl = article.shortId 
-        ? `https://s.kaburlumedia.com/${article.shortId}`
-        : `https://kaburlumedia.com/article/${article.id}`;
+      const payload = buildArticleSharePayload(article);
       await Share.share({
-        title: article.title,
-        message: `${article.title}\n\nRead more: ${shareUrl}`,
-        url: shareUrl,
+        title: payload.title,
+        message: payload.message,
+        url: payload.url,
       });
     } catch (error) {
       console.warn('Share failed:', error);
@@ -202,18 +205,7 @@ const EditorialColumnLayout: ArticleLayoutComponent = ({ article, index, totalAr
       </Text>
 
       {/* Author Row */}
-      <View style={styles.authorRow}>
-        {authorImage ? (
-          <Image source={{ uri: authorImage }} style={styles.authorAvatar} contentFit="cover" />
-        ) : (
-          <View style={[styles.authorAvatar, { backgroundColor: isDark ? '#1E293B' : '#E2E8F0' }]}>
-            <MaterialCommunityIcons name="account" size={20} color={isDark ? '#64748B' : '#94A3B8'} />
-          </View>
-        )}
-        <Text style={[styles.authorName, { color: isDark ? '#CBD5E1' : '#475569' }]}>
-          {authorName}
-        </Text>
-      </View>
+      <ArticleAuthorBar article={article} dark={isDark} style={{ marginBottom: 8 }} />
 
       {/* Full Article Quote */}
       <View style={styles.pullQuoteContainer}>
@@ -228,7 +220,7 @@ const EditorialColumnLayout: ArticleLayoutComponent = ({ article, index, totalAr
             },
             isTeluguBody && { fontFamily: 'NotoSansTelugu_400Regular' },
           ]} 
-          numberOfLines={10}
+          numberOfLines={20}
         >
           {fullArticleText}
         </Text>
@@ -237,10 +229,10 @@ const EditorialColumnLayout: ArticleLayoutComponent = ({ article, index, totalAr
       {/* Photo with Caption - Dynamic height */}
       {imageUrl && (
         <View style={styles.photoContainer}>
-          <Image 
-            source={{ uri: imageUrl }} 
-            style={[styles.articleImage, { height: imageHeight }]} 
-            contentFit="cover" 
+          <ImageWithSkeleton
+            uri={imageUrl}
+            style={[styles.articleImage, { height: imageHeight }]}
+            contentFit="cover"
           />
           {imageCaption ? (
             <Text style={[styles.captionText, { color: isDark ? '#64748B' : '#64748B' }]}>

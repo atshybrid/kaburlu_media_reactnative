@@ -1,0 +1,62 @@
+{
+  "configVersion": 0,
+  "apple": {
+    "version": "1.0",
+    "copyright": "Kaburlu Media",
+    "release": {
+      "automaticRelease": true
+    },
+    "info": {
+      "en-US": {
+        "description": "Kaburlu – Digital Short News is a fast and simple Telugu news app.\n\nFeatures:\n• Daily breaking news\n• Local and state updates\n• Clean and easy reading experience\n• Fast loading\n• Push notifications\n\nGet politics, agriculture, education and local news all in one app.",
+        "keywords": [
+          "telugu news",
+          "short news",
+          "andhra news",
+          "telangana news",
+          "breaking news",
+          "local news",
+          "digital news"
+        ],
+        "promoText": "Fast Telugu short news updates covering politics, local news and breaking stories in one simple app.",
+        "supportUrl": "https://www.kaburlutoday.com/contact",
+        "title": "Kaburlu – Digital Short News",
+        "privacyPolicyUrl": "https://www.kaburlutoday.com/privacy-policy"
+      }
+    },
+    "categories": [
+      "NEWS",
+      "MAGAZINES_AND_NEWSPAPERS"
+    ],
+    "advisory": {
+      "ageRatingOverride": "NONE",
+      "alcoholTobaccoOrDrugUseOrReferences": "INFREQUENT_OR_MILD",
+      "contests": "NONE",
+      "gambling": false,
+      "gamblingSimulated": "NONE",
+      "horrorOrFearThemes": "NONE",
+      "kidsAgeBand": null,
+      "koreaAgeRatingOverride": "NONE",
+      "lootBox": false,
+      "matureOrSuggestiveThemes": "NONE",
+      "medicalOrTreatmentInformation": "NONE",
+      "profanityOrCrudeHumor": "NONE",
+      "sexualContentGraphicAndNudity": "NONE",
+      "sexualContentOrNudity": "NONE",
+      "unrestrictedWebAccess": true,
+      "violenceCartoonOrFantasy": "NONE",
+      "violenceRealistic": "INFREQUENT_OR_MILD",
+      "violenceRealisticProlongedGraphicOrSadistic": "NONE"
+    },
+    "review": {
+      "firstName": "Nagendra",
+      "lastName": "Reddy",
+      "email": "team@kaburlutoday.com",
+      "phone": "+919118191991",
+      "demoUsername": "9502337775",
+      "demoPassword": "1234",
+      "demoRequired": true,
+      "notes": "This is News App normal Reader no need login requried auto gust login only reporters need login test login and all screens working"
+    }
+  }
+}

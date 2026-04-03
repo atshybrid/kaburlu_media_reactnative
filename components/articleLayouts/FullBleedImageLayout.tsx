@@ -1,16 +1,33 @@
-import { Image } from 'expo-image';
-import { Dimensions, StyleSheet, Text, View } from 'react-native';
+import { useDeviceLayout } from '@/hooks/useDeviceLayout';
+import ImageWithSkeleton from '@/components/ui/ImageWithSkeleton';
+import { StyleSheet, Text, View } from 'react-native';
 import type { ArticleLayoutComponent } from './types';
 
-const { width } = Dimensions.get('window');
-
 const FullBleedImageLayout: ArticleLayoutComponent = ({ article }) => {
+  const { scaleFontSize, imageHeight, horizontalPadding } = useDeviceLayout();
+
+  const bodyWords = (article.body || '').split(/\s+/).filter(Boolean).length;
+  const heroHeight = imageHeight(bodyWords);
+  const titleSize = scaleFontSize(22);
+  const bodySize = scaleFontSize(16);
+
   return (
     <View style={styles.container}>
-      <Image source={{ uri: article.image || article.images?.[0] || '' }} style={styles.hero} contentFit="cover" />
-      <View style={styles.content}>
-        <Text style={styles.title}>{article.title}</Text>
-        {article.body ? (<Text style={styles.body} numberOfLines={10}>{article.body}</Text>) : null}
+      <ImageWithSkeleton
+        uri={article.image || article.images?.[0] || ''}
+        style={[styles.hero, { height: heroHeight }]}
+        contentFit="cover"
+        contentPosition="center"
+      />
+      <View style={[styles.content, { paddingHorizontal: horizontalPadding }]}>
+        <Text style={[styles.title, { fontSize: titleSize, lineHeight: Math.round(titleSize * 1.3) }]}>
+          {article.title}
+        </Text>
+        {article.body ? (
+          <Text style={[styles.body, { fontSize: bodySize, lineHeight: Math.round(bodySize * 1.6) }]} numberOfLines={15}>
+            {article.body}
+          </Text>
+        ) : null}
       </View>
     </View>
   );
@@ -18,10 +35,10 @@ const FullBleedImageLayout: ArticleLayoutComponent = ({ article }) => {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
-  hero: { width: '100%', height: Math.round(width * 0.8), backgroundColor: '#eee' },
-  content: { padding: 16 },
-  title: { fontSize: 22, fontWeight: '800', marginBottom: 8, color: '#111' },
-  body: { fontSize: 16, lineHeight: 24, color: '#374151' },
+  hero: { width: '100%', backgroundColor: '#eee' },
+  content: { paddingVertical: 16 },
+  title: { fontWeight: '800', marginBottom: 8, color: '#111' },
+  body: { color: '#374151' },
 });
 
 export default FullBleedImageLayout;

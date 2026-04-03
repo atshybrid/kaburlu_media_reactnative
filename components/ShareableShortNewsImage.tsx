@@ -55,6 +55,7 @@ export interface ShareableShortNewsData {
       type: 'POSITIVE' | 'NEGATIVE';
     }[];
   };
+  shareUrl?: string; // Deep-link URL included in share message
 }
 
 export interface ShareableShortNewsImageRef {
@@ -107,12 +108,16 @@ const ShareableShortNewsImage = forwardRef<ShareableShortNewsImageRef, Props>(
       try {
         const uri = await viewShotRef.current?.capture?.();
         if (!uri) throw new Error('Failed to capture image');
+
+        const shareMessage = shortNews.shareUrl
+          ? `${shortNews.title}\n\n${shortNews.shareUrl}`
+          : shortNews.title;
         
         if (Platform.OS === 'ios') {
           // iOS: Use React Native's built-in Share API which properly handles image + message together
           await Share.share({
             url: uri,
-            message: shortNews.title,
+            message: shareMessage,
             title: 'Share Short News',
           }, {
             dialogTitle: 'Share Short News'
@@ -123,7 +128,7 @@ const ShareableShortNewsImage = forwardRef<ShareableShortNewsImageRef, Props>(
             url: `file://${uri}`,
             type: 'image/png',
             title: 'Share Short News',
-            message: shortNews.title,
+            message: shareMessage,
           });
         }
       } catch (error: any) {
@@ -134,7 +139,7 @@ const ShareableShortNewsImage = forwardRef<ShareableShortNewsImageRef, Props>(
         setCapturing(false);
         onCaptureEnd?.();
       }
-    }, [capturing, shortNews.title, onCaptureStart, onCaptureEnd]);
+    }, [capturing, shortNews.title, shortNews.shareUrl, onCaptureStart, onCaptureEnd]);
 
     // Capture only (returns URI)
     const capture = useCallback(async () => {

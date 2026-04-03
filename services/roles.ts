@@ -53,6 +53,7 @@ export function isPublicFigure(role: string | null | undefined): boolean {
 export function getPublicFigureIdFromName(name: string | null | undefined): string {
   const n = String(name || '').toLowerCase().trim();
   if (n.includes('bandi') || n.includes('sanjay')) return 'bandisanjay';
+  if (n.includes('kavitha') || n.includes('kavita')) return 'kavitha';
   if (n.includes('revanth') || n.includes('cm') || n.includes('chief')) return 'cm';
   if (n.includes('ktr') || n.includes('rama rao')) return 'ktr';
   return 'bandisanjay'; // default

@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.media.kaburlu",
+      "sha256_cert_fingerprints": [
+        "CE:03:35:2C:60:BE:5D:A8:2D:60:DE:63:B7:3A:C7:BE:5F:24:3B:3B:71:89:A2:95:51:DF:DA:62:1F:57:EE:86"
+      ]
+    }
+  }
+]

@@ -2,23 +2,34 @@
   "expo": {
     "name": "kaburlu",
     "slug": "kaburlu",
-    "version": "1.1.6",
+    "version": "1.1.7",
     "orientation": "portrait",
     "icon": "./assets/images/app-icon.png",
     "scheme": "kaburlu",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.media.kaburlu",
-      "buildNumber": "8",
+      "buildNumber": "9",
+      "associatedDomains": [
+        "applinks:s.kaburlumedia.com",
+        "applinks:kaburlumedia.com",
+        "applinks:www.kaburlumedia.com"
+      ],
       "googleServicesFile": "./GoogleService-Info.plist",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSUserTrackingUsageDescription": "Kaburlu uses analytics to improve the app experience. Your data is never shared with advertisers."
+      },
+      "entitlements": {
+        "com.apple.developer.applesignin": [
+          "Default"
+        ]
       }
     },
     "android": {
-      "versionCode": 8,
+      "versionCode": 9,
       "icon": "./assets/images/app-icon.png",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/app-icon-foreground.png",
@@ -55,7 +66,42 @@
             {
               "scheme": "https",
               "host": "kaburlumedia.com",
+              "pathPrefix": "/"
+            },
+            {
+              "scheme": "https",
+              "host": "kaburlumedia.com",
               "pathPrefix": "/article"
+            },
+            {
+              "scheme": "https",
+              "host": "kaburlumedia.com",
+              "pathPrefix": "/category"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        },
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "www.kaburlumedia.com",
+              "pathPrefix": "/"
+            },
+            {
+              "scheme": "https",
+              "host": "www.kaburlumedia.com",
+              "pathPrefix": "/article"
+            },
+            {
+              "scheme": "https",
+              "host": "www.kaburlumedia.com",
+              "pathPrefix": "/category"
             }
           ],
           "category": [
@@ -108,6 +154,13 @@
         }
       ],
       "@react-native-google-signin/google-signin",
+      "expo-apple-authentication",
+      [
+        "expo-tracking-transparency",
+        {
+          "userTrackingPermission": "Kaburlu uses analytics to improve the app experience. Your data is never shared with advertisers."
+        }
+      ],
       [
         "expo-updates",
         {

@@ -1,4 +1,4 @@
-import { Image } from 'expo-image';
+import ImageWithSkeleton from '@/components/ui/ImageWithSkeleton';
 import { Animated, Pressable, StyleSheet, Text, View, useColorScheme, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -121,8 +121,8 @@ const CardStackLayout: ArticleLayoutComponent = ({ article }) => {
           {/* Image */}
           {imageUrl && (
             <View style={[styles.imageContainer, { height: imageHeight }]}>
-              <Image
-                source={{ uri: imageUrl }}
+              <ImageWithSkeleton
+                uri={imageUrl}
                 style={styles.image}
                 contentFit="cover"
               />

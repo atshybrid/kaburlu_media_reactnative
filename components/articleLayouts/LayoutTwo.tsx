@@ -3,16 +3,18 @@ import { useReaction } from '@/hooks/useReaction';
 import { useTransliteration } from '@/hooks/useTransliteration';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import TEBrandLogo from '@/assets/images/kaburlu_te_brand_logo.svg';
-import { WEB_BASE_URL } from '@/config/appConfig';
 import { pickTitleColorTheme } from '@/constants/TitleColorRules';
 import { useTabBarVisibility } from '@/context/TabBarVisibilityContext';
 import { useAutoHideBottomBar } from '@/hooks/useAutoHideBottomBar';
+import { useFocalPoint } from '@/hooks/useFocalPoint';
+import { computeAdaptiveBodyBaseFont, computeAdaptiveImageHeight } from '@/services/layoutSizing';
+import { buildArticleSharePayload } from '@/services/shareLinks';
 import { getCachedCommentsByShortNews, getCommentsByShortNews, prefetchCommentsByShortNews } from '@/services/api';
 import { on } from '@/services/events';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
-import { Image } from 'expo-image';
+import ImageWithSkeleton from '@/components/ui/ImageWithSkeleton';
 import { useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -21,7 +23,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ShareLib from 'react-native-share';
 import ViewShot from 'react-native-view-shot';
 import BottomSheet from '../ui/BottomSheet';
+import ArticleAuthorBar from './ArticleAuthorBar';
 import type { ArticleLayoutComponent } from './types';
+import { useDeviceLayout } from '@/hooks/useDeviceLayout';
 
 // Professional newspaper color palette - refined and balanced
 const THEME_COLORS = {
@@ -91,6 +95,11 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
   }, []);
 
   const isTelugu = useCallback((text?: string) => /[\u0C00-\u0C7F]/.test(String(text || '')), []);
+  const { scaleFontSize, scaleLineHeight } = useDeviceLayout();
+  const { height: windowHeight, width: windowWidth } = useWindowDimensions();
+  // Face-detection focal point for main article image (falls back to 'center')
+  const mainImageUrl = article.image || article.images?.[0] || undefined;
+  const mainImageFocalPoint = useFocalPoint(mainImageUrl);
   // Prepare place display in target language (transliterate once when language or place changes)
   const placeRaw = (article as any)?.author?.placeName || (article as any)?.placeName || '—';
   const placeTx = useTransliteration({ languageCode, enabled: Boolean(languageCode), debounceMs: 0, mode: 'immediate' });
@@ -295,8 +304,8 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
   // Dynamic sizes - consistent hierarchy for better readability
   const wc = (s: string) => (s ? s.split(/\s+/).filter(Boolean).length : 0);
   const shortLine = (s: string) => wc(s) <= 3 || (s || '').length <= 12;
-  const calcPrimarySize = (s: string) => shortLine(s) ? 40 : (s.length <= 28 ? 36 : 32);
-  const calcSecondarySize = (s: string) => shortLine(s) ? 30 : (s.length <= 28 ? 26 : 24);
+  const calcPrimarySize = (s: string) => scaleFontSize(shortLine(s) ? 40 : (s.length <= 28 ? 36 : 32));
+  const calcSecondarySize = (s: string) => scaleFontSize(shortLine(s) ? 30 : (s.length <= 28 ? 26 : 24));
   const title1Size = primary === 'line1' ? calcPrimarySize(line1) : calcSecondarySize(line1);
   const title2Size = primary === 'line2' ? calcPrimarySize(line2) : calcSecondarySize(line2);
   
@@ -341,17 +350,10 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
   })();
   // line gap now handled via Text lineHeight; no explicit margin gap
   // Content font size: scale by word count (max 60 words). Shorter content gets larger font to reduce blank area.
-  const excerptText = clampWords(article.body || article.summary, 60);
+  const excerptText = clampWords(article.body || article.summary, 120);
   const wordCount = (excerptText.match(/\S+/g) || []).length;
-  const calcContentFont = (wc: number) => {
-    if (wc >= 50) return 15;
-    if (wc >= 40) return 16;
-    if (wc >= 30) return 17;
-    if (wc >= 20) return 18;
-    if (wc >= 10) return 19;
-    return 21; // very short content, make it slightly larger to reduce blank area
-  };
-  const contentFontSizeBase = calcContentFont(wordCount);
+  const adaptiveBodyBase = computeAdaptiveBodyBaseFont(wordCount);
+  const contentFontSizeBase = scaleFontSize(Math.max(15, adaptiveBodyBase));
 
   // Server-synced reactions (LIKE/DISLIKE)
   const reaction = useReaction({ articleId: article.id });
@@ -399,17 +401,8 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
   }, [router, article]);
   // Build share payload (URL + deep link + title)
   const buildSharePayload = useCallback(() => {
-    const baseUrl = WEB_BASE_URL.replace(/\/$/, '');
-    const slug = (article as any).slug;
-    // Prefer canonicalUrl > slug-based URL > id-based fallback
-    const fallbackWeb = slug
-      ? `${baseUrl}/${encodeURIComponent(slug)}`
-      : `${baseUrl}/article/${encodeURIComponent(article.id)}`;
-    const canonical = (article as any).canonicalUrl || fallbackWeb;
-    const deepLink = `kaburlu://article/${article.id}`;
-    const shareTitle = article.metaTitle || article.title || 'Kaburlu';
-    const message = [shareTitle, `\nRead: ${canonical}`, `Open in App: ${deepLink}`].filter(Boolean).join('\n');
-    return { shareTitle, message, canonical };
+    const payload = buildArticleSharePayload(article);
+    return { shareTitle: payload.title, message: payload.message, shareUrl: payload.url };
   }, [article]);
   const shareRuntime: typeof ShareLib | undefined = ShareLib || undefined;
   const onShare = useCallback(async () => {
@@ -465,7 +458,6 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
   }, [opinionType, tr.value, article]);
 
   const insets = useSafeAreaInsets();
-  const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   // Heights for dynamic content sizing
   const [hTopBar, setHTopBar] = useState(0);
   const [hH1, setHH1] = useState(0);
@@ -478,6 +470,11 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
   const brandTagline = isTeluguLang
     ? 'మొదటి పేపర్ తరహా ప్రతి కబుర్లు  మీకోసం : డౌన్లోడ్ అప్'
     : (brandName || 'Kaburlu');
+  const adaptiveImageHeight = computeAdaptiveImageHeight({
+    screenWidth: windowWidth,
+    screenHeight: windowHeight - insets.top - insets.bottom,
+    wordCount,
+  });
   // Excerpt font size is slightly larger in share mode for readability
   const contentFontSize = shareMode ? (contentFontSizeBase + 2) : contentFontSizeBase;
   const contentLineHeight = Math.round(contentFontSize * 1.6);
@@ -608,8 +605,18 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
           </View>
         ) : null}
 
-        {/* Image 16:9, full width, no side padding */}
-        <Image source={{ uri: article.image || article.images?.[0] || '' }} style={styles.image} contentFit="cover" />
+        {/* Image 16:9, full width — focal point driven by ML Kit face detection */}
+        <ImageWithSkeleton
+          uri={mainImageUrl || ''}
+          style={[styles.image, { height: adaptiveImageHeight }]}
+          contentFit="cover"
+          contentPosition={mainImageFocalPoint as any}
+        />
+
+        {/* Author info — shown right below image */}
+        <View style={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 2 }}>
+          <ArticleAuthorBar article={article} />
+        </View>
 
         {/* Excerpt ~60 words. Scale font to reduce blank space; Telugu uses Mandali. Fill up to author footer. */}
         <Text
@@ -621,10 +628,11 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
           ]}
           ellipsizeMode="clip"
           numberOfLines={(() => {
-            const imageH = Math.round((typeof windowWidth === 'number' ? windowWidth : 360) * (9/16));
+            const imageH = adaptiveImageHeight;
             const topPad = shareMode ? 0 : (insets.top + 8);
             const chromeTop = topPad + 14 /* topContent bottom pad */;
-            const used = hTopBar + hH1 + h1h2Gap + hH2 + imageH + 10 /* excerpt marginTop */ + (shareMode ? (hFooterCapture + hBrandBar) : 0) + chromeTop;
+            const authorBarH = 54; /* author bar below image */
+            const used = hTopBar + hH1 + h1h2Gap + hH2 + imageH + 10 /* excerpt marginTop */ + authorBarH + (shareMode ? (hFooterCapture + hBrandBar) : 0) + chromeTop;
             const winH = typeof windowHeight === 'number' ? windowHeight : 680;
             const avail = Math.max(0, winH - hBottomDock - used);
             const lines = Math.floor(avail / contentLineHeight);
@@ -633,20 +641,10 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
         >
           {excerptText}
         </Text>
-        {/* Author footer (clone during share only) */}
+        {/* Time footer (clone during share only) */}
         {shareMode ? (
           <View style={styles.footer} onLayout={(e) => setHFooterCapture(e.nativeEvent.layout.height)}>
-            <View style={styles.footerLeft}>
-              {avatarUri ? (
-                <Image source={{ uri: avatarUri }} style={styles.avatar} />
-              ) : (
-                <View style={[styles.avatar, { backgroundColor: '#E5E7EB' }]} />
-              )}
-              <View style={{ marginLeft: 8 }}>
-                <Text style={styles.brand} numberOfLines={1}>{primaryLine}</Text>
-                {!!secondaryLine && <Text style={styles.authorSmall} numberOfLines={1}>{secondaryLine}</Text>}
-              </View>
-            </View>
+            <ArticleAuthorBar article={article} style={{ flex: 1 }} />
             <Text style={styles.timeSmall}>{timeWithCount}</Text>
           </View>
         ) : null}
@@ -657,17 +655,6 @@ const LayoutTwo: ArticleLayoutComponent = ({ article, index, totalArticles }) =>
   {/* Bottom dock: footer above, engagement row as last (NOT captured in ViewShot) */}
   <View style={styles.bottomDock} onLayout={(e) => setHBottomDock(e.nativeEvent.layout.height)} pointerEvents="box-none">
         <View style={styles.footer}>
-          <View style={styles.footerLeft}>
-            {avatarUri ? (
-              <Image source={{ uri: avatarUri }} style={styles.avatar} />
-            ) : (
-              <View style={[styles.avatar, { backgroundColor: '#E5E7EB' }]} />
-            )}
-            <View style={{ marginLeft: 8 }}>
-              <Text style={styles.brand} numberOfLines={1}>{primaryLine}</Text>
-              {!!secondaryLine && <Text style={styles.authorSmall} numberOfLines={1}>{secondaryLine}</Text>}
-            </View>
-          </View>
           <Text style={styles.timeSmall}>{timeWithCount}</Text>
         </View>
   <View style={styles.engagementRow} pointerEvents="auto">
@@ -886,7 +873,7 @@ const styles = StyleSheet.create({
   // Professional image styling
   image: { 
     width: '100%', 
-    aspectRatio: 16/9, 
+    height: 220,
     marginTop: 6, 
     backgroundColor: THEME_COLORS.lightGray, 
     borderRadius: 0,

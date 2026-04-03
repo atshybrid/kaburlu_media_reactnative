@@ -12,7 +12,16 @@ export interface Article {
     id?: string; // optional; not required in sample data
     name: string;
     avatar: string;
+    fullName?: string;
+    profilePhotoUrl?: string;
+    placeName?: string | null;
+    roleName?: string | null;
+    designationName?: string | null;
+    designation?: {
+      name?: string | null;
+    } | null;
   };
+  provider?: string | null;
   // Publisher/brand (optional)
   publisherName?: string;
   publisherLogo?: string;

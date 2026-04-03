@@ -9,7 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { usePathname, useRouter } from 'expo-router';
 import React, { useRef, useState } from 'react';
-import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 
@@ -39,6 +39,8 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
   const onKaChat = typeof pathname === 'string' && /(^|\/)kachat$/.test(pathname);
   const hiddenOnRoute = onExplore || onKaChat || activeRouteName === 'tech';
   const shouldShow = isTabBarVisible && !hiddenOnRoute;
+  // Keep Ka Chat center action hidden on Android for now.
+  const showAndroidKaChatIcon = false;
 
   React.useEffect(() => {
     Animated.timing(animatedRef.current, {
@@ -157,8 +159,8 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
       importantForAccessibility={shouldShow ? 'yes' : 'no-hide-descendants'}
     >
       <Animated.View style={[styles.shadowWrap, { transform: [{ scale: scaleRef.current }] }]}>
-        {/* Notched background SVG */}
-        {containerWidth > 0 && (
+        {/* Notched background SVG - only when center Ka Chat FAB is enabled on Android */}
+        {containerWidth > 0 && Platform.OS !== 'ios' && showAndroidKaChatIcon && (
           <View style={styles.notchSvgContainer}>
             <Svg width={containerWidth} height={100} style={{ position: 'absolute', top: 0 }}>
               <Path
@@ -168,9 +170,13 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
             </Svg>
           </View>
         )}
+        {/* Flat background for iOS and Android when center Ka Chat FAB is hidden */}
+        {(Platform.OS === 'ios' || !showAndroidKaChatIcon) && (
+          <View style={[styles.notchSvgContainer, { backgroundColor: theme.card }]} />
+        )}
         
-        {/* Center FAB - positioned in the notch, only show when tab bar is visible */}
-        {shouldShow && (
+        {/* Center FAB - positioned in the notch, only show on Android when tab bar is visible */}
+        {shouldShow && Platform.OS !== 'ios' && showAndroidKaChatIcon && (
           <Animated.View
             style={[
               styles.centerFabWrap,
@@ -253,19 +259,21 @@ export default function AutoHideTabBar(props: BottomTabBarProps) {
               );
             })}
 
-            {/* Center spacer for the notch - Ka Chat label below the FAB */}
-            <View style={styles.centerTabItem}>
-              <View style={{ height: 28 }} />
-              <Text
-                style={[
-                  styles.tabLabel,
-                  { color: onKaChat ? theme.tint : theme.tabIconDefault },
-                ]}
-                numberOfLines={1}
-              >
-                Ka Chat
-              </Text>
-            </View>
+            {/* Center spacer for the notch - Ka Chat label below the FAB (Android only) */}
+            {Platform.OS !== 'ios' && showAndroidKaChatIcon && (
+              <View style={styles.centerTabItem}>
+                <View style={{ height: 28 }} />
+                <Text
+                  style={[
+                    styles.tabLabel,
+                    { color: onKaChat ? theme.tint : theme.tabIconDefault },
+                  ]}
+                  numberOfLines={1}
+                >
+                  Ka Chat
+                </Text>
+              </View>
+            )}
 
             {/* Right two tabs: Post (explore) and Account (tech) */}
             {(['explore', 'tech'] as const).map((name) => {

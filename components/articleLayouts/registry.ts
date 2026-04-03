@@ -4,6 +4,7 @@ import BreakingNewsLayout from './BreakingNewsLayout';
 import BroadsheetLayout from './BroadsheetLayout';
 import EditorialColumnLayout from './EditorialColumnLayout';
 import LayoutTwo from './LayoutTwo';
+import { pickBestLayoutKey } from '@/services/layoutScoring';
 // Style 4 temporarily disabled - can be enabled later if needed
 // import MagazineCoverLayout from './MagazineCoverLayout';
 // Style 7 disabled - photo essay has black background
@@ -25,16 +26,6 @@ import type { ArticleLayoutComponent } from './types';
  * - Style 8: TabloidBoldLayout (viral/trending style)
  */
 
-// Simple deterministic string hash for seeded random
-function hashString(s: string): number {
-  let h = 2166136261 >>> 0;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
-}
-
 // All available layouts
 export const layouts: { key: string; component: ArticleLayoutComponent; name: string }[] = [
   { key: 'articlePage', component: ArticlePage as unknown as ArticleLayoutComponent, name: 'Classic' },
@@ -47,19 +38,6 @@ export const layouts: { key: string; component: ArticleLayoutComponent; name: st
   // Style 7 disabled - black background
   // { key: 'photoEssay', component: PhotoEssayLayout, name: 'Photo Essay' },
   { key: 'tabloidBold', component: TabloidBoldLayout, name: 'Tabloid' },
-];
-
-// All 8 layouts for cycling through in order
-// Note: Style 4 (MagazineCoverLayout) and Style 7 (PhotoEssayLayout) are currently disabled
-const allLayoutsOrdered: ArticleLayoutComponent[] = [
-  ArticlePage as unknown as ArticleLayoutComponent,  // Style 1
-  LayoutTwo,                                          // Style 2
-  BroadsheetLayout,                                   // Style 3
-  // MagazineCoverLayout,                             // Style 4 - DISABLED
-  EditorialColumnLayout,                              // Style 5 (now appears at position 4)
-  BreakingNewsLayout,                                 // Style 6 (now appears at position 5)
-  // PhotoEssayLayout,                                // Style 7 - DISABLED
-  TabloidBoldLayout,                                  // Style 8 (now appears at position 6)
 ];
 
 /**
@@ -88,40 +66,31 @@ export function pickLayoutWithInfo(article: Article, index?: number): {
 }
 
 /**
- * Analyze article content and pick the most suitable layout
- * 
- * Layout Selection Rules:
- * - Style 4 (MagazineCover): CURRENTLY DISABLED
- * - Other styles: Any article length
- * 
- * For testing: cycles through layouts based on article index
+ * Article-based deterministic layout selection.
+ *
+ * Each article gets ONE fixed style forever, derived from its own ID/title.
+ * Same article → same style regardless of feed position.
+ * All 6 styles are evenly distributed across articles.
+ *
+ * Only exception: real video URLs → Style 1 (Classic) for safe playback.
  */
-export function pickLayoutForArticle(article: Article, index?: number): ArticleLayoutComponent {
-  // Get article content length (word count)
-  const content = article.summary || article.body || '';
-  const wordCount = content.split(/\s+/).filter(w => w.length > 0).length;
-  const isShortArticle = wordCount < 30;
-  
-  // FOR TESTING: Simply cycle through layouts based on index
-  if (typeof index === 'number') {
-    const layoutIndex = index % allLayoutsOrdered.length;
-    return allLayoutsOrdered[layoutIndex];
+export function pickLayoutForArticle(article: Article, _index?: number): ArticleLayoutComponent {
+  const picked = pickBestLayoutKey(article);
+  switch (picked) {
+    case 'layoutTwo':
+      return LayoutTwo;
+    case 'broadsheet':
+      return BroadsheetLayout;
+    case 'editorialColumn':
+      return EditorialColumnLayout;
+    case 'breakingNews':
+      return BreakingNewsLayout;
+    case 'tabloidBold':
+      return TabloidBoldLayout;
+    case 'articlePage':
+    default:
+      return ArticlePage as unknown as ArticleLayoutComponent;
   }
-  
-  // Fallback: deterministic by hash
-  const id = String(article.id ?? article.title ?? '');
-  if (!id) {
-    return ArticlePage as unknown as ArticleLayoutComponent;
-  }
-  const h = hashString(id);
-  let layoutIndex = h % allLayoutsOrdered.length;
-  
-  // Skip MagazineCoverLayout for long articles
-  if (layoutIndex === 3 && !isShortArticle) {
-    layoutIndex = 4; // Use EditorialColumnLayout instead
-  }
-  
-  return allLayoutsOrdered[layoutIndex];
 }
 
 /**

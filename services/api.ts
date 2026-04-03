@@ -547,6 +547,7 @@ export const getNews = async (lang: string, category?: string, cursor?: string):
   const authorFullName = (a as any).authorFullName || rawAuthor.fullName || (a as any).fullName;
   const authorProfilePhoto = (a as any).authorProfilePhotoUrl || rawAuthor.profilePhotoUrl || (a as any).profilePhotoUrl;
   const authorRoleName = (a as any).authorRoleName || rawAuthor.roleName || (a as any).roleName;
+  const authorDesignationName = (a as any).authorDesignationName || (rawAuthor.designation && rawAuthor.designation.name) || rawAuthor.designationName || ((a as any).designation && (a as any).designation.name) || (a as any).designationName;
   const authorPlaceName = (a as any).authorPlaceName || rawAuthor.placeName || (a as any).placeName;
   const authorName = authorFullName || rawAuthor.name || (a as any).authorName || jsonLd?.author?.name || '';
   const authorAvatar = authorProfilePhoto || rawAuthor.avatar || (a as any).authorAvatar || publisherLogo || 'https://i.pravatar.cc/100';
@@ -566,8 +567,11 @@ export const getNews = async (lang: string, category?: string, cursor?: string):
           fullName: authorFullName || authorName || '',
           profilePhotoUrl: authorProfilePhoto || authorAvatar,
           roleName: authorRoleName || null,
+          designationName: authorDesignationName || null,
+          designation: authorDesignationName ? { name: authorDesignationName } : null,
           placeName: authorPlaceName || null,
         } as any,
+        provider: (a as any).provider || publisherName || null,
         publisherName,
         publisherLogo,
         category: a.category?.name || a.categoryName || a.category || 'General',
@@ -681,6 +685,7 @@ function normalizeApiArticle(a: any): Article {
   const authorFullName = a.authorFullName || rawAuthor.fullName || a.fullName;
   const authorProfilePhoto = a.authorProfilePhotoUrl || rawAuthor.profilePhotoUrl || a.profilePhotoUrl;
   const authorRoleName = a.authorRoleName || rawAuthor.roleName || a.roleName;
+  const authorDesignationName = a.authorDesignationName || (rawAuthor.designation && rawAuthor.designation.name) || rawAuthor.designationName || (a.designation && a.designation.name) || a.designationName;
   const authorPlaceName = a.authorPlaceName || rawAuthor.placeName || a.placeName;
   const authorName = authorFullName || rawAuthor.name || a.authorName || jsonLd?.author?.name || '';
   const authorAvatar = authorProfilePhoto || rawAuthor.avatar || a.authorAvatar || publisherLogo || 'https://i.pravatar.cc/100';
@@ -701,8 +706,11 @@ function normalizeApiArticle(a: any): Article {
       fullName: authorFullName || authorName || '',
       profilePhotoUrl: authorProfilePhoto || authorAvatar,
       roleName: authorRoleName || null,
+      designationName: authorDesignationName || null,
+      designation: authorDesignationName ? { name: authorDesignationName } : null,
       placeName: authorPlaceName || null,
     } as any,
+    provider: a.provider || publisherName || null,
     publisherName,
     publisherLogo,
     category: a.category?.name || a.categoryName || a.category || 'General',
@@ -1452,6 +1460,70 @@ export async function createCitizenReporterGoogle(payload: {
       const status = (err as any).status;
       const serverMsg = (err as any).body?.message || (err as any).message || `HTTP ${status}`;
       const e: any = new Error(`Citizen Reporter signup failed (${status}): ${serverMsg}`);
+      e.status = status;
+      e.body = (err as any).body;
+      throw e;
+    }
+    throw err;
+  }
+}
+
+export async function loginWithApple(payload: {
+  identityToken: string;
+  authorizationCode?: string;
+  email?: string | null;
+  fullName?: string | null;
+  deviceId?: string;
+}): Promise<AuthResponse['data']> {
+  const t0 = Date.now();
+  try {
+    const res = await request<AuthResponse>('/auth/login-apple', { method: 'POST', body: payload, noAuth: true });
+    try { console.log('[API] loginWithApple success', { ms: Date.now() - t0 }); } catch {}
+    return res.data;
+  } catch (err: any) {
+    try { console.warn('[API] loginWithApple fail', { ms: Date.now() - t0, err: err?.message }); } catch {}
+    if (err && typeof err === 'object' && 'status' in err) {
+      const status = (err as any).status;
+      const serverMsg = (err as any).body?.message || (err as any).message || `HTTP ${status}`;
+      const e: any = new Error(`Apple login failed (${status}): ${serverMsg}`);
+      e.status = status;
+      e.body = (err as any).body;
+      throw e;
+    }
+    throw err;
+  }
+}
+
+export async function createCitizenReporterApple(payload: {
+  identityToken: string;
+  authorizationCode?: string;
+  email?: string | null;
+  fullName?: string | null;
+  languageId: string;
+  pushToken?: string;
+  location?: {
+    latitude: number;
+    longitude: number;
+    accuracyMeters?: number;
+    provider?: string;
+    timestampUtc?: string;
+    placeId?: string | null;
+    placeName?: string | null;
+    address?: string | null;
+    source?: string;
+  };
+}): Promise<AuthResponse['data']> {
+  const t0 = Date.now();
+  try {
+    const res = await request<AuthResponse>('/auth/create-citizen-reporter/apple', { method: 'POST', body: payload, noAuth: true });
+    try { console.log('[API] createCitizenReporterApple success', { ms: Date.now() - t0 }); } catch {}
+    return res.data;
+  } catch (err: any) {
+    try { console.warn('[API] createCitizenReporterApple fail', { ms: Date.now() - t0, err: err?.message }); } catch {}
+    if (err && typeof err === 'object' && 'status' in err) {
+      const status = (err as any).status;
+      const serverMsg = (err as any).body?.message || (err as any).message || `HTTP ${status}`;
+      const e: any = new Error(`Apple sign-up failed (${status}): ${serverMsg}`);
       e.status = status;
       e.body = (err as any).body;
       throw e;
@@ -3097,4 +3169,36 @@ export async function deleteShortNewsOption(optionId: string): Promise<void> {
   await request<{ success: boolean }>(`/shortnews-options/${encodeURIComponent(optionId)}`, {
     method: 'DELETE',
   });
+}
+
+// ─── Deep-link: Category feed ─────────────────────────────────────────────────
+
+/**
+ * Fetch articles for a category slug (used by the /category/:slug deep-link screen).
+ *
+ * Endpoint convention (adjust to match your backend):
+ *   GET /shortnews/public?category=<slug>&limit=30
+ *
+ * Falls back to an empty array — never throws — so a bad deep link cannot crash
+ * the app.
+ */
+export async function getArticlesByCategory(slug: string): Promise<Article[]> {
+  if (!slug) return [];
+
+  try {
+    const params = new URLSearchParams({ category: slug, limit: '30' });
+    const json = await request<any>(`/shortnews/public?${params.toString()}`, {
+      method: 'GET',
+      timeoutMs: 15000,
+      noAuth: true,
+    });
+
+    const raw: any[] = json?.data ?? json?.articles ?? json?.results ?? json ?? [];
+    if (!Array.isArray(raw)) return [];
+
+    return raw.map(normalizeApiArticle);
+  } catch (err) {
+    console.warn('[API] getArticlesByCategory failed:', err);
+    return [];
+  }
 }

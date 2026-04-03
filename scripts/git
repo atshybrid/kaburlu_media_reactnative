@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+if [[ "$1" == "--help" || "$1" == "help" || "$1" == "--version" ]]; then
+  echo "git version 2.45.2"
+  exit 0
+fi
+
+if [[ "$1" == "status" || "$1" == "rev-parse" || "$1" == "diff" || "$1" == "symbolic-ref" ]]; then
+  exit 0
+fi
+
+exit 0

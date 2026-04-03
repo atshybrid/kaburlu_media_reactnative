@@ -477,3 +477,25 @@ export async function rejectNewspaperArticle(
 ): Promise<UpdateNewspaperArticleResponse> {
   return updateNewspaperArticle(articleId, { status: 'REJECTED' });
 }
+
+/**
+ * Delete a newspaper article
+ * DELETE /api/v1/articles/newspaper/{articleId}
+ */
+export async function deleteNewspaperArticle(articleId: string): Promise<void> {
+  await request<void>(`/articles/newspaper/${articleId}`, { method: 'DELETE' });
+}
+
+/**
+ * Set article priority (pin to top via displayOrder = 0)
+ * PATCH /api/v1/articles/newspaper/{articleId}
+ */
+export async function setPriorityNewspaperArticle(
+  articleId: string,
+  priority: 'top' | 'normal',
+): Promise<UpdateNewspaperArticleResponse> {
+  return updateNewspaperArticle(articleId, {
+    displayOrder: priority === 'top' ? 0 : undefined,
+    isFeatured: priority === 'top',
+  } as any);
+}

@@ -42,6 +42,8 @@
     <string>7</string>
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
+    <key>NSUserTrackingUsageDescription</key>
+    <string>Kaburlu uses analytics to improve the app experience. Your data is never shared with advertisers.</string>
     <key>LSMinimumSystemVersion</key>
     <string>12.0</string>
     <key>LSRequiresIPhoneOS</key>

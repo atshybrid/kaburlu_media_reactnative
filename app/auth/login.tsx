@@ -13,12 +13,13 @@
 import { Colors } from '@/constants/Colors';
 import { FIREBASE_CONFIG } from '@/config/firebase';
 import { useColorScheme } from '@/hooks/useColorScheme';
-import { createCitizenReporterGoogle, createCitizenReporterMobile, getMpinStatus, loginWithGoogle, loginWithMpin, PaymentRequiredError, requestOtpForMpinReset, setNewMpin, verifyOtpForMpinReset } from '@/services/api';
+import { createCitizenReporterApple, createCitizenReporterGoogle, createCitizenReporterMobile, getMpinStatus, loginWithApple, loginWithGoogle, loginWithMpin, PaymentRequiredError, requestOtpForMpinReset, setNewMpin, verifyOtpForMpinReset } from '@/services/api';
 import { getLastMobile, saveTokens } from '@/services/auth';
 import { getDeviceIdentity } from '@/services/device';
 import { requestLocationPermissionOnly } from '@/services/permissions';
 import { firebaseIdTokenFromGoogleIdToken } from '@/services/firebase';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BlurView } from 'expo-blur';
@@ -230,6 +231,7 @@ export default function LoginScreen() {
   const [showCongrats, setShowCongrats] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [appleLoading, setAppleLoading] = useState(false);
   
   // Reset flow
   const [showReset, setShowReset] = useState(false);
@@ -768,7 +770,120 @@ export default function LoginScreen() {
       setGoogleLoading(false);
     }
   }, [googleLoading, submitting, persistAuth, navigateAfterAuth]);
-  
+
+  // Handle Sign in with Apple (iOS only)
+  const handleAppleSignIn = useCallback(async () => {
+    if (appleLoading || submitting) return;
+
+    setAppleLoading(true);
+    setError(null);
+    Keyboard.dismiss();
+
+    try {
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+      });
+
+      const identityToken = credential.identityToken;
+      if (!identityToken) {
+        throw new Error('Sign in with Apple failed. No identity token received.');
+      }
+
+      const fullName = credential.fullName
+        ? [credential.fullName.givenName, credential.fullName.familyName].filter(Boolean).join(' ') || null
+        : null;
+
+      const device = await getDeviceIdentity();
+
+      // Try login first (existing user)
+      try {
+        const res = await loginWithApple({
+          identityToken,
+          authorizationCode: credential.authorizationCode ?? undefined,
+          email: credential.email,
+          fullName,
+          deviceId: device.deviceId,
+        });
+
+        await persistAuth(res);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        setSuccess('Login successful!');
+        setShowCongrats(true);
+
+        setTimeout(() => {
+          setShowCongrats(false);
+          navigateAfterAuth();
+        }, 1800);
+      } catch (loginErr: any) {
+        const is404 =
+          loginErr.status === 404 ||
+          loginErr.message?.includes('USER_NOT_FOUND') ||
+          loginErr.message?.includes('404');
+
+        if (is404) {
+          let languageId: string | undefined;
+          try {
+            const raw = await AsyncStorage.getItem('selectedLanguage');
+            if (raw) languageId = JSON.parse(raw)?.id;
+          } catch {}
+          if (!languageId) languageId = 'en';
+
+          let location: any;
+          try {
+            const perms = await requestLocationPermissionOnly();
+            if (perms.coordsDetailed) {
+              location = {
+                latitude: perms.coordsDetailed.latitude,
+                longitude: perms.coordsDetailed.longitude,
+                accuracyMeters: perms.coordsDetailed.accuracy,
+                provider: 'fused',
+                timestampUtc: new Date(perms.coordsDetailed.timestamp || Date.now()).toISOString(),
+                placeId: null,
+                placeName: perms.place?.fullName || perms.place?.name || null,
+                address: perms.place?.fullName || null,
+                source: 'foreground',
+              };
+            }
+          } catch {}
+
+          const res = await createCitizenReporterApple({
+            identityToken,
+            authorizationCode: credential.authorizationCode ?? undefined,
+            email: credential.email,
+            fullName,
+            languageId,
+            location,
+          });
+
+          await persistAuth(res);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          setSuccess('Account created!');
+          setShowCongrats(true);
+
+          setTimeout(() => {
+            setShowCongrats(false);
+            navigateAfterAuth();
+          }, 1800);
+        } else {
+          throw loginErr;
+        }
+      }
+    } catch (error: any) {
+      if (error.code === 'ERR_REQUEST_CANCELED') {
+        // User cancelled Apple Sign-in, no error
+        setError(null);
+      } else {
+        setError(error.message || 'Sign in with Apple failed. Please try again.');
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      }
+    } finally {
+      setAppleLoading(false);
+    }
+  }, [appleLoading, submitting, persistAuth, navigateAfterAuth]);
+
   // MPIN value change handler - single string approach for fast input
   const handleMpinValueChange = useCallback((val: string) => {
     setMpinValue(val);
@@ -1150,7 +1265,7 @@ export default function LoginScreen() {
               </View>
             )}
             
-            {/* Divider */}
+            {/* Divider - show on iOS for Apple Sign-in, on Android for Google Sign-in */}
             {!status && (
               <View style={styles.divider}>
                 <View style={[styles.dividerLine, { backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' }]} />
@@ -1159,8 +1274,21 @@ export default function LoginScreen() {
               </View>
             )}
             
-            {/* Google Sign-In Button */}
-            {!status && (
+            {/* Sign in with Apple - iOS only (required by App Store guideline 4.8) */}
+            {!status && Platform.OS === 'ios' && (
+              <AppleAuthentication.AppleAuthenticationButton
+                buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+                buttonStyle={isDark
+                  ? AppleAuthentication.AppleAuthenticationButtonStyle.WHITE
+                  : AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+                cornerRadius={12}
+                style={{ width: '100%', height: 50, marginBottom: 8 }}
+                onPress={handleAppleSignIn}
+              />
+            )}
+
+            {/* Google Sign-In Button - Android only */}
+            {!status && Platform.OS !== 'ios' && (
               <TouchableOpacity 
                 onPress={handleGoogleSignIn}
                 disabled={googleLoading || submitting}

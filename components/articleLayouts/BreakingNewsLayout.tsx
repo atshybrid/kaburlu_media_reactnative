@@ -12,10 +12,12 @@
 import { useTabBarVisibility } from '@/context/TabBarVisibilityContext';
 import { useAutoHideBottomBar } from '@/hooks/useAutoHideBottomBar';
 import { useColorScheme } from '@/hooks/useColorScheme';
+import { useDeviceLayout } from '@/hooks/useDeviceLayout';
 import { useReaction } from '@/hooks/useReaction';
+import { buildArticleSharePayload } from '@/services/shareLinks';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { Image } from 'expo-image';
+import ImageWithSkeleton from '@/components/ui/ImageWithSkeleton';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -28,6 +30,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import ArticleAuthorBar from './ArticleAuthorBar';
 import type { ArticleLayoutComponent } from './types';
 import {
   useFonts,
@@ -51,6 +54,7 @@ const BreakingNewsLayout: ArticleLayoutComponent = ({ article, index, totalArtic
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { width: windowWidth } = useWindowDimensions();
+  const { scaleFontSize, scaleLineHeight } = useDeviceLayout();
 
   // Tab bar visibility
   const { isTabBarVisible, setTabBarVisible } = useTabBarVisibility();
@@ -136,12 +140,12 @@ const BreakingNewsLayout: ArticleLayoutComponent = ({ article, index, totalArtic
   // Get image
   const imageUrl = article.image || article.images?.[0] || null;
 
-  // Article text (max 60 words)
+  // Article text (max 120 words)
   const articleText = useMemo(() => {
     const body = article.body || article.summary || '';
     const words = body.split(/\s+/).filter(w => w.length > 0);
-    if (words.length <= 60) return body.trim();
-    return words.slice(0, 60).join(' ') + '…';
+    if (words.length <= 120) return body.trim();
+    return words.slice(0, 120).join(' ') + '…';
   }, [article.body, article.summary]);
 
   // Telugu detection
@@ -149,14 +153,16 @@ const BreakingNewsLayout: ArticleLayoutComponent = ({ article, index, totalArtic
   const isTeluguTitle = isTelugu(article.title);
   const isTeluguBody = isTelugu(articleText);
 
-  // Word count for dynamic sizing
+  // Dynamic sizing — scale font up for short content to fill blank space
   const wordCount = articleText.split(/\s+/).filter(w => w.length > 0).length;
 
-  // Dynamic sizing
-  const titleSize = 24;
-  const titleLineHeight = Math.round(titleSize * (isTeluguTitle ? 1.50 : 1.35));
-  const bodySize = 15;
-  const bodyLineHeight = Math.round(bodySize * 1.70);
+  // Phone base sizes → scaled for tablet by useDeviceLayout
+  const phoneTitleBase = 24;
+  const phoneBodyBase = wordCount >= 60 ? 15 : wordCount >= 40 ? 16 : wordCount >= 25 ? 17 : wordCount >= 15 ? 18 : 20;
+  const titleSize = scaleFontSize(phoneTitleBase);
+  const titleLineHeight = scaleLineHeight(phoneTitleBase, isTeluguTitle ? 1.50 : 1.35);
+  const bodySize = scaleFontSize(phoneBodyBase);
+  const bodyLineHeight = scaleLineHeight(phoneBodyBase, 1.70);
 
   // Dynamic image height based on word count
   const imageHeight = (() => {
@@ -196,14 +202,11 @@ const BreakingNewsLayout: ArticleLayoutComponent = ({ article, index, totalArtic
   const onShare = async () => {
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      // Use short URL if available, fallback to full URL
-      const shareUrl = article.shortId 
-        ? `https://s.kaburlumedia.com/${article.shortId}`
-        : `https://kaburlumedia.com/article/${article.id}`;
+      const payload = buildArticleSharePayload(article);
       await Share.share({
-        title: article.title,
-        message: `${article.title}\n\nRead more: ${shareUrl}`,
-        url: shareUrl,
+        title: payload.title,
+        message: payload.message,
+        url: payload.url,
       });
     } catch (error) {
       console.warn('Share failed:', error);
@@ -267,10 +270,10 @@ const BreakingNewsLayout: ArticleLayoutComponent = ({ article, index, totalArtic
         {/* Image - Dynamic height based on word count */}
         {imageUrl && (
           <View style={styles.imageContainer}>
-            <Image 
-              source={{ uri: imageUrl }} 
-              style={[styles.image, { height: imageHeight }]} 
-              contentFit="cover" 
+            <ImageWithSkeleton
+              uri={imageUrl}
+              style={[styles.image, { height: imageHeight }]}
+              contentFit="cover"
             />
             <View style={[styles.liveTag, { backgroundColor: tagColor }]}>
               <Animated.View style={[styles.liveTagDot, { opacity: pulseAnim }]} />
@@ -294,7 +297,7 @@ const BreakingNewsLayout: ArticleLayoutComponent = ({ article, index, totalArtic
               },
               isTeluguBody && { fontFamily: 'NotoSansTelugu_400Regular' },
             ]} 
-            numberOfLines={10}
+            numberOfLines={25}
           >
             {articleText}
           </Text>
@@ -303,11 +306,9 @@ const BreakingNewsLayout: ArticleLayoutComponent = ({ article, index, totalArtic
         {/* Spacer */}
         <View style={styles.flexSpacer} />
 
-        {/* Counter and source - always at bottom */}
+        {/* Author and counter */}
         <View style={[styles.bottomRow, { borderTopColor: '#eee' }]}>
-          <Text style={[styles.sourceText, { color: '#999' }]}>
-            {article.publisherName || 'Kaburlu News'}
-          </Text>
+          <ArticleAuthorBar article={article} style={{ flex: 1 }} />
           <Text style={[styles.counterText, { color: '#bbb' }]}>
             {index + 1} / {totalArticles}
           </Text>

@@ -12,38 +12,42 @@
 import { useTabBarVisibility } from '@/context/TabBarVisibilityContext';
 import { useAutoHideBottomBar } from '@/hooks/useAutoHideBottomBar';
 import { useColorScheme } from '@/hooks/useColorScheme';
+import { useDeviceLayout } from '@/hooks/useDeviceLayout';
 import { useReaction } from '@/hooks/useReaction';
+import { buildArticleSharePayload } from '@/services/shareLinks';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { Image } from 'expo-image';
+import ImageWithSkeleton from '@/components/ui/ImageWithSkeleton';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo } from 'react';
 import {
+  Image as RNImage,
   Pressable,
   Share,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocalPoint } from '@/hooks/useFocalPoint';
+import ArticleAuthorBar from './ArticleAuthorBar';
 import type { ArticleLayoutComponent } from './types';
 import { pickTitleColorTheme } from '@/constants/TitleColorRules';
 
 const ACCENT_YELLOW = '#FFD93D';
 const ACCENT_PINK = '#FF6B9D';
 
-// Clamp text helper
-const clampText = (text: string, maxChars: number) => {
-  if (!text || text.length <= maxChars) return text;
-  return text.slice(0, maxChars - 1) + '…';
-};
-
 const TabloidBoldLayout: ArticleLayoutComponent = ({ article, index, totalArticles }) => {
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
   const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
+  const { scaleFontSize, scaleLineHeight } = useDeviceLayout();
   const router = useRouter();
+  // Image height cap: never more than 36% of available screen height
+  const maxImageHeight = Math.round((windowHeight - insets.top - insets.bottom) * 0.36);
 
   // Telugu detection (glyphs need extra vertical room to avoid clipping)
   const isTelugu = (text?: string) => /[\u0C00-\u0C7F]/.test(String(text || ''));
@@ -88,6 +92,42 @@ const TabloidBoldLayout: ArticleLayoutComponent = ({ article, index, totalArticl
     return imgs.slice(0, 2);
   }, [article.image, article.images]);
 
+  // Per-image focal points via ML Kit face detection (falls back to 'center')
+  const focalPoint0 = useFocalPoint(images[0]);
+  const focalPoint1 = useFocalPoint(images[1]);
+
+  const [imageRatios, setImageRatios] = React.useState<Record<string, number>>({});
+  React.useEffect(() => {
+    images.forEach((uri) => {
+      if (!uri || imageRatios[uri] !== undefined) return;
+      RNImage.getSize(
+        uri,
+        (w, h) => {
+          if (w > 0 && h > 0) {
+            setImageRatios((prev) => ({ ...prev, [uri]: w / h }));
+          }
+        },
+        () => {
+          setImageRatios((prev) => ({ ...prev, [uri]: 16 / 9 }));
+        }
+      );
+    });
+  }, [images, imageRatios]);
+
+  const getImageRenderProps = useCallback(
+    (uri?: string, focalPoint?: string | { top: string; left: string }) => {
+      const ratio = uri ? imageRatios[uri] : undefined;
+      const safeAspectRatio =
+        typeof ratio === 'number' ? Math.max(0.72, Math.min(1.9, ratio)) : 16 / 9;
+      return {
+        aspectRatio: safeAspectRatio,
+        contentFit: 'cover' as const,
+        contentPosition: (focalPoint ?? 'center') as any,
+      };
+    },
+    [imageRatios],
+  );
+
   // Format numbers
   const formatNum = (n: number) => {
     if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
@@ -103,8 +143,13 @@ const TabloidBoldLayout: ArticleLayoutComponent = ({ article, index, totalArticl
   // Publisher
   // publisherName defined above
 
-  // Summary text clamped
-  const summaryText = clampText(article.summary || article.body || '', 150);
+  // Summary text
+  const summaryText = (article.body || article.summary || '').trim();
+  const summaryWordCount = summaryText.split(/\s+/).filter(Boolean).length;
+  const phoneSummaryBase = summaryWordCount >= 140 ? 14 : summaryWordCount >= 100 ? 15 : summaryWordCount >= 70 ? 16 : summaryWordCount >= 45 ? 17 : 18;
+  const summaryFontSize = scaleFontSize(phoneSummaryBase);
+  const summaryLineHeight = scaleLineHeight(phoneSummaryBase, isTelugu(article.body || article.summary || '') ? 1.62 : 1.52);
+  const articleTime = new Date(article.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
   // Get title color theme from database tags
   const themed = pickTitleColorTheme({ 
@@ -116,8 +161,8 @@ const TabloidBoldLayout: ArticleLayoutComponent = ({ article, index, totalArticl
   const tagSecondaryColor = themed?.secondary || ACCENT_YELLOW;
 
   // Headline sizing (Telugu needs a larger lineHeight)
-  const headlineFontSize = 28;
-  const headlineLineHeight = Math.round(headlineFontSize * (isTeluguTitle ? 1.45 : 1.25));
+  const headlineFontSize = scaleFontSize(26);
+  const headlineLineHeight = scaleLineHeight(26, isTeluguTitle ? 1.45 : 1.25);
 
   // Check if article has trending/trading status
   const isTrending = (article as any)?.isTrending || 
@@ -139,137 +184,122 @@ const TabloidBoldLayout: ArticleLayoutComponent = ({ article, index, totalArticl
   const onShare = async () => {
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      // Use short URL if available, fallback to full URL
-      const shareUrl = article.shortId 
-        ? `https://s.kaburlumedia.com/${article.shortId}`
-        : `https://kaburlumedia.com/article/${article.id}`;
+      const payload = buildArticleSharePayload(article);
       await Share.share({
-        title: article.title,
-        message: `${article.title}\n\nRead more: ${shareUrl}`,
-        url: shareUrl,
+        title: payload.title,
+        message: payload.message,
+        url: payload.url,
       });
     } catch (error) {
       console.warn('Share failed:', error);
     }
   };
 
+  const singleImageProps = getImageRenderProps(images[0], focalPoint0);
+
   return (
     <View style={[styles.wrapper, { paddingTop: insets.top }]}>
-      <Pressable style={[styles.container, { 
-        paddingBottom: insets.bottom + 70 
-      }]} onPress={handleScreenTap}>
-        {/* Top bar with views - only show trending if data exists */}
-        <View style={styles.topBar}>
-          {isTrending && (
-            <View style={[styles.trendingBadge, { backgroundColor: tagPrimaryColor }]}>
-              <MaterialCommunityIcons name="fire" size={14} color="#fff" />
-              <Text style={styles.trendingText}>TRENDING</Text>
+      <Pressable style={styles.container} onPress={handleScreenTap}>
+
+        {/* ── Scrollable content area – NEVER bleeds into footer ── */}
+        <View style={styles.contentArea}>
+          {/* Top bar */}
+          <View style={styles.topBar}>
+            {isTrending && (
+              <View style={[styles.trendingBadge, { backgroundColor: tagPrimaryColor }]}>
+                <MaterialCommunityIcons name="fire" size={14} color="#fff" />
+                <Text style={styles.trendingText}>TRENDING</Text>
+              </View>
+            )}
+            <View style={styles.viewsContainer}>
+              <Feather name="eye" size={14} color='#888' />
+              <Text style={styles.viewsText}>{formatNum(viewCount)}</Text>
             </View>
-          )}
-          <View style={styles.viewsContainer}>
-            <Feather name="eye" size={14} color='#888' />
-            <Text style={styles.viewsText}>
-              {formatNum(viewCount)}
+          </View>
+
+          {/* Category */}
+          <Text style={[styles.categoryText, { color: tagPrimaryColor }]}>
+            {categoryName.toUpperCase()}
+          </Text>
+
+          {/* Massive Headline */}
+          <Text
+            style={[styles.headline, { fontSize: headlineFontSize, lineHeight: headlineLineHeight }]}
+            numberOfLines={4}
+          >
+            {article.title}
+          </Text>
+
+          {/* Author info */}
+          <ArticleAuthorBar article={article} style={{ marginBottom: 6 }} />
+
+          {/* Side-by-side images or single large image */}
+          {images.length >= 2 ? (
+            <View style={[styles.dualImageContainer, { maxHeight: maxImageHeight }]}>
+              <View style={styles.dualImageLeft}>
+                <ImageWithSkeleton uri={images[0]} style={styles.dualImage} contentFit="cover" contentPosition={focalPoint0 as any} />
+              </View>
+              <View style={styles.dualImageRight}>
+                <ImageWithSkeleton uri={images[1]} style={styles.dualImage} contentFit="cover" contentPosition={focalPoint1 as any} />
+              </View>
+            </View>
+          ) : images.length === 1 ? (
+            <View style={[styles.singleImageContainer, { maxHeight: maxImageHeight }]}>
+              <ImageWithSkeleton
+                uri={images[0]}
+                style={styles.singleImageFill}
+                contentFit="cover"
+                contentPosition={singleImageProps.contentPosition}
+              />
+            </View>
+          ) : null}
+
+          {/* Summary – flex:1 + overflow:hidden is the GOLDEN RULE guard */}
+          <View style={styles.summaryContainer}>
+            <LinearGradient
+              colors={[tagSecondaryColor, tagPrimaryColor]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 0, y: 1 }}
+              style={styles.summaryAccent}
+            />
+            <Text
+              style={[styles.summaryText, { fontSize: summaryFontSize, lineHeight: summaryLineHeight }]}
+              numberOfLines={999}
+            >
+              {summaryText}
             </Text>
           </View>
         </View>
 
-        {/* Category */}
-        <Text style={[styles.categoryText, { color: tagPrimaryColor }]}>
-          {categoryName.toUpperCase()}
-        </Text>
-
-        {/* Massive Headline */}
-        <Text
-          style={[styles.headline, { fontSize: headlineFontSize, lineHeight: headlineLineHeight }]}
-          numberOfLines={4}
-        >
-          {article.title}
-        </Text>
-
-        {/* Publisher row */}
-        <View style={styles.publisherRow}>
-          {publisherLogo ? (
-            <Image source={{ uri: publisherLogo }} style={styles.publisherAvatarImg} contentFit="cover" />
-          ) : (
-            <View style={[styles.publisherAvatar, { backgroundColor: tagSecondaryColor }]}>
-              <Text style={styles.publisherInitial}>
-                {publisherName.charAt(0).toUpperCase()}
-              </Text>
-            </View>
-          )}
-          <Text style={styles.publisherName}>{publisherName}</Text>
-        </View>
-
-        {/* Side-by-side images or single large image */}
-        {images.length >= 2 ? (
-          <View style={styles.dualImageContainer}>
-            <View style={styles.dualImageLeft}>
-              <Image source={{ uri: images[0] }} style={styles.dualImage} contentFit="cover" />
-            </View>
-            <View style={styles.dualImageRight}>
-              <Image source={{ uri: images[1] }} style={styles.dualImage} contentFit="cover" />
-            </View>
-          </View>
-        ) : images.length === 1 ? (
-          <View style={styles.singleImageContainer}>
-            <Image source={{ uri: images[0] }} style={styles.singleImage} contentFit="cover" />
-          </View>
-        ) : null}
-
-        {/* Summary with accent border */}
-        <View style={styles.summaryContainer}>
-          <LinearGradient
-            colors={[tagSecondaryColor, tagPrimaryColor]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 0, y: 1 }}
-            style={styles.summaryAccent}
-          />
-          <Text style={styles.summaryText} numberOfLines={5}>
-            {summaryText}
-          </Text>
-        </View>
-
-        {/* Spacer */}
-        <View style={styles.flexSpacer} />
-
-        {/* Source and Article indicator - always at bottom */}
+        {/* ── Bottom meta row (time + article count) – in flow, never overlaps ── */}
         <View style={styles.bottomRow}>
-          <Text style={styles.sourceText}>
-            Source News • {publisherName}
-          </Text>
-          <Text style={styles.indicatorText}>
-            {index + 1} / {totalArticles}
-          </Text>
+          <Text style={styles.sourceText}>{articleTime}</Text>
+          <Text style={styles.indicatorText}>{index + 1} / {totalArticles}</Text>
         </View>
 
-        {/* Footer with action buttons */}
-        <View style={[styles.footer, { 
-          paddingBottom: insets.bottom + 8
-        }]}>
+        {/* ── Footer action buttons – in flow, always visible at bottom ── */}
+        <View style={[styles.footer, { paddingBottom: insets.bottom + 4 }]}>
           <Pressable style={styles.footerBtn} onPress={onLike}>
-            <Feather 
-              name="heart" 
-              size={22} 
-              color={isLiked ? tagPrimaryColor : '#666'} 
+            <Feather
+              name="heart"
+              size={22}
+              color={isLiked ? tagPrimaryColor : '#666'}
             />
             <Text style={[styles.footerBtnText, { color: isLiked ? tagPrimaryColor : '#666' }]}>
               {likeCount > 0 ? formatNum(likeCount) : ''}
             </Text>
           </Pressable>
-          
           <Pressable style={styles.footerBtn} onPress={onComment}>
             <Feather name="message-circle" size={22} color='#666' />
           </Pressable>
-          
           <Pressable style={styles.footerBtn}>
             <Feather name="bookmark" size={22} color='#666' />
           </Pressable>
-          
           <Pressable style={styles.footerBtn} onPress={onShare}>
             <Feather name="share" size={22} color='#666' />
           </Pressable>
         </View>
+
       </Pressable>
     </View>
   );
@@ -280,10 +310,17 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#fff',
   },
+  // Outer pressable: full height flex column
   container: {
     flex: 1,
-    paddingHorizontal: 20,
+    flexDirection: 'column',
     backgroundColor: '#fff',
+  },
+  // Content area above footer: flex:1 + overflow:hidden is the golden-rule guard
+  contentArea: {
+    flex: 1,
+    overflow: 'hidden',
+    paddingHorizontal: 20,
   },
 
   // Top bar
@@ -291,8 +328,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingTop: 12,
-    paddingBottom: 8,
+    paddingTop: 10,
+    paddingBottom: 4,
   },
   trendingBadge: {
     flexDirection: 'row',
@@ -324,16 +361,16 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     letterSpacing: 1.8,
-    marginBottom: 10,
+    marginBottom: 6,
   },
 
   // Headline
   headline: {
-    fontWeight: '900',
-    paddingTop: 2,
-    paddingBottom: 2,
-    marginTop: 6,
-    marginBottom: 16,
+    fontWeight: '800',
+    paddingTop: 0,
+    paddingBottom: 0,
+    marginTop: 4,
+    marginBottom: 10,
     color: '#1a1a1a',
   },
 
@@ -368,21 +405,20 @@ const styles = StyleSheet.create({
     color: '#555',
   },
 
-  // Dual images
+  // Dual images — height capped by maxImageHeight on the container
   dualImageContainer: {
     flexDirection: 'row',
     gap: 4,
-    marginBottom: 14,
+    marginBottom: 10,
     borderRadius: 12,
     overflow: 'hidden',
+    // maxHeight applied inline at render time
   },
   dualImageLeft: {
     flex: 1,
-    aspectRatio: 1,
   },
   dualImageRight: {
     flex: 1,
-    aspectRatio: 1,
   },
   dualImage: {
     width: '100%',
@@ -390,22 +426,27 @@ const styles = StyleSheet.create({
     backgroundColor: '#333',
   },
 
-  // Single image
+  // Single image — container height is capped inline; image fills container
   singleImageContainer: {
     borderRadius: 12,
     overflow: 'hidden',
-    marginBottom: 14,
+    marginBottom: 10,
+    // maxHeight applied inline at render time
   },
-  singleImage: {
+  singleImageFill: {
     width: '100%',
-    aspectRatio: 16 / 9,
+    height: '100%',
     backgroundColor: '#333',
   },
 
-  // Summary
+  // Summary — flex:1 consumes remaining space; alignItems:'flex-start' keeps
+  // the accent bar only as tall as the text (not the entire remaining screen height)
   summaryContainer: {
+    flex: 1,
     flexDirection: 'row',
-    marginBottom: 14,
+    alignItems: 'flex-start',
+    marginTop: 4,
+    overflow: 'hidden',
   },
   summaryAccent: {
     width: 3,
@@ -418,19 +459,17 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
 
-  // Flex spacer
-  flexSpacer: {
-    flex: 1,
-  },
-
-  // Bottom row
+  // Bottom meta row — in normal document flow, NOT absolute
   bottomRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    paddingHorizontal: 20,
     paddingTop: 10,
-    marginBottom: 8,
+    paddingBottom: 6,
     borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+    backgroundColor: '#fff',
   },
   sourceText: {
     fontSize: 12,
@@ -441,18 +480,16 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
 
-  // Footer
+  // Footer action bar — in normal document flow, NOT absolute
   footer: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
     flexDirection: 'row',
     justifyContent: 'space-around',
     alignItems: 'center',
-    paddingVertical: 12,
+    paddingTop: 10,
     paddingHorizontal: 40,
     borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+    backgroundColor: '#fff',
   },
   footerBtn: {
     flexDirection: 'row',

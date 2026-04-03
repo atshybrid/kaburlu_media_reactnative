@@ -77,6 +77,19 @@ function ThemedApp() {
     }
   }, []);
 
+  // Request App Tracking Transparency permission (iOS 14+ required by App Store guideline 5.1.2)
+  React.useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+    (async () => {
+      try {
+        const { requestTrackingPermissionsAsync } = await import('expo-tracking-transparency');
+        await requestTrackingPermissionsAsync();
+      } catch (e: any) {
+        console.log('[ATT] Permission request skipped:', e?.message);
+      }
+    })();
+  }, []);
+
   // Defer preload to allow Firebase modules to register (RN 0.81 timing)
   React.useEffect(() => {
     (async () => {
@@ -126,54 +139,123 @@ function ThemedApp() {
     return () => clearTimeout(timer);
   }, []);
 
-  // Deep link & initial URL handling for:
-  // - kaburlu://article/<id>
-  // - https://s.kaburlumedia.com/<shortId>
-  // - https://kaburlumedia.com/article/<id>
+  // Deep link & App Link handler for:
+  // - https://s.kaburlumedia.com/<shortId>          → article
+  // - https://kaburlumedia.com/article/<id>          → article
+  // - https://www.kaburlumedia.com/article/<id>      → article
+  // - https://kaburlumedia.com/category/<slug>       → category
+  // - https://www.kaburlumedia.com/category/<slug>   → category
+  // - https://kaburlumedia.com/                      → home
+  // - kaburlu://article/<id>                         → article (custom scheme)
   React.useEffect(() => {
     const handleUrl = (url?: string | null) => {
       if (!url) return;
       try {
         console.log('[DEEP_LINK] Received URL:', url);
-        
-        // Handle short URL: https://s.kaburlumedia.com/{shortId}
+
+        // ── 1. Short-link domain ──────────────────────────────────────────
         if (url.includes('s.kaburlumedia.com')) {
           const match = url.match(/s\.kaburlumedia\.com\/([a-zA-Z0-9]+)/);
-          if (match && match[1]) {
-            const shortId = match[1];
-            console.log('[DEEP_LINK] Short URL detected, shortId:', shortId);
-            // Navigate to article with short ID - the article screen will resolve it
-            router.push({ pathname: '/article/[id]', params: { id: shortId, isShortId: 'true' } });
+          if (match?.[1]) {
+            console.log('[DEEP_LINK] Short URL, shortId:', match[1]);
+            router.push({ pathname: '/article/[id]', params: { id: match[1], isShortId: 'true' } });
             return;
           }
         }
-        
-        // Handle main domain: https://kaburlumedia.com/article/{id}
-        if (url.includes('kaburlumedia.com/article/')) {
-          const match = url.match(/kaburlumedia\.com\/article\/([a-zA-Z0-9-]+)/);
-          if (match && match[1]) {
-            const articleId = match[1];
-            console.log('[DEEP_LINK] Main domain article URL, id:', articleId);
-            router.push({ pathname: '/article/[id]', params: { id: articleId } });
+
+        // ── 2. Main / www domain ──────────────────────────────────────────
+        if (url.match(/(?:www\.)?kaburlumedia\.com/)) {
+          let pathname = '';
+          try {
+            pathname = new URL(url).pathname;
+          } catch {
+            // fallback: extract path manually
+            pathname = url.replace(/^https?:\/\/(?:www\.)?kaburlumedia\.com/, '') || '/';
+          }
+
+          // /article/<id>
+          const articleMatch = pathname.match(/^\/article\/([a-zA-Z0-9_-]+)/);
+          if (articleMatch?.[1]) {
+            console.log('[DEEP_LINK] Article URL, id:', articleMatch[1]);
+            router.push({ pathname: '/article/[id]', params: { id: articleMatch[1] } });
             return;
           }
+
+          // /category/<slug>
+          const categoryMatch = pathname.match(/^\/category\/([a-zA-Z0-9_-]+)/);
+          if (categoryMatch?.[1]) {
+            console.log('[DEEP_LINK] Category URL, slug:', categoryMatch[1]);
+            router.push({ pathname: '/category/[slug]', params: { slug: categoryMatch[1] } });
+            return;
+          }
+
+          // /open/article/<id> or /open/shortnews/<id>
+          const openTypedMatch = pathname.match(/^\/open\/(article|shortnews)\/([a-zA-Z0-9_-]+)/i);
+          if (openTypedMatch?.[2]) {
+            console.log('[DEEP_LINK] Open typed URL, id:', openTypedMatch[2]);
+            router.push({ pathname: '/article/[id]', params: { id: openTypedMatch[2] } });
+            return;
+          }
+
+          // /open/<id> (shortId style fallback)
+          const openIdMatch = pathname.match(/^\/open\/([a-zA-Z0-9_-]+)/);
+          if (openIdMatch?.[1]) {
+            console.log('[DEEP_LINK] Open URL shortId:', openIdMatch[1]);
+            router.push({ pathname: '/article/[id]', params: { id: openIdMatch[1], isShortId: 'true' } });
+            return;
+          }
+
+          // Root URL → home tab
+          if (pathname === '/' || pathname === '') {
+            console.log('[DEEP_LINK] Root URL → home');
+            router.push('/(tabs)');
+            return;
+          }
+
+          // Unrecognised path – fall through to home gracefully
+          console.log('[DEEP_LINK] Unrecognised path, falling back to home:', pathname);
+          router.push('/(tabs)');
+          return;
         }
-        
-        // Handle custom scheme: kaburlu://article/{id}
+
+        // ── 3. Custom scheme: kaburlu://article/<id> ──────────────────────
         const parsed = Linking.parse(url);
-        const segments = parsed?.path ? parsed.path.split('/') : [];
+        const segments = (parsed?.path ?? '').replace(/^\//, '').split('/').filter(Boolean);
+
         if (segments[0] === 'article' && segments[1]) {
-          const articleId = segments[1];
-          console.log('[DEEP_LINK] Custom scheme article, id:', articleId);
-          router.push({ pathname: '/article/[id]', params: { id: articleId } });
+          console.log('[DEEP_LINK] Custom scheme article, id:', segments[1]);
+          router.push({ pathname: '/article/[id]', params: { id: segments[1] } });
+          return;
         }
+
+        if (segments[0] === 'shortnews' && segments[1]) {
+          console.log('[DEEP_LINK] Custom scheme shortnews, id:', segments[1]);
+          router.push({ pathname: '/article/[id]', params: { id: segments[1] } });
+          return;
+        }
+
+        // kaburlu://open/article/<id> OR kaburlu://open/shortnews/<id>
+        if (segments[0] === 'open' && segments[2] && (segments[1] === 'article' || segments[1] === 'shortnews')) {
+          console.log('[DEEP_LINK] Custom scheme open typed, id:', segments[2]);
+          router.push({ pathname: '/article/[id]', params: { id: segments[2] } });
+          return;
+        }
+
+        if (segments[0] === 'category' && segments[1]) {
+          console.log('[DEEP_LINK] Custom scheme category, slug:', segments[1]);
+          router.push({ pathname: '/category/[slug]', params: { slug: segments[1] } });
+          return;
+        }
+
       } catch (e) {
-        console.log('[DEEP_LINK] failed to parse', url, e);
+        // Never crash from a deep-link parse failure
+        console.warn('[DEEP_LINK] Failed to parse URL:', url, e);
       }
     };
-    // Initial
-    Linking.getInitialURL().then(handleUrl).catch(()=>{});
-    // Listener
+
+    // Cold-start: app opened via link
+    Linking.getInitialURL().then(handleUrl).catch(() => {});
+    // Warm-start: app already running and receives a link
     const sub = Linking.addEventListener('url', (e) => handleUrl(e.url));
     return () => { try { sub.remove(); } catch {} };
   }, [router]);
@@ -243,6 +325,15 @@ function ThemedApp() {
                   gestureEnabled: false, // Disable back gesture on success screen
                   animation: 'fade',
                 }} 
+              />
+              <Stack.Screen
+                name="category/[slug]"
+                options={{
+                  headerShown: false,
+                  animation: 'slide_from_right',
+                  freezeOnBlur: false,
+                  contentStyle: { backgroundColor: effective === 'dark' ? DarkTheme.colors.background : DefaultTheme.colors.background },
+                }}
               />
               <Stack.Screen name="+not-found" />
             </Stack>

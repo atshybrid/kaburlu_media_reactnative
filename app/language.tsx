@@ -1,534 +1,576 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
-import React, { useState } from 'react';
+import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
-    Animated,
+  ActivityIndicator,
+  Animated,
+  Dimensions,
+  FlatList,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
-// import * as Location from 'expo-location';
-// import * as Notifications from 'expo-notifications';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
-import { LanguageSkeleton } from '@/components/ui/LanguageSkeleton';
-import { getLanguageIcon } from '@/icons/languageIcons';
 import { getStateSymbol } from '@/components/languageSymbols';
-import { saveTokens } from '@/services/auth';
+import { clearTokens, loadTokens, saveTokens } from '@/services/auth';
 import { getDeviceIdentity } from '@/services/device';
-import { Language } from '../constants/languages';
-import { afterPreferencesUpdated, getLanguages, registerGuestUser, updatePreferences } from '../services/api';
-import Spacing from '@/constants/Spacing';
-import Typography from '@/constants/Typography';
-import BorderRadius from '@/constants/BorderRadius';
-import Shadows from '@/constants/Shadows';
+import { Language } from '@/types/language';
+import {
+  getLanguages,
+  registerGuestUser,
+  updatePreferences,
+} from '@/services/api';
+import { BorderRadius } from '@/constants/BorderRadius';
+import { Shadows } from '@/constants/Shadows';
+import { Spacing } from '@/constants/Spacing';
 
-const LanguageSelectionScreen = () => {
-  // use expo-router to navigate to the News tab after selection
-  const [selectedLanguage, setSelectedLanguage] = useState<Language | null>(null);
-  const [languages, setLanguages] = useState<Language[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
-  const [storedLanguage, setStoredLanguage] = useState<Language | null>(null);
-  const [hasTokens, setHasTokens] = useState(false);
+// ─── Theme ───────────────────────────────────────────────────────────────────
+const INDIGO       = '#4F46E5';
+const INDIGO_DARK  = '#3730A3';
+const SAFFRON      = '#FA7C05';
+const BG           = '#EEEEFF';
+const CARD_BG      = '#FFFFFF';
+const TEXT_DARK    = '#1E1B4B';
+const TEXT_MUTED   = '#6B7280';
 
-  React.useEffect(() => {
-    (async () => {
-      try {
-        const raw = await AsyncStorage.getItem('selectedLanguage');
-        if (raw) setStoredLanguage(JSON.parse(raw));
-      } catch {}
-      try {
-        const existingJwt = await AsyncStorage.getItem('jwt');
-        const existingRefresh = await AsyncStorage.getItem('refreshToken');
-        setHasTokens(!!(existingJwt && existingRefresh));
-      } catch {}
-    })();
-  }, []);
+const { width: SCREEN_W } = Dimensions.get('window');
+const CARD_GAP = 12;
+const CARD_W   = (SCREEN_W - Spacing.md * 2 - CARD_GAP) / 2;
+const PAPER_DATE = new Date().toLocaleDateString('en-GB', {
+  day: '2-digit',
+  month: 'short',
+}).toUpperCase();
 
-  React.useEffect(() => {
-    (async () => {
-      try {
-        const list = await getLanguages();
-        setLanguages(list);
-        // Prefer previously chosen language if it exists
-        if (list?.length) {
-          const byId = storedLanguage?.id ? list.find((l) => l.id === storedLanguage.id) : undefined;
-          const byCode = !byId && storedLanguage?.code ? list.find((l) => l.code === storedLanguage.code) : undefined;
-          setSelectedLanguage(byId || byCode || list[0]);
-        }
-        setLoadError(null);
-      } catch {
-        setLoadError('Failed to load languages');
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [storedLanguage?.id, storedLanguage?.code]);
+function getDeskForLanguage(code?: string): string {
+  const c = String(code || '').toLowerCase();
+  if (c === 'te') return 'HYDERABAD';
+  if (c === 'hi') return 'DELHI';
+  if (c === 'ta') return 'CHENNAI';
+  if (c === 'kn') return 'BENGALURU';
+  if (c === 'mr') return 'MUMBAI';
+  if (c === 'bn') return 'KOLKATA';
+  if (c === 'ml') return 'KOCHI';
+  if (c === 'gu') return 'AHMEDABAD';
+  if (c === 'pa') return 'CHANDIGARH';
+  return 'NATIONAL';
+}
 
-  const handleLanguageSelect = async (language: Language) => {
-    if (submitting || loading) return;
-    setSelectedLanguage(language);
-    await AsyncStorage.setItem('selectedLanguage', JSON.stringify(language));
+function getLanguageAccent(code?: string): string {
+  const c = String(code || '').toLowerCase();
+  if (c === 'te') return '#7C3AED';
+  if (c === 'hi') return '#DC2626';
+  if (c === 'ta') return '#0891B2';
+  if (c === 'kn') return '#2563EB';
+  if (c === 'mr') return '#EA580C';
+  if (c === 'bn') return '#DB2777';
+  if (c === 'ml') return '#059669';
+  if (c === 'gu') return '#CA8A04';
+  if (c === 'pa') return '#16A34A';
+  return INDIGO;
+}
 
-    const deviceDetails = await getDeviceIdentity();
+// ─── Card Skeleton ────────────────────────────────────────────────────────────
+const CardSkeleton = () => {
+  const pulse = useRef(new Animated.Value(0.4)).current;
 
-    try {
-      setSubmitting(true);
-      // Don't show errors to user
-      setSubmitError(null);
-      // If we already have tokens, skip re-registering
-      const existingJwt = await AsyncStorage.getItem('jwt');
-      const existingRefresh = await AsyncStorage.getItem('refreshToken');
-      if (existingJwt && existingRefresh) {
-        try {
-          await updatePreferences({ languageId: language.id, languageCode: language.code });
-          await afterPreferencesUpdated({ languageIdChanged: language.id, languageCode: language.code });
-        } catch {}
-        router.replace('/news');
-        return;
-      }
-
-      // Best Practice: Request notification permission on user action (Play Store compliant)
-      // User clicked language = user-initiated action, so we can request permission here
-      const { ensureNotificationsSetup } = await import('@/services/notifications');
-      const notifResult = await ensureNotificationsSetup();
-      const pushToken = notifResult.fcmToken || notifResult.expoToken || notifResult.deviceToken;
-      console.log('[LANG] Notification permission:', notifResult.status, 'FCM Token:', pushToken ? `${pushToken.slice(0, 20)}...` : 'NOT AVAILABLE');
-
-      // Also get location if already granted (don't request - that's separate)
-      const { checkPermissionsOnly } = await import('@/services/permissions');
-      const perms = await checkPermissionsOnly();
-
-      const authResponse = await registerGuestUser({
-        // Backend expects string IDs like "cmfdwhqk80009ugtof37yt8vv"
-        languageId: language.id,
-        deviceDetails,
-        location: perms.coords ? { latitude: perms.coords.latitude, longitude: perms.coords.longitude } : undefined,
-        pushToken: pushToken,
-      });
-
-      console.log('Guest user registered:', authResponse);
-      await saveTokens({
-        jwt: authResponse.jwt,
-        refreshToken: authResponse.refreshToken,
-        expiresAt: authResponse.expiresAt || (Date.now() + 24 * 3600 * 1000),
-        languageId: authResponse.languageId || language.id,
-        user: authResponse.user,
-      });
-
-      try {
-        // Warm caches for the chosen language
-        await afterPreferencesUpdated({ languageIdChanged: language.id, languageCode: language.code });
-      } catch {}
-
-      // await requestPermissions();
-      router.replace('/news');
-    } catch (error) {
-      const rawMsg = error instanceof Error ? error.message : String(error);
-      // In Expo dev, console.error triggers the red error overlay; treat this as a handled UI error.
-      try {
-        console.warn('[AUTH] Guest registration failed', rawMsg);
-      } catch {}
-
-      const lower = String(rawMsg || '').toLowerCase();
-      const statusMatch = String(rawMsg || '').match(/\((\d{3})\)/) || String(rawMsg || '').match(/http\s*(\d{3})/i);
-      const statusCode = statusMatch ? Number(statusMatch[1]) : undefined;
-      const isCloudflare = lower.includes('cloudflare') || lower.includes('just a moment') || lower.includes('/cdn-cgi/');
-
-      const friendlyMsg = (statusCode === 429)
-        ? 'Too many requests right now. Please wait 10 seconds and try again.'
-        : (statusCode === 503)
-          ? 'Service temporarily unavailable (503). Please try again in a minute.'
-        : isCloudflare
-          ? 'Service is temporarily blocked by protection (Cloudflare). Please try again later.'
-          : /\(500\)/.test(rawMsg)
-            ? 'Server error (500). Please try again in a moment.'
-            : rawMsg || 'Failed to register. Please try again.';
-
-      // Silent error - don't show to user, just log it
-      console.log('[AUTH] Registration error (silent):', friendlyMsg);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  // const requestPermissions = async () => {
-  //   let { status } = await Location.requestForegroundPermissionsAsync();
-  //   if (status !== 'granted') {
-  //     console.log('Permission to access location was denied');
-  //     return;
-  //   }
-  //
-  //   let location = await Location.getCurrentPositionAsync({});
-  //   await AsyncStorage.setItem('userLocation', JSON.stringify(location));
-
-    // const { status: existingStatus } = await Notifications.getPermissionsAsync();        
-    // let finalStatus = existingStatus;
-    // if (existingStatus !== 'granted') {
-    //   const { status } = await Notifications.requestPermissionsAsync();
-    //   finalStatus = status;
-    // }
-    // if (finalStatus !== 'granted') {
-    //   console.log('Failed to get push token for push notification!');
-    //   return;
-    // }
-
-    // const token = (await Notifications.getExpoPushTokenAsync()).data;
-    // console.log('FCM Token:', token);
-  // };
-
-  const renderLanguageItem = (item: Language, isSelected: boolean) => {
-    const StateSymbol = getStateSymbol(item.code);
-    
-    // Professional gradient - subtle and elegant
-    const gradientColors = [
-      '#FFFFFF',
-      '#FFFFFF',
-      item.color + '15',
-    ];
-
-    return (
-      <TouchableOpacity
-        key={item.id}
-        onPress={() => handleLanguageSelect(item)}
-        style={isSelected ? styles.fullWidthContainer : styles.gridItemContainer}
-        activeOpacity={0.8}
-        accessible={true}
-        accessibilityLabel={`Select ${item.nativeName} language`}
-        accessibilityRole="button"
-        accessibilityState={{ selected: isSelected }}
-        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-      >
-        <LinearGradient
-          colors={gradientColors}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={[
-            styles.item,
-            isSelected && styles.selectedItem,
-            { borderLeftColor: item.color },
-          ]}
-        >
-          {/* State Symbol as elegant background */}
-          {StateSymbol && (
-            <View style={styles.symbolBackground}>
-              <StateSymbol size={isSelected ? 120 : 90} color={item.color} />
-            </View>
-          )}
-          
-          {/* Content with professional spacing */}
-          <View style={styles.cardContent}>
-            <View style={styles.languageInfo}>
-              <View style={[styles.colorDot, { backgroundColor: item.color }]} />
-              <View style={styles.languageNames}>
-                <Text style={[styles.nativeName, { color: '#1a1a1a' }]}>{item.nativeName}</Text>
-                <Text style={styles.englishName}>{item.name}</Text>
-              </View>
-            </View>
-            
-            {/* Checkmark for selected */}
-            {isSelected && (
-              <View style={styles.checkmarkContainer}>
-                <View style={[styles.checkmarkCircle, { backgroundColor: item.color }]}>
-                  <MaterialCommunityIcons name="check" size={18} color="#fff" />
-                </View>
-              </View>
-            )}
-          </View>
-        </LinearGradient>
-      </TouchableOpacity>
-    );
-  };
-
-  // Show only the first language as the top card; remaining languages follow as grid, in the same API order
-  const otherLanguages = (languages || []).slice(1);
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 800, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0.4, duration: 800, useNativeDriver: true }),
+      ])
+    ).start();
+  }, [pulse]);
 
   return (
-    <View style={styles.container}>
-      {/* Header */}
-      {!loading && !loadError && (
-        <View style={styles.header}>
-          <Text style={styles.headerTitle}>Choose your language</Text>
-          <Text style={styles.headerSubtitle}>మీకు ఇష్టమైన భాష ఎంచుకోండి</Text>
-        </View>
-      )}
-      
-      {loading && <LanguageSkeleton />}
-      {!loading && loadError && (
-        <View style={styles.errorBox}>
-          <Text style={styles.errorText}>Unable to load languages.</Text>
-          <TouchableOpacity
-            onPress={async () => {
-              setLoading(true);
-              setLoadError(null);
-              try {
-                const list = await getLanguages();
-                setLanguages(list);
-              } catch {
-                setLoadError('Retry failed');
-              } finally {
-                setLoading(false);
-              }
-            }}
-            style={styles.retryBtn}
-          >
-            <Text style={{ color: '#fff', fontWeight: '600' }}>Retry</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-      {!loading && !loadError && (
-        <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContainer}>
-          {hasTokens && storedLanguage && (
-            <View style={styles.continueBox}>
-              <Text style={styles.continueText} numberOfLines={2}>
-                Continue with {storedLanguage.nativeName || storedLanguage.name}
-              </Text>
-              <TouchableOpacity
-                onPress={() => router.replace('/news')}
-                style={styles.continueBtn}
-              >
-                <Text style={{ color: '#fff', fontWeight: '700' }}>Continue</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-          {selectedLanguage && renderLanguageItem(selectedLanguage, true)}
-          <View style={styles.gridContainer}>
-            {otherLanguages.map((item) => renderLanguageItem(item, false))}
-          </View>
-        </ScrollView>
-      )}
-
-      {submitting && (
-        <View style={styles.overlay} pointerEvents="auto">
-          <View style={styles.overlayCard}>
-            <MaterialCommunityIcons name="loading" size={22} color="#444" />
-            <Text style={styles.overlayText}>Setting up your experience…</Text>
-          </View>
-        </View>
-      )}
+    <View style={styles.skeletonGrid}>
+      {[...Array(6)].map((_, i) => (
+        <Animated.View key={i} style={[styles.skeletonCard, { opacity: pulse }]} />
+      ))}
     </View>
   );
 };
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f7fa',
-  },
-  header: {
-    paddingTop: 55,
-    paddingBottom: Spacing.xl,
-    paddingHorizontal: Spacing.xxl,
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  headerTitle: {
-    fontSize: Typography.h3,
-    fontWeight: '600',
-    color: '#1a1a1a',
-    textAlign: 'center',
-    marginBottom: Spacing.xs,
-    letterSpacing: 0.3,
-  },
-  headerSubtitle: {
-    fontSize: Typography.h4,
-    fontWeight: '600',
-    color: '#f1c40f',
-    textAlign: 'center',
-    letterSpacing: 0.2,
-  },
-  continueBox: {
-    marginHorizontal: Spacing.md + 2,
-    marginTop: Spacing.sm + 2,
-    marginBottom: Spacing.md + 2,
-    padding: Spacing.md,
-    backgroundColor: '#ffffff',
-    borderRadius: BorderRadius.md,
-    borderWidth: 1,
-    borderColor: 'rgba(2, 60, 105, 0.12)',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: Spacing.sm + 2,
-    ...Shadows.sm,
-  },
-  continueText: {
-    flex: 1,
-    color: '#1a1a1a',
-    fontWeight: '600',
-    fontSize: Typography.bodySmall,
-  },
-  continueBtn: {
-    backgroundColor: '#023c69',
-    paddingHorizontal: Spacing.md + 2,
-    paddingVertical: Spacing.sm + 2,
-    borderRadius: BorderRadius.md,
-    minHeight: 44,
-    justifyContent: 'center',
-  },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContainer: {
-    padding: Spacing.md,
-  },
-  fullWidthContainer: {
-    marginHorizontal: Spacing.sm,
-    marginVertical: Spacing.sm + 2,
-  },
-  gridContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    paddingHorizontal: 5,
-  },
-  gridItemContainer: {
-    width: '50%',
-    padding: Spacing.xs + 2,
-  },
-  item: {
-    borderRadius: BorderRadius.md,
-    overflow: 'hidden',
-    backgroundColor: '#FFFFFF',
-    borderLeftWidth: 5,
-    ...Shadows.sm,
-    minHeight: 140,
-    position: 'relative',
-  },
-  selectedItem: {
-    minHeight: 180,
-    ...Shadows.md,
-    borderWidth: 2,
-    borderColor: '#e8e8e8',
-  },
-  symbolBackground: {
-    position: 'absolute',
-    right: -15,
-    bottom: -10,
-    opacity: 0.08,
-  },
-  cardContent: {
-    padding: 18,
-    minHeight: 140,
-    justifyContent: 'space-between',
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  languageInfo: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  colorDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  languageNames: {
-    flex: 1,
-    justifyContent: 'center',
-    zIndex: 1,
-  },
-  nativeName: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#1a1a1a',
-    marginBottom: 4,
-    letterSpacing: 0.3,
-  },
-  englishName: {
-    fontSize: 13,
-    color: '#6b7280',
-    fontWeight: '500',
-    letterSpacing: 0.2,
-  },
-  checkmarkContainer: {
-    marginLeft: 8,
-  },
-  checkmarkCircle: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.15,
-    shadowRadius: 2,
-  },
-  // Error and retry UI
-  errorBox: {
-    margin: Spacing.lg,
-    padding: Spacing.lg,
-    backgroundColor: '#fdecea',
-    borderRadius: BorderRadius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#f5c6cb',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  errorText: {
-    color: '#b00020',
-    fontSize: Typography.body,
-    fontWeight: '600',
-    marginBottom: Spacing.xs,
-    textAlign: 'center',
-  },
-  errorHint: {
-    color: '#666',
-    fontSize: Typography.bodySmall,
-    marginBottom: Spacing.md,
-    textAlign: 'center',
-  },
-  retryBtn: {
-    backgroundColor: '#007AFF',
-    paddingHorizontal: Spacing.xl,
-    paddingVertical: Spacing.md,
-    borderRadius: BorderRadius.md,
-    minHeight: 44,
-    justifyContent: 'center',
-    ...Shadows.sm,
-  },
-  retryBtnText: {
-    color: '#fff',
-    fontWeight: '600',
-    fontSize: Typography.body,
-  },
-  // Submitting overlay
-  overlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.08)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  overlayCard: {
-    backgroundColor: '#fff',
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
-    borderRadius: BorderRadius.md,
-    flexDirection: 'row',
-    alignItems: 'center',
-    ...Shadows.lg,
-  },
-  overlayText: {
-    marginLeft: Spacing.sm + 2,
-    color: '#333',
-    fontWeight: '600',
-    fontSize: Typography.bodySmall,
-  },
+// ─── Language Card ────────────────────────────────────────────────────────────
+interface CardProps {
+  item: Language;
+  selected: boolean;
+  onPress: (lang: Language) => void;
+}
+
+const LanguageCard = memo(({ item, selected, onPress }: CardProps) => {
+  const scale  = useRef(new Animated.Value(0.85)).current;
+  const bounce = useRef(new Animated.Value(1)).current;
+  const nativePulse = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.spring(scale, {
+      toValue: 1,
+      useNativeDriver: true,
+      damping: 12,
+      stiffness: 120,
+    }).start();
+  }, [scale]);
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(nativePulse, { toValue: 1, duration: 900, useNativeDriver: true }),
+        Animated.timing(nativePulse, { toValue: 0, duration: 900, useNativeDriver: true }),
+      ])
+    ).start();
+  }, [nativePulse]);
+
+  const handlePress = useCallback(() => {
+    Animated.sequence([
+      Animated.spring(bounce, { toValue: 0.92, useNativeDriver: true, speed: 40 }),
+      Animated.spring(bounce, { toValue: 1,    useNativeDriver: true, speed: 20 }),
+    ]).start();
+    onPress(item);
+  }, [bounce, item, onPress]);
+
+  const StateSymbol = getStateSymbol(String(item.code || '').toLowerCase());
+  const desk = getDeskForLanguage(item.code);
+  const accentColor = getLanguageAccent(item.code);
+
+  const nativeScale = nativePulse.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1.04],
+  });
+  const nativeOpacity = nativePulse.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.85, 1],
+  });
+
+  return (
+    <Pressable onPress={handlePress}>
+      <Animated.View
+        style={[
+          styles.card,
+          { transform: [{ scale: Animated.multiply(scale, bounce) }] },
+          selected && styles.cardSelected,
+        ]}
+      >
+        {/* Watermark */}
+        {StateSymbol ? (
+          <View style={styles.watermarkWrap}>
+            <StateSymbol size={56} color={INDIGO_DARK} />
+          </View>
+        ) : null}
+
+        {/* Check badge */}
+        {selected && (
+          <View style={styles.checkBadge}>
+            <MaterialCommunityIcons name="check" size={12} color="#fff" />
+          </View>
+        )}
+
+        <View style={styles.paperHeaderRow}>
+          <Text style={styles.paperMasthead}>KABURLU DAILY</Text>
+          <Text style={styles.paperDate}>{PAPER_DATE}</Text>
+        </View>
+
+        <View style={styles.paperRule} />
+
+        <View style={styles.paperColumns}>
+          <View style={styles.paperCol} />
+          <View style={styles.paperCol} />
+          <View style={styles.paperColShort} />
+        </View>
+
+        <Text style={styles.paperDesk}>{desk} DESK</Text>
+
+        {/* Label */}
+        <Text style={[styles.cardLabel, selected && styles.cardLabelSelected]}>
+          {item.name.toUpperCase()}
+        </Text>
+        {item.nativeName ? (
+          <Animated.Text
+            style={[
+              styles.cardNative,
+              { color: accentColor, opacity: nativeOpacity, transform: [{ scale: nativeScale }] },
+              selected && styles.cardNativeSelected,
+            ]}
+          >
+            {item.nativeName}
+          </Animated.Text>
+        ) : null}
+        <Text style={styles.cardCode}>{String(item.code || '').toUpperCase()} EDITION</Text>
+      </Animated.View>
+    </Pressable>
+  );
 });
 
-export default LanguageSelectionScreen;
+// ─── Main Screen ─────────────────────────────────────────────────────────────
+export default function LanguageSelectionScreen() {
+  const [languages,        setLanguages]        = useState<Language[]>([]);
+  const [selectedLanguage, setSelectedLanguage] = useState<Language | null>(null);
+  const [loading,          setLoading]          = useState(true);
+  const [saving,           setSaving]           = useState(false);
+
+  const btnAnim = useRef(new Animated.Value(0)).current;
+
+  // ── Fetch languages
+  useEffect(() => {
+    (async () => {
+      try {
+        const langs = await getLanguages();
+        setLanguages(langs);
+
+        // Restore previously saved language (don't auto-select on fresh load)
+        const saved = await AsyncStorage.getItem('selectedLanguage');
+        if (saved) {
+          const parsed: Language = JSON.parse(saved);
+          const match = langs.find((l) => l.id === parsed.id);
+          if (match) {
+            setSelectedLanguage(match);
+            Animated.spring(btnAnim, { toValue: 1, useNativeDriver: true }).start();
+          }
+        }
+      } catch (e) {
+        console.error('getLanguages error:', e);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [btnAnim]);
+
+  // ── Card press
+  const handleCardPress = useCallback(
+    (lang: Language) => {
+      setSelectedLanguage(lang);
+      Animated.spring(btnAnim, {
+        toValue: 1,
+        useNativeDriver: true,
+        damping: 14,
+        stiffness: 180,
+      }).start();
+    },
+    [btnAnim],
+  );
+
+  // ── GET STARTED
+  const handleContinue = useCallback(async () => {
+    if (!selectedLanguage) return;
+    setSaving(true);
+    try {
+      await AsyncStorage.setItem('selectedLanguage', JSON.stringify(selectedLanguage));
+
+      const deviceDetails = await getDeviceIdentity();
+      const existingTokens = await loadTokens();
+
+      const registerFreshGuest = async () => {
+        const auth = await registerGuestUser({
+          languageId: String(selectedLanguage.id),
+          deviceDetails,
+        });
+        await saveTokens({
+          jwt: auth.jwt,
+          refreshToken: auth.refreshToken,
+          expiresAt: auth.expiresAt,
+          languageId: auth.languageId,
+          user: auth.user,
+        });
+      };
+
+      if (existingTokens?.jwt && existingTokens?.refreshToken) {
+        try {
+          await updatePreferences({ languageId: String(selectedLanguage.id) });
+        } catch (e: any) {
+          const msg = String(e?.message || '');
+          const status = Number(e?.status || e?.response?.status || 0);
+          const shouldReRegister = /user not found/i.test(msg) || status === 401 || status === 404;
+          if (!shouldReRegister) throw e;
+
+          // Stale/invalid user session on backend: reset auth and continue as guest.
+          await clearTokens().catch(() => {});
+          await registerFreshGuest();
+        }
+      } else {
+        await registerFreshGuest();
+      }
+
+      router.replace('/(tabs)');
+    } catch (e) {
+      console.error('handleContinue error:', e);
+    } finally {
+      setSaving(false);
+    }
+  }, [selectedLanguage]);
+
+  // ── Button transform
+  const btnTranslateY = btnAnim.interpolate({
+    inputRange:  [0, 1],
+    outputRange: [120, 0],
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+
+  return (
+    <View style={styles.root}>
+      {/* Header */}
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>Language Settings</Text>
+      </View>
+
+      {/* Hero text */}
+      <View style={styles.hero}>
+        <Text style={styles.heroLine}>
+          {'Choose Your '}
+          <Text style={styles.heroAccent}>Voice</Text>
+        </Text>
+        <Text style={styles.heroSub}>
+          Pick the language you want news delivered in
+        </Text>
+      </View>
+
+      {/* Cards */}
+      {loading ? (
+        <CardSkeleton />
+      ) : (
+        <FlatList
+          data={languages}
+          keyExtractor={(item) => String(item.id)}
+          numColumns={2}
+          columnWrapperStyle={styles.row}
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+          renderItem={({ item }) => (
+            <LanguageCard
+              item={item}
+              selected={selectedLanguage?.id === item.id}
+              onPress={handleCardPress}
+            />
+          )}
+        />
+      )}
+
+      {/* GET STARTED button */}
+      <Animated.View
+        style={[
+          styles.btnWrap,
+          { transform: [{ translateY: btnTranslateY }] },
+        ]}
+        pointerEvents={selectedLanguage ? 'auto' : 'none'}
+      >
+        <Pressable
+          style={({ pressed }) => [styles.btn, pressed && { opacity: 0.85 }]}
+          onPress={handleContinue}
+          disabled={saving}
+        >
+          {saving ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.btnText}>GET STARTED →</Text>
+          )}
+        </Pressable>
+      </Animated.View>
+    </View>
+  );
+}
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
+const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: BG,
+  },
+  header: {
+    paddingTop: 56,
+    paddingHorizontal: Spacing.md,
+    paddingBottom: Spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  headerTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: TEXT_DARK,
+    letterSpacing: 0.4,
+  },
+
+  hero: {
+    paddingHorizontal: Spacing.md,
+    paddingTop: Spacing.sm,
+    paddingBottom: Spacing.lg,
+  },
+  heroLine: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: TEXT_DARK,
+    letterSpacing: -0.5,
+  },
+  heroAccent: {
+    color: '#FF9933',
+    fontStyle: 'italic',
+  },
+  heroSub: {
+    marginTop: 6,
+    fontSize: 14,
+    color: TEXT_MUTED,
+    lineHeight: 20,
+  },
+
+  // Skeleton
+  skeletonGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingHorizontal: Spacing.md,
+    gap: CARD_GAP,
+  },
+  skeletonCard: {
+    width: CARD_W,
+    height: 100,
+    borderRadius: BorderRadius.md,
+    backgroundColor: '#D1D5FF',
+    marginBottom: CARD_GAP,
+  },
+
+  // List
+  listContent: {
+    paddingHorizontal: Spacing.md,
+    paddingBottom: 140,
+  },
+  row: {
+    justifyContent: 'space-between',
+    marginBottom: CARD_GAP,
+  },
+
+  // Card
+  card: {
+    width: CARD_W,
+    minHeight: 156,
+    backgroundColor: CARD_BG,
+    borderRadius: BorderRadius.md,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    padding: 14,
+    alignItems: 'stretch',
+    justifyContent: 'flex-start',
+    overflow: 'hidden',
+    ...Shadows.sm,
+  },
+  cardSelected: {
+    borderColor: SAFFRON,
+    borderWidth: 2,
+    backgroundColor: '#FFF5EB',
+  },
+  watermarkWrap: {
+    position: 'absolute',
+    opacity: 0.06,
+    top: 34,
+    right: -8,
+  },
+  checkBadge: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: SAFFRON,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  paperHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  paperMasthead: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#111827',
+    letterSpacing: 1,
+  },
+  paperDate: {
+    fontSize: 8,
+    color: '#6B7280',
+    fontWeight: '700',
+    letterSpacing: 0.6,
+  },
+  paperRule: {
+    marginTop: 6,
+    borderTopWidth: 1,
+    borderTopColor: '#D1D5DB',
+  },
+  paperColumns: {
+    marginTop: 6,
+    gap: 3,
+  },
+  paperCol: {
+    height: 2,
+    backgroundColor: '#E5E7EB',
+    borderRadius: 2,
+  },
+  paperColShort: {
+    height: 2,
+    width: '70%',
+    backgroundColor: '#E5E7EB',
+    borderRadius: 2,
+  },
+  paperDesk: {
+    marginTop: 7,
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.9,
+    color: '#374151',
+    textAlign: 'center',
+  },
+  cardCode: {
+    marginTop: 8,
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#6B7280',
+    letterSpacing: 0.8,
+    textAlign: 'center',
+  },
+  cardLabel: {
+    marginTop: 5,
+    fontSize: 12,
+    fontWeight: '700',
+    color: TEXT_DARK,
+    textAlign: 'center',
+    letterSpacing: 0.7,
+  },
+  cardLabelSelected: {
+    color: INDIGO_DARK,
+  },
+  cardNative: {
+    marginTop: 5,
+    fontSize: 16,
+    fontWeight: '800',
+    textAlign: 'center',
+    letterSpacing: 0.2,
+  },
+  cardNativeSelected: {
+    textDecorationLine: 'underline',
+  },
+
+  // Button
+  btnWrap: {
+    position: 'absolute',
+    bottom: 36,
+    left: Spacing.md,
+    right: Spacing.md,
+  },
+  btn: {
+    backgroundColor: '#F59E0B',
+    paddingVertical: 16,
+    borderRadius: 50,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#D97706',
+    ...Shadows.md,
+  },
+  btnText: {
+    color: '#1F2937',
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: 1.2,
+  },
+});

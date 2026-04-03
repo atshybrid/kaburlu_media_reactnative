@@ -1,6 +1,7 @@
 import { useThemeColor } from '@/hooks/useThemeColor';
 import { getLockMode, type AppLockMode } from '@/services/appLock';
 import { requestAccountDeletion, requestGdprDataExport } from '@/services/api';
+import { softLogout } from '@/services/auth';
 import { Feather } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system';
 import * as Linking from 'expo-linking';
@@ -17,8 +18,7 @@ export default function PrivacyScreen() {
   const muted = useThemeColor({}, 'muted');
   const router = useRouter();
 
-  // Local UI state (could be wired to real preferences later)
-  const [personalizedAds, setPersonalizedAds] = useState(true);
+  // Local UI state
   const [analytics, setAnalytics] = useState(true);
   const [crashReports, setCrashReports] = useState(true);
   const [lockMode, setLockModeSummary] = useState<AppLockMode>('off');
@@ -54,11 +54,11 @@ export default function PrivacyScreen() {
     }
   };
 
-  // GDPR Article 17 - Request account deletion
+  // GDPR Article 17 - Delete account
   const handleDeleteAccount = () => {
     Alert.alert(
       'Delete Account',
-      'This will permanently delete your account and all associated data. This action cannot be undone.\n\nYou will receive a confirmation once your data has been deleted (within 30 days as required by GDPR).',
+      'This will permanently delete your account and all associated data. This action cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -67,14 +67,16 @@ export default function PrivacyScreen() {
           onPress: async () => {
             try {
               setDeleting(true);
-              const result = await requestAccountDeletion();
+              await requestAccountDeletion();
+              // Immediately log out the user after deletion
+              await softLogout([], undefined);
               Alert.alert(
-                'Request Submitted',
-                result.message || 'Your deletion request has been submitted.',
-                [{ text: 'OK' }]
+                'Account Deleted',
+                'Your account has been deleted successfully.',
+                [{ text: 'OK', onPress: () => router.replace('/auth/login' as any) }]
               );
             } catch (e: any) {
-              Alert.alert('Error', e?.message || 'Could not submit deletion request. Please try again.');
+              Alert.alert('Error', e?.message || 'Could not delete account. Please try again.');
             } finally {
               setDeleting(false);
             }
@@ -98,14 +100,6 @@ export default function PrivacyScreen() {
     {
       title: 'Privacy Controls',
       items: [
-        {
-          icon: 'shield',
-          title: 'Personalized Ads',
-          subtitle: 'Allow using your app activity to personalize ads',
-          right: (
-            <Switch value={personalizedAds} onValueChange={setPersonalizedAds} />
-          ),
-        },
         {
           icon: 'bar-chart-2',
           title: 'Analytics',
@@ -174,7 +168,7 @@ export default function PrivacyScreen() {
         },
       ],
     },
-  ]), [personalizedAds, analytics, crashReports, lockMode, router, exporting, deleting, handleExportData, handleDeleteAccount]);
+  ]), [analytics, crashReports, lockMode, router, exporting, deleting, handleExportData, handleDeleteAccount]);
 
   return (
     <View style={[styles.safe, { backgroundColor: bg }]}>

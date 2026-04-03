@@ -7,6 +7,7 @@ import ShareableArticleImage, {
     ShareableArticleData,
     ShareableArticleImageRef,
 } from '@/components/ShareableArticleImage';
+import KaburluEnglishLogo from '@/assets/spashlogos/english.svg';
 import { loadTokens } from '@/services/auth';
 import { uploadMedia } from '@/services/api';
 import {
@@ -14,11 +15,14 @@ import {
     getNewspaperArticle,
     rejectNewspaperArticle,
     updateNewspaperArticle,
+    deleteNewspaperArticle,
+    setPriorityNewspaperArticle,
     type NewspaperArticle,
     type UpdateNewspaperArticlePayload,
 } from '@/services/tenantAdmin';
 
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
@@ -42,8 +46,11 @@ import {
     TextInput,
     TouchableOpacity,
     View,
+    useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import ViewShot from 'react-native-view-shot';
+import RNShare from 'react-native-share';
 
 // Session type from login response
 type SessionData = {
@@ -204,10 +211,21 @@ const STATUS_COLORS: Record<string, { bg: string; text: string; label: string; t
   ARCHIVED: { bg: '#E5E7EB', text: '#6B7280', label: 'Archived', teluguLabel: 'ఆర్కైవ్', icon: 'archive-outline' },
 };
 
+// ── Newspaper clip layout helpers ──────────────────────────────────────────────
+const NC_BULLET_COLORS = ['#C41D22', '#DD6B20', '#1A56DB', '#0F766E', '#6B46C1', '#B45309'];
+function getClipConfig(wordCount: number): { columns: number } {
+  if (wordCount < 80)  return { columns: 1 };
+  if (wordCount < 200) return { columns: 2 };
+  if (wordCount < 400) return { columns: 3 };
+  return { columns: 4 };
+}
+
 export default function TenantArticleDetail() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, source } = useLocalSearchParams<{ id: string; source?: string }>();
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
+  const showLegacyBottomActions = source === 'daily-newspaper' || source === 'news-approval';
 
   const [loading, setLoading] = useState(true);
   const [article, setArticle] = useState<NewspaperArticle | null>(null);
@@ -229,7 +247,7 @@ export default function TenantArticleDetail() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   
   // Approve/Reject loading
-  const [actionLoading, setActionLoading] = useState<'approve' | 'reject' | null>(null);
+  const [actionLoading, setActionLoading] = useState<'approve' | 'reject' | 'priority' | null>(null);
 
   // Session data for share
   const [session, setSession] = useState<SessionData | null>(null);
@@ -238,7 +256,12 @@ export default function TenantArticleDetail() {
   // Share as image
   const shareImageRef = useRef<ShareableArticleImageRef>(null);
   const [shareArticle, setShareArticle] = useState<ShareableArticleData | null>(null);
-  
+
+  // Newspaper cutting share
+  const [showNpShareModal, setShowNpShareModal] = useState(false);
+  const [npSharingInProgress, setNpSharingInProgress] = useState(false);
+  const npShotRef = useRef<any>(null);
+
   // Toast for copy feedback
   const [showCopiedToast, setShowCopiedToast] = useState(false);
 
@@ -361,9 +384,9 @@ export default function TenantArticleDetail() {
   const handleShare = async () => {
     const isPublished = article?.status === 'PUBLISHED';
 
-    // For published articles, directly share as image
+    // For published articles, open newspaper clipping share preview
     if (isPublished) {
-      handleShareAsImage();
+      handleOpenNpShare();
       return;
     }
 
@@ -552,9 +575,9 @@ export default function TenantArticleDetail() {
     setDeleting(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     try {
-      await rejectNewspaperArticle(id); // Use reject as delete for tenant admin
+      await deleteNewspaperArticle(id);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      Alert.alert('తొలగించబడింది ✅', 'ఆర్టికల్ తిరస్కరించబడింది', [
+      Alert.alert('తొలగించబడింది ✅', 'ఆర్టికల్ తొలగించబడింది', [
         { text: 'సరే', onPress: () => router.back() },
       ]);
     } catch (e: any) {
@@ -567,6 +590,57 @@ export default function TenantArticleDetail() {
     }
   };
 
+  // Set top priority
+  const handleSetPriority = async () => {
+    if (!id || !article) return;
+    setActionLoading('priority');
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    try {
+      await setPriorityNewspaperArticle(id, 'top');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert('విజయం! ✅', 'ఆర్టికల్ టాప్ ప్రయారిటీకి సెట్ అయింది');
+    } catch (e: any) {
+      Alert.alert('లోపం', e?.message || 'ప్రయారిటీ సెట్ చేయడం విఫలమైంది');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // Newspaper cutting share
+  const handleOpenNpShare = () => {
+    setShowNpShareModal(true);
+  };
+
+  const handleNpCapture = async () => {
+    if (!npShotRef.current || !article) return;
+    setNpSharingInProgress(true);
+    try {
+      const uri = await npShotRef.current.capture();
+      const art = article as any;
+      const shareUrl = art.shortId
+        ? `https://s.kaburlumedia.com/${art.shortId}`
+        : art.webArticleUrl
+          ? art.webArticleUrl
+          : `https://kaburlumedia.com`;
+      const message = `${article.title}\n\n${shareUrl}`;
+      try {
+        await RNShare.open({
+          title: article.title,
+          message,
+          url: `file://${uri}`,
+          type: 'image/png',
+          failOnCancel: false,
+        });
+      } catch {
+        await Share.share({ title: article.title, message });
+      }
+    } catch {
+      Alert.alert('లోపం', 'షేర్ ఇమేజ్ రెడీ చేయడంలో విఫలమైంది');
+    } finally {
+      setNpSharingInProgress(false);
+    }
+  };
+
   // Confirm delete
   const confirmDelete = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -574,6 +648,183 @@ export default function TenantArticleDetail() {
   };
 
   const statusColors = STATUS_COLORS[article?.status || 'DRAFT'];
+
+  // ── Newspaper Cutting Preview (Prajasakti-style) ──────────────────────────
+  const NewspaperCuttingView = ({ art, width }: { art: NewspaperArticle; width: number }) => {
+    const a = art as any;
+    const today = new Date().toLocaleDateString('en-IN', {
+      day: '2-digit', month: 'short', year: 'numeric',
+    });
+
+    // Body text → word count → layout config
+    const rawBody = ((a.content || '') + ' ' + (a.lead || '')).trim();
+    const normalizedBody = rawBody.replace(/\s+/g, ' ');
+    const wc = normalizedBody.split(/\s+/).filter(Boolean).length;
+
+    // Sub-headline bullets — only use actual points from API, no heading/subTitle fallback
+    const points: string[] = Array.isArray(art.points) && art.points.length > 0
+      ? art.points : [];
+
+    // Image
+    const imgUri = art.coverImageUrl
+      || a.baseArticle?.contentJson?.raw?.coverImageUrl
+      || a.baseArticle?.contentJson?.raw?.images?.[0]
+      || a.webArticle?.thumbnailUrl
+      || '';
+    const imageCaption = a.mediaMeta?.[0]?.caption || a.mediaCaptions?.[0] || a.imageCaption || a.caption || '';
+    const hasImage = !!imgUri;
+
+    // Dateline, edition, reporter
+    const dateline = art.dateline || '';
+    const placeName = art.placeName || a.author?.profile?.placeName || '';
+    const edition = placeName || 'Main';
+    const reporterName = a.author?.profile?.fullName || a.reporterName || '';
+
+    // ── Layout decision ────────────────────────────────────────────────────
+    // Always use 2-column layout when article is long enough.
+    // Col 1: text (full height). Col 2: image at top + text below.
+    // Words split: col2 has image taking space so col1 gets ~58%, col2 text ~42%.
+    const use2Col = wc >= 40;
+    const maxBodyChars = 2800;
+    const bodyWords = normalizedBody.slice(0, maxBodyChars).split(/\s+/).filter(Boolean);
+    const col1WordCount = use2Col ? Math.ceil(bodyWords.length * 0.58) : bodyWords.length;
+    const col1Text = bodyWords.slice(0, col1WordCount).join(' ');
+    const col2Text = use2Col ? bodyWords.slice(col1WordCount).join(' ') : '';
+
+    // ── Title: split at first colon into main + sub-headline ─────────────────────
+    const titleParts = (art.title || '').split(':');
+    const mainTitle = titleParts[0].trim();
+    const subHeadline = titleParts.length > 1 ? titleParts.slice(1).join(':').trim() : '';
+
+    // ── Font sizes (character-length based, reliable on Android) ─────────────────
+    const titleLen = mainTitle.length;
+    const headlineFont =
+      titleLen <= 12 ? 48 :
+      titleLen <= 20 ? 40 :
+      titleLen <= 32 ? 32 :
+      titleLen <= 50 ? 26 :
+      titleLen <= 70 ? 22 : 18;
+    const bodyFont = 12;
+
+    return (
+      <View style={[ncStyles.container, { width }]}>
+        {/* ── Scissor top ── */}
+        <View style={ncStyles.scissorRow}>
+          <Text style={ncStyles.scissorIcon}>✂</Text>
+          <View style={ncStyles.scissorDash} />
+        </View>
+
+        {/* ── Masthead: logo | spacer | date+edition ── */}
+        <View style={ncStyles.masthead}>
+          {session?.domainSettings?.data?.branding?.logoUrl ? (
+            <Image
+              source={{ uri: session.domainSettings.data.branding.logoUrl }}
+              style={{ width: 100, height: 36 }}
+              contentFit="contain"
+            />
+          ) : (
+            <KaburluEnglishLogo width={100} height={Math.round(100 * 272 / 512)} />
+          )}
+          <View style={{ flex: 1 }} />
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text style={ncStyles.mastDate}>{today}</Text>
+            <Text style={ncStyles.mastEdition}>{edition} Edition</Text>
+          </View>
+        </View>
+
+        {/* ── Thick red rule ── */}
+        <View style={ncStyles.mastheadLine} />
+
+        {/* ── Headline ── */}
+        <View style={ncStyles.headlineArea}>
+          <Text
+            style={[ncStyles.headline, { fontSize: headlineFont, lineHeight: Math.round(headlineFont * 1.15) }]}
+          >
+            {mainTitle}
+          </Text>
+          {subHeadline ? (
+            <Text style={[ncStyles.subHeadline, { fontSize: Math.max(13, Math.round(headlineFont * 0.55)) }]}>
+              {subHeadline}
+            </Text>
+          ) : null}
+        </View>
+
+        {/* ── Thin rule before body ── */}
+        <View style={ncStyles.bodyDivider} />
+
+        {/* ── Body ── */}
+        {use2Col ? (
+          <View style={ncStyles.bodyRow}>
+            {/* Column 1: bullet points box (if any) + text */}
+            <View style={{ flex: 1, minWidth: 0, paddingHorizontal: 7, paddingVertical: 8 }}>
+              {points.length > 0 && (
+                <View style={ncStyles.pointsBox}>
+                  {points.slice(0, 4).map((pt, idx) => (
+                    <View key={idx} style={ncStyles.bulletRow}>
+                      <Text style={[ncStyles.bulletDot, { color: NC_BULLET_COLORS[idx % NC_BULLET_COLORS.length] }]}>●</Text>
+                      <Text style={[ncStyles.bulletText, { fontSize: bodyFont }]}>{pt}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+              <Text style={ncStyles.bodyText}>
+                {dateline ? <Text style={ncStyles.dateline}>({dateline}) </Text> : null}
+                {col1Text}
+              </Text>
+            </View>
+
+            {/* Column 2: image at top, text below */}
+            <View style={{ flex: 1, minWidth: 0, paddingLeft: 4, paddingRight: 7, paddingVertical: 4, borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: '#D1D5DB' }}>
+              {hasImage && (
+                <Image
+                  source={{ uri: imgUri }}
+                  style={{ width: '100%', aspectRatio: 16 / 9 }}
+                  contentFit="cover"
+                />
+              )}
+              {imageCaption ? (
+                <Text style={[ncStyles.caption, { fontSize: bodyFont - 1, marginBottom: 4 }]}>{imageCaption}</Text>
+              ) : null}
+              {col2Text ? (
+                <Text style={[ncStyles.bodyText, { marginTop: hasImage ? 5 : 0 }]}>
+                  {col2Text}
+                </Text>
+              ) : null}
+            </View>
+          </View>
+        ) : (
+          // Short article: image full-width, single text block below
+          <View>
+            {hasImage && (
+              <Image source={{ uri: imgUri }} style={{ width: '100%', aspectRatio: 16 / 9 }} contentFit="cover" />
+            )}
+            {imageCaption ? (
+              <Text style={[ncStyles.caption, { fontSize: bodyFont - 1, marginHorizontal: 8, marginTop: 4 }]}>{imageCaption}</Text>
+            ) : null}
+            <Text style={[ncStyles.bodyText, { margin: 8 }]}>
+              {dateline ? <Text style={ncStyles.dateline}>({dateline}) </Text> : null}
+              {col1Text}
+            </Text>
+          </View>
+        )}
+
+        {/* ── Bottom info bar ── */}
+        <View style={ncStyles.bottomBar}>
+          <Text style={ncStyles.bottomBarText}>
+            {`Date: ${today}  |  Edition: ${edition}`}
+            {reporterName ? `  |  Reporter: ${reporterName}` : ''}
+          </Text>
+          <Text style={ncStyles.bottomBarText}>{'Source: kaburlumedia.com'}</Text>
+        </View>
+
+        {/* ── Scissor bottom ── */}
+        <View style={[ncStyles.scissorRow, { flexDirection: 'row-reverse' }]}>
+          <Text style={ncStyles.scissorIcon}>✂</Text>
+          <View style={ncStyles.scissorDash} />
+        </View>
+      </View>
+    );
+  };
 
   // Loading state - show skeleton
   if (loading) {
@@ -645,7 +896,7 @@ export default function TenantArticleDetail() {
         </Text>
         <View style={styles.headerActions}>
           {!editMode && article?.status === 'PUBLISHED' && (
-            <TouchableOpacity onPress={handleShareAsImage} style={styles.headerShareBtn}>
+            <TouchableOpacity onPress={handleOpenNpShare} style={styles.headerShareBtn}>
               <Ionicons name="share-social" size={18} color="#FFF" />
               <Text style={styles.headerShareText}>షేర్</Text>
             </TouchableOpacity>
@@ -1006,48 +1257,140 @@ export default function TenantArticleDetail() {
               </View>
             )}
 
-            {/* Row 2: Edit and Delete */}
-            <View style={styles.actionBtnRow}>
-              <TouchableOpacity
-                style={[styles.actionBtn, styles.deleteBtn]}
-                onPress={confirmDelete}
-              >
-                <Ionicons name="trash-outline" size={20} color="#DC2626" />
-                <Text style={styles.deleteBtnText}>తొలగించు</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity
-                style={[styles.actionBtn, styles.editBtn]}
-                onPress={handleStartEdit}
-              >
-                <Feather name="edit-2" size={18} color="#FFF" />
-                <Text style={styles.editBtnText}>ఎడిట్</Text>
-              </TouchableOpacity>
-            </View>
-            
-            {/* Row 3: Web view and Share (only for published) */}
-            {article?.status === 'PUBLISHED' && (
-              <View style={styles.actionBtnRow}>
-                <TouchableOpacity
-                  style={[styles.actionBtn, styles.webBtn]}
-                  onPress={handleOpenWeb}
-                >
-                  <Ionicons name="globe-outline" size={20} color="#FFF" />
-                  <Text style={styles.webBtnText}>వెబ్‌లో చూడండి</Text>
+            {/* Row 2: Newspaper actions — Share / Priority / Edit / Delete */}
+            {showLegacyBottomActions ? (
+              <View style={styles.actionBtnContainer}>
+                <View style={styles.actionBtnRow}>
+                  <TouchableOpacity
+                    style={[styles.actionBtn, styles.editBtn]}
+                    onPress={handleStartEdit}
+                  >
+                    <Feather name="edit-2" size={18} color="#FFF" />
+                    <Text style={styles.editBtnText}>ఎడిట్</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.actionBtn, styles.shareActionBtn]}
+                    onPress={handleShareAsImage}
+                  >
+                    <Ionicons name="image-outline" size={20} color="#FFF" />
+                    <Text style={styles.shareBtnText}>ఇమేజ్ షేర్</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.actionBtnRow}>
+                  <TouchableOpacity
+                    style={[styles.actionBtn, styles.deleteBtn]}
+                    onPress={confirmDelete}
+                  >
+                    <Ionicons name="trash-outline" size={20} color="#DC2626" />
+                    <Text style={styles.deleteBtnText}>డిలీట్</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : (
+              <View style={styles.npActionRow}>
+                {/* Share (newspaper cutting) */}
+                <TouchableOpacity style={styles.npBtn} onPress={handleOpenNpShare}>
+                  <View style={[styles.npBtnIcon, { backgroundColor: '#EFF6FF' }]}>
+                    <MaterialIcons name="newspaper" size={22} color="#3B82F6" />
+                  </View>
+                  <Text style={[styles.npBtnLabel, { color: '#3B82F6' }]}>షేర్</Text>
                 </TouchableOpacity>
-                
+
+                {/* Set Priority */}
                 <TouchableOpacity
-                  style={[styles.actionBtn, styles.shareActionBtn]}
-                  onPress={handleShare}
+                  style={styles.npBtn}
+                  onPress={handleSetPriority}
+                  disabled={actionLoading === 'priority'}
                 >
-                  <Ionicons name="share-social" size={20} color="#FFF" />
-                  <Text style={styles.shareBtnText}>ఇమేజ్ షేర్</Text>
+                  <View style={[styles.npBtnIcon, { backgroundColor: '#FFFBEB' }]}>
+                    {actionLoading === 'priority' ? (
+                      <ActivityIndicator size="small" color="#F59E0B" />
+                    ) : (
+                      <MaterialIcons name="vertical-align-top" size={22} color="#F59E0B" />
+                    )}
+                  </View>
+                  <Text style={[styles.npBtnLabel, { color: '#F59E0B' }]}>టాప్</Text>
+                </TouchableOpacity>
+
+                {/* Edit */}
+                <TouchableOpacity style={styles.npBtn} onPress={handleStartEdit}>
+                  <View style={[styles.npBtnIcon, { backgroundColor: '#ECFDF5' }]}>
+                    <Feather name="edit-2" size={20} color="#10B981" />
+                  </View>
+                  <Text style={[styles.npBtnLabel, { color: '#10B981' }]}>ఎడిట్</Text>
+                </TouchableOpacity>
+
+                {/* Delete */}
+                <TouchableOpacity style={styles.npBtn} onPress={confirmDelete}>
+                  <View style={[styles.npBtnIcon, { backgroundColor: '#FEF2F2' }]}>
+                    <Ionicons name="trash-outline" size={22} color="#DC2626" />
+                  </View>
+                  <Text style={[styles.npBtnLabel, { color: '#DC2626' }]}>డిలీట్</Text>
                 </TouchableOpacity>
               </View>
             )}
           </View>
         )}
       </View>
+
+      {/* Newspaper Cutting Share Modal */}
+      <Modal
+        visible={showNpShareModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowNpShareModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          {/* Full-width sheet for newspaper clip -- overrides the 340px maxWidth dialog default */}
+          <View style={[
+            styles.modalContent,
+            {
+              padding: 0,
+              overflow: 'hidden',
+              maxHeight: '92%',
+              width: screenWidth - 32,
+              maxWidth: screenWidth - 32,
+              alignItems: 'stretch',
+            },
+          ]}>
+            <View style={{ padding: 14, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' }}>
+              <Text style={[styles.modalTitle, { marginBottom: 0 }]}>📰 న్యూస్‌పేపర్ షేర్</Text>
+            </View>
+            <ScrollView showsVerticalScrollIndicator={false} style={{ flexGrow: 0 }}>
+              {article && (
+                <ViewShot ref={npShotRef} options={{ format: 'png', quality: 0.95 }}>
+                  <NewspaperCuttingView art={article} width={screenWidth - 32} />
+                </ViewShot>
+              )}
+            </ScrollView>
+            <View style={{ flexDirection: 'row', gap: 12, padding: 16, borderTopWidth: 1, borderTopColor: '#F3F4F6' }}>
+              <TouchableOpacity
+                style={[styles.modalBtn, styles.modalCancelBtn, { flex: 1 }]}
+                onPress={() => setShowNpShareModal(false)}
+                disabled={npSharingInProgress}
+              >
+                <Text style={styles.modalCancelText}>రద్దు</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalBtn, styles.approveBtn, { flex: 2, opacity: npSharingInProgress ? 0.6 : 1 }]}
+                onPress={handleNpCapture}
+                disabled={npSharingInProgress}
+              >
+                {npSharingInProgress ? (
+                  <ActivityIndicator size="small" color="#FFF" />
+                ) : (
+                  <>
+                    <Ionicons name="share-social" size={18} color="#FFF" />
+                    <Text style={styles.approveBtnText}>ఇప్పుడు షేర్ చేయండి</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Delete Confirmation Modal */}
       <Modal
@@ -1772,5 +2115,223 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontSize: 14,
     fontWeight: '600',
+  },
+
+  /* Newspaper-style 4-icon action row */
+  npActionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingVertical: 8,
+    gap: 8,
+  },
+  npBtn: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 6,
+  },
+  npBtnIcon: {
+    width: 50,
+    height: 50,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  npBtnLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+});
+
+// ── Newspaper Clip StyleSheet (Prajasakti-inspired) ──────────────────────────
+const ncStyles = StyleSheet.create({
+  // ── Outer container ────────────────────────────────────────────────────────
+  container: {
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+    borderRadius: 4,
+    // width set dynamically; height determined by content
+  },
+
+  // ── Scissor edges ──────────────────────────────────────────────────────────
+  scissorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 6,
+    paddingVertical: 5,
+  },
+  scissorIcon: {
+    fontSize: 14,
+    color: '#9CA3AF',
+    marginHorizontal: 4,
+  },
+  scissorDash: {
+    flex: 1,
+    height: 1,
+    borderStyle: 'dashed',
+    borderColor: '#9CA3AF',
+    borderWidth: 1,
+  },
+
+  // ── Masthead ───────────────────────────────────────────────────────────────
+  masthead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  mastheadCenter: {
+    flex: 1,
+    paddingHorizontal: 8,
+  },
+  mastheadTagline: {
+    fontSize: 8,
+    color: '#6B7280',
+    fontStyle: 'italic',
+  },
+  mastheadRight: {
+    alignItems: 'flex-end',
+  },
+  mastDate: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  mastEdition: {
+    fontSize: 8,
+    color: '#6B7280',
+    marginTop: 1,
+  },
+  // Thick red accent line below masthead (like Prajasakti)
+  mastheadLine: {
+    height: 4,
+    backgroundColor: '#C41D22',
+  },
+
+  // ── Headline ───────────────────────────────────────────────────────────────
+  headlineArea: {
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 6,
+    backgroundColor: '#FFFFFF',
+  },
+  headline: {
+    fontWeight: 'bold',
+    color: '#111111',
+    letterSpacing: -0.5,
+    textAlign: 'center',
+  },
+  subHeadline: {
+    color: '#374151',
+    textAlign: 'center',
+    fontWeight: '600',
+    letterSpacing: -0.3,
+    marginTop: 4,
+  },
+
+  // ── Points box (top of column 1 inside body) ──────────────────────────────
+  pointsBox: {
+    backgroundColor: '#FFF8E7',
+    borderLeftWidth: 3,
+    borderLeftColor: '#C41D22',
+    paddingHorizontal: 7,
+    paddingVertical: 6,
+    marginBottom: 8,
+    gap: 4,
+  },
+
+  // ── Sub-headline bullets (unused fallback) ─────────────────────────────────
+  bulletsArea: {
+    paddingHorizontal: 12,
+    paddingBottom: 8,
+    backgroundColor: '#FFFFFF',
+    gap: 3,
+  },
+  bulletRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+    paddingVertical: 1,
+  },
+  bulletDot: {
+    fontSize: 9,
+    lineHeight: 18,
+    marginTop: 1,
+  },
+  bulletText: {
+    flex: 1,
+    fontWeight: '600',
+    color: '#1F2937',
+    lineHeight: 18,
+  },
+
+  // ── Section divider ────────────────────────────────────────────────────────
+  bodyDivider: {
+    height: 1,
+    backgroundColor: '#D1D5DB',
+    marginHorizontal: 12,
+    marginBottom: 2,
+  },
+
+  // ── Body area ─────────────────────────────────────────────────────────────
+  body: {
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+  },
+  bodyRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+  },
+  textCol: {
+    paddingHorizontal: 8,
+    paddingVertical: 10,
+  },
+  imageCol: {
+    paddingHorizontal: 4,
+    paddingVertical: 10,
+    alignItems: 'flex-start',
+  },
+  // Thin vertical rule between columns
+  colDivider: {
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: '#D1D5DB',
+    alignSelf: 'stretch',
+  },
+  // Inner column divider (within text zone)
+  innerColDivider: {
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: '#D1D5DB',
+    alignSelf: 'stretch',
+  },
+  bodyText: {
+    color: '#374151',
+    lineHeight: 17,
+    textAlign: 'justify',
+    letterSpacing: -0.3,
+    fontSize: 11,
+  },
+  dateline: {
+    fontWeight: '700',
+    fontStyle: 'italic',
+    color: '#1F2937',
+  },
+  caption: {
+    color: '#6B7280',
+    fontStyle: 'italic',
+    lineHeight: 14,
+    marginTop: 4,
+  },
+
+  // ── Bottom info bar ────────────────────────────────────────────────────────
+  bottomBar: {
+    backgroundColor: '#1F2937',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  bottomBarText: {
+    fontSize: 9,
+    color: '#D1D5DB',
+    lineHeight: 14,
   },
 });

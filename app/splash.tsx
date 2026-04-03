@@ -12,6 +12,21 @@ export default function SplashScreen() {
   const targetRouteRef = useRef<'/news' | '/language' | null>(null);
   const navigatedRef = useRef(false);
 
+  const decideRouteFromLocalState = async (): Promise<'/news' | '/language'> => {
+    const tokens = await loadTokens().catch(() => null);
+    const valid = !!(tokens && tokens.expiresAt && !isExpired(tokens.expiresAt));
+
+    let storedLanguage: any = null;
+    try {
+      const langRaw = await AsyncStorage.getItem('selectedLanguage');
+      storedLanguage = safeJsonParse(langRaw, null);
+    } catch {
+      storedLanguage = null;
+    }
+
+    return (valid || storedLanguage?.id || storedLanguage?.code) ? '/news' : '/language';
+  };
+
   // Decide route fast (no network). We'll navigate after the SVG intro completes.
   useEffect(() => {
     (async () => {
@@ -26,7 +41,7 @@ export default function SplashScreen() {
 
         const looksLikeLangCode = (v: string) => /^[a-z]{2,3}(-[a-z0-9]{2,8})?$/i.test(String(v || '').trim());
         
-        // Determine route purely from local state: tokens and stored language
+        // Determine route from local state first (never block on network prefetch)
         let tokens: Tokens | null = null;
         try {
           tokens = await loadTokens();
@@ -34,7 +49,7 @@ export default function SplashScreen() {
           console.warn('[SPLASH] Token load failed:', e);
           tokens = null;
         }
-        
+
         const valid = !!(tokens && tokens.expiresAt && !isExpired(tokens.expiresAt));
 
         if (valid && tokens?.user?.role === 'TENANT_ADMIN') {
@@ -51,37 +66,33 @@ export default function SplashScreen() {
           console.warn('[SPLASH] Language load failed:', e);
         }
 
-        // Prefetch shortnews (public API) while splash is visible.
-        // This warms the AsyncStorage cache used by getNews() so /news doesn't “wait after splash”.
-        // CRITICAL: Wrapped in try-catch to prevent splash crash on network failure
-        try {
-          const storedCode = String(storedLanguage?.code || '').trim();
-          const storedId = String(storedLanguage?.id || '').trim();
-          const tokenLang = String(tokens?.languageId || '').trim();
-          const preferred = (looksLikeLangCode(storedCode) && storedCode)
-            || (looksLikeLangCode(storedId) && storedId)
-            || (looksLikeLangCode(tokenLang) && tokenLang)
-            || 'en';
-          await refreshLanguageDependentCaches(preferred);
-        } catch (e) {
-          // Network failure is OK - app will load cached data or show empty state
-          console.warn('[SPLASH] Cache prefetch failed (OK):', e);
-          // Try fallback to English
-          try {
-            await refreshLanguageDependentCaches('en');
-          } catch {
-            // Even fallback failed - that's OK, we'll show empty state
-            console.warn('[SPLASH] Fallback cache failed - will use empty state');
-          }
-        }
-
         // GUEST MODE: Allow users to proceed even without auth or language
         // This prevents "stuck on splash" crashes during Google Play review
-        if (valid || storedLanguage?.id || storedLanguage?.code) {
-          targetRouteRef.current = '/news';
-        } else {
-          targetRouteRef.current = '/language';
-        }
+        targetRouteRef.current = (valid || storedLanguage?.id || storedLanguage?.code)
+          ? '/news'
+          : '/language';
+
+        // Prefetch shortnews while splash is visible, but do not block route decision.
+        // Fire-and-forget so slow network cannot force fallback navigation.
+        void (async () => {
+          try {
+            const storedCode = String(storedLanguage?.code || '').trim();
+            const storedId = String(storedLanguage?.id || '').trim();
+            const tokenLang = String(tokens?.languageId || '').trim();
+            const preferred = (looksLikeLangCode(storedCode) && storedCode)
+              || (looksLikeLangCode(storedId) && storedId)
+              || (looksLikeLangCode(tokenLang) && tokenLang)
+              || 'en';
+            await refreshLanguageDependentCaches(preferred);
+          } catch (e) {
+            console.warn('[SPLASH] Cache prefetch failed (OK):', e);
+            try {
+              await refreshLanguageDependentCaches('en');
+            } catch {
+              console.warn('[SPLASH] Fallback cache failed - will use empty state');
+            }
+          }
+        })();
       } catch (e) {
         // Complete failure - still allow app to open
         // Guest users should see language selection
@@ -111,8 +122,11 @@ export default function SplashScreen() {
             } catch (e) {
               console.warn('[SPLASH] Hide splash failed:', e);
             }
-            // Guaranteed navigation - always proceed even if target is null
-            router.replace(targetRouteRef.current || '/language');
+            // Re-check local state if intro finished before async bootstrap route assignment.
+            if (!targetRouteRef.current) {
+              targetRouteRef.current = await decideRouteFromLocalState();
+            }
+            router.replace(targetRouteRef.current);
           })();
         }}
       />

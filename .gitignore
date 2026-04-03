@@ -75,3 +75,10 @@ android/app/keystore.properties
 android/key.properties
 android/app/*.jks
 android/app/*upload*.*
+
+# Build artifacts (large binaries — use EAS/Play Console instead)
+*.aab
+*.apk
+
+# Large sample audio assets
+assets/audio/sample_voice/

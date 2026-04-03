@@ -325,7 +325,10 @@ export default function NewsApprovalScreen() {
   // Open article detail page
   const openPreview = useCallback((article: NewspaperArticle) => {
     console.log('[NewsApproval] Opening article detail:', article.id);
-    router.push(`/tenant/article/${article.id}`);
+    router.push({
+      pathname: '/tenant/article/[id]',
+      params: { id: article.id, source: 'news-approval' },
+    } as any);
   }, [router]);
 
   // Share article as image

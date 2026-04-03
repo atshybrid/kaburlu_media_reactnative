@@ -13,9 +13,10 @@ import { useTabBarVisibility } from '@/context/TabBarVisibilityContext';
 import { useAutoHideBottomBar } from '@/hooks/useAutoHideBottomBar';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { useReaction } from '@/hooks/useReaction';
+import { buildArticleSharePayload } from '@/services/shareLinks';
+import ImageWithSkeleton from '@/components/ui/ImageWithSkeleton';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
@@ -116,14 +117,11 @@ const PhotoEssayLayout: ArticleLayoutComponent = ({ article, index, totalArticle
   const onShare = async () => {
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      // Use short URL if available, fallback to full URL
-      const shareUrl = article.shortId 
-        ? `https://s.kaburlumedia.com/${article.shortId}`
-        : `https://kaburlumedia.com/article/${article.id}`;
+      const payload = buildArticleSharePayload(article);
       await Share.share({
-        title: article.title,
-        message: `${article.title}\n\nRead more: ${shareUrl}`,
-        url: shareUrl,
+        title: payload.title,
+        message: payload.message,
+        url: payload.url,
       });
     } catch (error) {
       console.warn('Share failed:', error);
@@ -146,7 +144,7 @@ const PhotoEssayLayout: ArticleLayoutComponent = ({ article, index, totalArticle
           renderItem={({ item }) => (
             <View style={styles.heroImageWrapper}>
               {item ? (
-                <Image source={{ uri: item }} style={styles.heroImage} contentFit="cover" />
+                <ImageWithSkeleton uri={item} style={styles.heroImage} contentFit="cover" />
               ) : (
                 <View style={[styles.heroImage, { backgroundColor: isDark ? '#333' : '#ccc' }]} />
               )}

@@ -1,4 +1,4 @@
-import { Image } from 'expo-image';
+import ImageWithSkeleton from '@/components/ui/ImageWithSkeleton';
 import { StyleSheet, Text, View } from 'react-native';
 import type { ArticleLayoutComponent } from './types';
 
@@ -11,7 +11,7 @@ const MinimalTitleFirstLayout: ArticleLayoutComponent = ({ article }) => {
           <Text style={styles.meta}>{article.author.name} • {new Date(article.createdAt || Date.now()).toLocaleDateString()}</Text>
         ) : null}
       </View>
-      <Image source={{ uri: article.image || article.images?.[0] || '' }} style={styles.thumb} contentFit="cover" />
+      <ImageWithSkeleton uri={article.image || article.images?.[0] || ''} style={styles.thumb} contentFit="cover" />
       {article.body ? (
         <Text style={styles.body} numberOfLines={12}>{article.body}</Text>
       ) : null}

@@ -6,7 +6,11 @@ import { Feather } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import Constants from 'expo-constants';
 import { useEffect, useState } from 'react';
-import { Alert, Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
+import { Alert, Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+
+const CONTACT_EMAIL = 'team@kaburlutoday.com';
+const CONTACT_PHONE = '+919118191991';
+const CONTACT_PHONE_DISPLAY = '+91 9118191991';
 
 export default function SupportScreen() {
   const bg = useThemeColor({}, 'background');
@@ -32,7 +36,7 @@ export default function SupportScreen() {
   const buildCode = (Constants as any)?.expoConfig?.android?.versionCode || (Constants as any)?.nativeBuildVersion || '';
 
   const sendEmail = (kind: 'support' | 'feature' | 'issue' = 'support') => {
-    const to = 'info@hrcitodaynews.in';
+    const to = CONTACT_EMAIL;
     const subject = encodeURIComponent(
       `Kaburlu ${kind === 'feature' ? 'Feature Request' : kind === 'issue' ? 'Issue Report' : 'Support'} — v${versionName} (${Platform.OS}${buildCode ? `, ${buildCode}` : ''})`
     );
@@ -99,7 +103,60 @@ export default function SupportScreen() {
             <Text style={[styles.subtitle, { color: muted }]}>We’re here to help — reach us anytime</Text>
           </View>
         </View>
+        {/* ── Contact Us — prominently shown per Google Play News Policy ── */}
+        <View style={[styles.contactCard, { backgroundColor: '#0F172A', borderColor: '#1E293B' }]}>
+          <Text style={styles.contactCardTitle}>Contact Us</Text>
+          <Text style={styles.contactCardSub}>Kaburlu Media — reach us directly</Text>
 
+          <TouchableOpacity
+            style={styles.contactRow}
+            onPress={() => Linking.openURL(`mailto:${CONTACT_EMAIL}`).catch(() => {})}
+            activeOpacity={0.75}
+          >
+            <View style={styles.contactIconWrap}>
+              <Feather name="mail" size={18} color="#60A5FA" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.contactLabel}>Email</Text>
+              <Text style={styles.contactValue}>{CONTACT_EMAIL}</Text>
+            </View>
+            <Feather name="chevron-right" size={16} color="#64748B" />
+          </TouchableOpacity>
+
+          <View style={styles.contactDivider} />
+
+          <TouchableOpacity
+            style={styles.contactRow}
+            onPress={() => Linking.openURL(`tel:${CONTACT_PHONE}`).catch(() => {})}
+            activeOpacity={0.75}
+          >
+            <View style={styles.contactIconWrap}>
+              <Feather name="phone" size={18} color="#34D399" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.contactLabel}>Phone</Text>
+              <Text style={styles.contactValue}>{CONTACT_PHONE_DISPLAY}</Text>
+            </View>
+            <Feather name="chevron-right" size={16} color="#64748B" />
+          </TouchableOpacity>
+
+          <View style={styles.contactDivider} />
+
+          <TouchableOpacity
+            style={styles.contactRow}
+            onPress={() => Linking.openURL('https://www.kaburlutoday.com/contact').catch(() => {})}
+            activeOpacity={0.75}
+          >
+            <View style={styles.contactIconWrap}>
+              <Feather name="globe" size={18} color="#A78BFA" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.contactLabel}>Website</Text>
+              <Text style={styles.contactValue}>www.kaburlutoday.com/contact</Text>
+            </View>
+            <Feather name="chevron-right" size={16} color="#64748B" />
+          </TouchableOpacity>
+        </View>
         <View style={[styles.card, { backgroundColor: card, borderColor: border }]}> 
           <Text style={[styles.cardTitle, { color: text }]}>Get help</Text>
           <View style={styles.separator} />
@@ -107,7 +164,7 @@ export default function SupportScreen() {
           <View style={styles.divider} />
           <ItemRow icon="alert-circle" title="Report an issue" subtitle="Email report (fallback web)" onPress={() => {
             // Try email first, fallback to support page if mail cannot open
-            const to = 'info@hrcitodaynews.in';
+            const to = CONTACT_EMAIL;
             const subject = encodeURIComponent(`Kaburlu Issue Report — v${versionName} (${Platform.OS}${buildCode ? `, ${buildCode}` : ''})`);
             const body = encodeURIComponent(
               `Hello Kaburlu team,%0D%0A%0D%0A` +
@@ -174,6 +231,17 @@ const styles = StyleSheet.create({
   headerIconWrap: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.04)', marginRight: 12 },
   title: { fontSize: 20, fontWeight: '800' },
   subtitle: { marginTop: 2 },
+
+  // Prominent "Contact Us" card
+  contactCard: { borderRadius: 16, borderWidth: 1, padding: 16, marginBottom: 14 },
+  contactCardTitle: { color: '#F1F5F9', fontSize: 18, fontWeight: '800', marginBottom: 2 },
+  contactCardSub: { color: '#94A3B8', fontSize: 12, marginBottom: 14 },
+  contactRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 },
+  contactIconWrap: { width: 36, height: 36, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center', justifyContent: 'center' },
+  contactLabel: { color: '#94A3B8', fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4 },
+  contactValue: { color: '#F1F5F9', fontSize: 14, fontWeight: '700', marginTop: 1 },
+  contactDivider: { height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(255,255,255,0.08)', marginVertical: 2 },
+
   card: { borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, padding: 12, marginBottom: 14 },
   cardTitle: { fontSize: 14, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5 },
   separator: { height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(0,0,0,0.08)', marginVertical: 8 },

@@ -1,9 +1,12 @@
+import { useDeviceLayout } from '@/hooks/useDeviceLayout';
 import { VideoWrapper } from '@/components/VideoWrapper';
-import { WEB_BASE_URL } from '@/config/appConfig';
 import { useTabBarVisibility } from '@/context/TabBarVisibilityContext';
 import { useAutoHideBottomBar } from '@/hooks/useAutoHideBottomBar';
 import { useReaction } from '@/hooks/useReaction';
+import { computeAdaptiveBodyBaseFont, computeAdaptiveImageHeight, computeBodyLineClamp } from '@/services/layoutSizing';
+import { buildArticleSharePayload } from '@/services/shareLinks';
 import { Article } from '@/types';
+import ImageWithSkeleton from '@/components/ui/ImageWithSkeleton';
 import { Ramabhadra_400Regular, useFonts } from '@expo-google-fonts/ramabhadra';
 // Vector icons from @expo/vector-icons no longer used for engagement rail
 import { Feather } from '@expo/vector-icons';
@@ -22,6 +25,7 @@ import {
     Animated,
     Dimensions,
     Easing,
+    Image as RNImage,
     Platform,
     Pressable,
     Share as RnShare,
@@ -31,6 +35,7 @@ import {
     ToastAndroid,
     TouchableOpacity,
     View,
+    useWindowDimensions,
     type ImageStyle,
     type TextStyle,
     type ViewStyle,
@@ -113,6 +118,9 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
   }) , []);
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  // Reactive window width/height (updates on rotation & across device sizes)
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const { scaleFontSize } = useDeviceLayout();
   // Reaction state (server authoritative). We start with article initial counts; hook will fetch actual.
   const reaction = useReaction({
     articleId: article.id,
@@ -266,12 +274,64 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
   const [slideIndex, setSlideIndex] = useState(0);
   const [footerHeight, setFooterHeight] = useState(0);
   const [titleHeight, setTitleHeight] = useState(0);
+
+  // Smart rule-based image sizing: map of url -> aspect ratio (width/height)
+  const [imageRatios, setImageRatios] = useState<Record<string, number>>({});
+  const articleWordCount = useMemo(
+    () => String(article.body || article.summary || '').split(/\s+/).filter(Boolean).length,
+    [article.body, article.summary],
+  );
+
+  // Fetch dimensions for all image slides
+  useEffect(() => {
+    heroSlides.forEach((s) => {
+      if (s.type !== 'image') return;
+      if (imageRatios[s.src] !== undefined) return;
+      RNImage.getSize(
+        s.src,
+        (w, h) => {
+          if (h > 0) {
+            setImageRatios((prev) => ({ ...prev, [s.src]: w / h }));
+          }
+        },
+        () => {
+          // on error set a default 16:9 ratio so image still displays
+          setImageRatios((prev) => ({ ...prev, [s.src]: 16 / 9 }));
+        }
+      );
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [heroSlides]);
+
+  /**
+   * Smart image layout rules based on aspect ratio (w/h):
+   * For ALL cases: height = width / ratio (natural aspect height).
+   * This makes the image fill full width with ZERO letterbox bars and ZERO crop.
+   * Heights are capped so very tall/wide images don't dominate the screen.
+   *
+   *  unknown (not loaded yet) → 16:9 placeholder until ratio arrives
+   */
+  const getImageLayout = (url: string): { height: number; contentFit: 'cover' | 'contain' } => {
+    const ratio = imageRatios[url];
+    return {
+      height: computeAdaptiveImageHeight({
+        screenWidth: windowWidth,
+        screenHeight: windowHeight,
+        wordCount: articleWordCount,
+        aspectRatio: ratio,
+      }),
+      contentFit: 'cover',
+    };
+  };
   const [maxBodyLines, setMaxBodyLines] = useState<number | undefined>(undefined);
   // Toggle for right-side rail (now disabled; engagement is in footer)
   const SHOW_RIGHT_RAIL = false;
   // Comments count hidden on rail (icons only); keep logic minimal
   // Small-screen adjustments
-  const isSmallScreen = width <= 360 || Dimensions.get('window').height <= 680;
+  const isSmallScreen = windowWidth <= 360 || windowHeight <= 680;
+  const bodyBasePhoneSize = computeAdaptiveBodyBaseFont(articleWordCount);
+  const bodyFontSize = scaleFontSize(isSmallScreen ? Math.max(14, bodyBasePhoneSize - 1) : bodyBasePhoneSize);
+  const bodyLineHeight = Math.round(bodyFontSize * (isSmallScreen ? 1.45 : 1.52));
   // (Removed appUrl since we rely on canonical or fallback web domain for sharing.)
   // Auto-advance hero slides
   useEffect(() => {
@@ -280,12 +340,12 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
     const id = setInterval(() => {
       i = (i + 1) % heroSlides.length;
       setSlideIndex(i);
-      const x = i * width;
+      const x = i * windowWidth;
       heroRef.current?.scrollTo({ x, y: 0, animated: true });
     }, 3500);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [heroSlides.length]);
+  }, [heroSlides.length, windowWidth]);
 
   const handleLike = () => {
     reaction.like();
@@ -357,24 +417,8 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
 
   // Build share text (metadata prioritized). Separate function so we can reuse.
   const buildSharePayload = () => {
-    // Use canonicalUrl if available, otherwise build from slug or id
-    const baseUrl = WEB_BASE_URL.replace(/\/$/, '');
-    const slug = (article as any).slug;
-    // Prefer canonicalUrl > slug-based URL > id-based fallback
-    const fallbackWeb = slug 
-      ? `${baseUrl}/${encodeURIComponent(slug)}`
-      : `${baseUrl}/article/${encodeURIComponent(article.id)}`;
-    const canonical = article.canonicalUrl || fallbackWeb;
-    const deepLink = `kaburlu://article/${article.id}`;
-    const shareTitle = article.metaTitle || article.title;
-    // Meta description intentionally removed per user request
-    const messageLines = [
-      shareTitle,
-      `\nRead: ${canonical}`,
-      `Open in App: ${deepLink}`
-    ];
-    const message = messageLines.filter(Boolean).join('\n');
-    return { shareTitle, message, canonical, deepLink };
+    const payload = buildArticleSharePayload(article);
+    return { shareTitle: payload.title, message: payload.message, shareUrl: payload.url };
   };
 
   // Tap share: capture hero image ONLY (no text baked) and attempt to send image + caption.
@@ -471,25 +515,30 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
 
   // Compute max lines for body text so page fits the screen without scrolling
   useEffect(() => {
-    const winH = Dimensions.get('window').height;
-    const heroH = width * 0.8;
+    // Use actual current slide height; fall back to 16:9 if not yet loaded
+    const currentSrc = heroSlides[slideIndex]?.src;
+    const heroH = currentSrc ? getImageLayout(currentSrc).height : windowWidth * (9 / 16);
     // paddings and spacing in content area (approx): 15 (container pad) + 10 (title margin) + 15 (bottom padding)
     const extraPad = 15 + (isSmallScreen ? 8 : 10) + 15;
-    const available = winH - heroH - footerBottomOffset - footerHeight - extraPad;
-  const lineHeight = isSmallScreen ? 22 : 24; // updated to match new optimized body lineHeight
+    const available = windowHeight - heroH - footerBottomOffset - footerHeight - extraPad;
+    const lineHeight = bodyLineHeight;
     const remainingForBody = Math.max(0, available - titleHeight);
-    const lines = Math.floor(remainingForBody / lineHeight);
-    // Guard against negative or excessively large counts
-    const clamped = Math.max(0, Math.min(lines, 20));
+    const clamped = computeBodyLineClamp({
+      availableHeight: remainingForBody,
+      titleHeight: 0,
+      lineHeight,
+      minLines: 6,
+      maxLines: 24,
+    });
     setMaxBodyLines(clamped);
-  }, [footerBottomOffset, footerHeight, titleHeight, isSmallScreen]);
+  }, [footerBottomOffset, footerHeight, titleHeight, bodyLineHeight, imageRatios, slideIndex, heroSlides, windowWidth, windowHeight]);
   return (
     <View style={[styles.container, { backgroundColor: bg }]}>
   <ViewShot ref={viewShotRef} options={{ format: 'jpg', quality: 0.9 }} style={{ flex: 1 }}>
       <ScrollView
         style={styles.scrollContainer}
         contentContainerStyle={styles.scrollContentContainer}
-        scrollEnabled={false}
+        scrollEnabled={true}
         onScrollBeginDrag={() => { console.log('[Article] onScrollBeginDrag -> hide'); hide(); setTabBarVisible(false); }}
         onScroll={(e) => {
           const now = Date.now();
@@ -514,7 +563,15 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
         scrollEventThrottle={16}
       >
           {/* Hero carousel: images and optional video */}
-          <ViewShot ref={heroCaptureRef} options={{ format: 'jpg', quality: 0.9 }} style={styles.heroContainer}>
+          {(() => {
+            // Compute the current slide's height for the hero container
+            const currentSlide = heroSlides[slideIndex];
+            const currentLayout = currentSlide?.type === 'image'
+              ? getImageLayout(currentSlide.src)
+              : { height: windowWidth * 0.5625, contentFit: 'cover' as const };
+            const heroHeight = currentLayout.height;
+            return (
+          <ViewShot ref={heroCaptureRef} options={{ format: 'jpg', quality: 0.9 }} style={[styles.heroContainer, { height: heroHeight }]}>
             {heroSlides.length === 0 && (
               <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
                 <Text style={{ color: '#fff' }}>No media</Text>
@@ -525,15 +582,24 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
               horizontal
               pagingEnabled
               showsHorizontalScrollIndicator={false}
+              style={{ height: heroHeight }}
               onMomentumScrollEnd={(e) => {
-                const i = Math.round(e.nativeEvent.contentOffset.x / width);
+                const i = Math.round(e.nativeEvent.contentOffset.x / windowWidth);
                 setSlideIndex(i);
               }}
             >
-              {heroSlides.map((s, i) => (
-                <View key={`${s.type}-${i}`} style={{ width, height: width * 0.8 }}>
+              {heroSlides.map((s, i) => {
+                const imgLayout = s.type === 'image' ? getImageLayout(s.src) : { height: windowWidth * 0.5625, contentFit: 'cover' as const };
+                const slideH = imgLayout.height;
+                return (
+                <View key={`${s.type}-${i}`} style={{ width: windowWidth, height: slideH }}>
                   {s.type === 'image' ? (
-                    <Image source={{ uri: s.src }} style={styles.heroMediaImage} cachePolicy="memory-disk" />
+                    <ImageWithSkeleton
+                      uri={s.src}
+                      style={styles.heroMediaImage}
+                      contentFit="cover"
+                      cachePolicy="memory-disk"
+                    />
                   ) : (
                     <VideoWrapper
                       player={i === 0 ? videoPlayer0 : i === 1 ? videoPlayer1 : videoPlayer2}
@@ -543,7 +609,8 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
                     />
                   )}
                 </View>
-              ))}
+                );
+              })}
             </ScrollView>
             {/* Overlays: author info and dots */}
             <View style={[styles.header, shareMode ? styles.headerShare : null]}>
@@ -563,43 +630,58 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
                 </View>
               ) : article.author ? (() => {
                 const a: any = article.author;
-                const fullName: string = a.fullName || a.name || 'Reporter';
-                const photo: string | null = a.profilePhotoUrl || a.avatar || null;
-                const roleName: string | null = a.roleName || (a.role ? String(a.role) : null);
-                const placeName: string | null = a.placeName || null;
-                const isTenantReporter = !!roleName && /TENANT/i.test(String(roleName));
-                const tenantName: string | null = (article as any)?.publisherName || null;
-                const tenantLogo: string | null = (article as any)?.publisherLogo || null;
-                const displayPhoto = isTenantReporter ? tenantLogo : photo;
-                const displayName = isTenantReporter ? `Source News${tenantName ? ` • ${tenantName}` : ''}` : fullName;
+                const fullName: string = String(a.fullName || a.name || 'Reporter').trim() || 'Reporter';
+                const profilePhotoRaw = String(a.profilePhotoUrl || a.avatar || '').trim();
+                const designationRaw: string = String(a.designation?.name || a.designationName || '').trim();
+                const placeName: string | null = (a.placeName || (a.location && (a.location.name || a.location.placeName)) || null);
+                const tenantNameRaw = (article as any)?.provider || (article as any)?.publisherName || (article as any)?.publisher?.name;
+                const tenantName: string | null = tenantNameRaw ? String(tenantNameRaw).trim() : null;
+                const tenantLogoRaw = String((article as any)?.publisherLogo || '').trim();
+                const articlePrimaryImage = String((article as any)?.primaryImageUrl || (article as any)?.image || '').trim();
+                const displayPhoto = profilePhotoRaw || articlePrimaryImage || tenantLogoRaw || null;
                 const initials = fullName
                   .split(/\s+/)
                   .filter(Boolean)
                   .slice(0,2)
                   .map((p: string) => p[0]?.toUpperCase())
                   .join('');
-                const humanRole = !isTenantReporter && roleName
-                  ? String(roleName).replace(/_/g,' ').toLowerCase().replace(/\b([a-z])/g,(m)=>m.toUpperCase())
+                const humanRole = designationRaw
+                  ? String(designationRaw).replace(/_/g,' ').toLowerCase().replace(/\b([a-z])/g,(m)=>m.toUpperCase())
                   : null;
                 return (
                   <View style={styles.authorCompact}>
                     {displayPhoto ? (
-                      <Image source={{ uri: displayPhoto }} style={styles.avatarSmallImg} cachePolicy="memory-disk" />
+                      <Image source={{ uri: displayPhoto }} style={styles.avatarSmallImg} cachePolicy="memory-disk" contentFit="cover" transition={120} />
                     ) : (
                       <View style={[styles.avatarSmall, styles.avatarFallbackSmall]}>
-                        <Text style={styles.avatarInitialsSmall}>{initials || 'R'}</Text>
+                        {initials ? (
+                          <Text style={styles.avatarInitialsSmall}>{initials}</Text>
+                        ) : (
+                          <Feather name="user" size={14} color="#666" />
+                        )}
                       </View>
                     )}
-                    <Text style={styles.authorNameCompact} numberOfLines={1}>{displayName}</Text>
-                    {humanRole && (
-                      <Text style={styles.roleTiny} numberOfLines={1}>{humanRole}</Text>
-                    )}
-                    {placeName && (
-                      <View style={styles.dotSep} />
-                    )}
-                    {placeName && (
-                      <Text style={styles.placeTiny} numberOfLines={1}>{placeName}</Text>
-                    )}
+                    <View style={styles.authorTextWrap}>
+                      <View style={styles.authorTopRow}>
+                        <Text style={styles.authorNameCompact} numberOfLines={1}>{fullName}</Text>
+                        {placeName && (
+                          <Text style={styles.placeTinyRight} numberOfLines={1}>{placeName}</Text>
+                        )}
+                      </View>
+                      {(tenantName || humanRole) && (
+                        <View style={styles.authorMetaCompactRow}>
+                          {tenantName && (
+                            <Text style={styles.tenantTiny} numberOfLines={1}>{tenantName}</Text>
+                          )}
+                          {tenantName && humanRole && (
+                            <View style={styles.dotSep} />
+                          )}
+                          {humanRole && (
+                            <Text style={styles.roleTiny} numberOfLines={1}>{humanRole}</Text>
+                          )}
+                        </View>
+                      )}
+                    </View>
                   </View>
                 );
               })() : null}
@@ -612,6 +694,8 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
               </View>
             )}
           </ViewShot>
+            );
+          })()}
 
           <Pressable 
             style={[styles.articleArea, { backgroundColor: bg }]}
@@ -632,9 +716,11 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
                 styles.title,
                 fontsLoaded ? { fontFamily: 'Ramabhadra_400Regular' } : null,
                 { color: textColor, letterSpacing: 0.3, textAlign: 'left' },
-                isSmallScreen ? { fontSize: 20, marginBottom: 10, lineHeight: 26 } : { fontSize: 22, lineHeight: 28, marginBottom: 12 },
+                isSmallScreen
+                  ? { fontSize: scaleFontSize(20), marginBottom: 10, lineHeight: scaleFontSize(26) }
+                  : { fontSize: scaleFontSize(22), lineHeight: scaleFontSize(28), marginBottom: 12 },
               ]}
-                numberOfLines={2}
+                numberOfLines={3}
                 ellipsizeMode="tail"
                 onLayout={(e) => setTitleHeight(e.nativeEvent.layout.height)}
               >
@@ -643,8 +729,10 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
               <Text style={[
                 styles.body,
                 { color: textColor, letterSpacing: 0, textAlign: 'left' },
-                isSmallScreen ? { fontSize: 15, lineHeight: 22 } : { fontSize: 16, lineHeight: 24 },
-              ]} numberOfLines={maxBodyLines || undefined} ellipsizeMode="tail">
+                { fontSize: bodyFontSize, lineHeight: bodyLineHeight },
+              ]}
+                numberOfLines={maxBodyLines}
+              >
                 {article.body}
               </Text>
               
@@ -683,6 +771,7 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
             )}
           </Pressable>
       </ScrollView>
+  </ViewShot>
   <View style={[styles.footerContainer, { bottom: footerBottomOffset, paddingBottom: footerSafeAreaPadding, backgroundColor: card }]} onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}>
         <View style={[styles.footerInfo, { borderTopColor: border }]}>
           <View style={styles.footerLeft}>
@@ -737,23 +826,27 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
       {/* No bottom promo banner; promo appears in the author area during shareMode */}
       {/* Off-screen branded card for sharing */}
       {/* Card composition removed: sharing hero image + real text caption */}
-      </ViewShot>
       {/* Off-screen full share composition (no engagement bar, no footer) */}
       <View style={{ position: 'absolute', top: -99999, left: -99999 }} pointerEvents="none">
         <ViewShot ref={fullShareRef} options={{ format: 'jpg', quality: 0.9 }}>
           <View style={{ width, backgroundColor: bg }}>
-            <View style={styles.heroContainer}>
-              {heroSlides.length > 0 ? (
-                heroSlides[slideIndex].type === 'image' ? (
-                  <Image source={{ uri: heroSlides[slideIndex].src }} style={styles.heroMediaImage} cachePolicy="memory-disk" />
-                ) : (
-                  <Image source={{ uri: heroSlides[slideIndex].src }} style={styles.heroMediaImage} cachePolicy="memory-disk" />
-                )
-              ) : (
-                <View style={{ flex:1, alignItems:'center', justifyContent:'center' }}>
-                  <Text style={{ color: muted }}>No media</Text>
-                </View>
-              )}
+            {(() => {
+              const shareSrc = heroSlides[slideIndex]?.src;
+              const shareLayout = shareSrc ? getImageLayout(shareSrc) : { height: width * (9 / 16), contentFit: 'cover' as const };
+              return (
+                <View style={[styles.heroContainer, { height: shareLayout.height }]}>
+                  {heroSlides.length > 0 ? (
+                    <ImageWithSkeleton
+                      uri={heroSlides[slideIndex].src}
+                      style={styles.heroMediaImage}
+                      contentFit="cover"
+                      cachePolicy="memory-disk"
+                    />
+                  ) : (
+                    <View style={{ flex:1, alignItems:'center', justifyContent:'center' }}>
+                      <Text style={{ color: muted }}>No media</Text>
+                    </View>
+                  )}
               {/* Brand card overlay also in capture */}
               {brandLine ? (
                 <View style={{ position:'absolute', left:10, right:10, bottom:10 }}>
@@ -767,7 +860,9 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
                   </View>
                 </View>
               ) : null}
-            </View>
+                </View>
+              );
+            })()}
             <View style={{ padding: 15 }}>
               <Text style={[styles.title, { color: textColor }, fontsLoaded ? { fontFamily: 'Ramabhadra_400Regular' } : null]}>{article.title}</Text>
               <Text style={[styles.body, { color: textColor }]}>{article.body}</Text>
@@ -787,6 +882,7 @@ const ArticlePage: React.FC<ArticlePageProps> = ({ article, index, totalArticles
             content: article.body || '',
             coverImageUrl: article.imageUrl || article.thumbnail || undefined,
             caption: (article as any).caption,
+            shareUrl: buildArticleSharePayload(article).url,
             reporter: article.author ? {
               id: (article.author as any).id,
               fullName: (article.author as any).fullName || (article.author as any).name,
@@ -862,10 +958,15 @@ type Styles = {
   avatarSmallImg: ImageStyle; // used on Image
   avatarFallbackSmall: ViewStyle;
   avatarInitialsSmall: TextStyle;
+  authorTextWrap: ViewStyle;
+  authorTopRow: ViewStyle;
+  authorMetaCompactRow: ViewStyle;
   authorNameCompact: TextStyle;
   roleTiny: TextStyle;
+  tenantTiny: TextStyle;
   dotSep: ViewStyle;
   placeTiny: TextStyle;
+  placeTinyRight: TextStyle;
   header: ViewStyle;
   headerGradient: ViewStyle;
   authorInfo: ViewStyle;
@@ -935,7 +1036,8 @@ const styles = StyleSheet.create<Styles>({
   },
   heroContainer: {
     width: '100%',
-    height: width * 0.8,
+    // height is set dynamically inline from getImageLayout()
+    overflow: 'hidden',
     backgroundColor: '#f8f8f8',
   },
   heroMedia: {
@@ -973,24 +1075,29 @@ const styles = StyleSheet.create<Styles>({
   },
   authorCompact: {
     flexDirection: 'row',
-    alignItems: 'center',
-    // Removed pill background to avoid obstructing hero image
-    paddingHorizontal: 0,
-    paddingVertical: 0,
-    gap: 6,
+    alignItems: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    gap: 10,
     maxWidth: '92%',
+    borderRadius: 12,
+    backgroundColor: 'rgba(20,20,20,0.52)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.28)',
   },
   avatarSmall: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     backgroundColor: '#eee',
   },
   avatarSmallImg: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: '#eee',
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#ddd',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.8)',
   },
   avatarFallbackSmall: {
     alignItems: 'center',
@@ -1002,20 +1109,46 @@ const styles = StyleSheet.create<Styles>({
     fontWeight: '600',
     color: '#444'
   },
+  authorTextWrap: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'center',
+  },
+  authorTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  authorMetaCompactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 1,
+  },
   authorNameCompact: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#222',
-    maxWidth: 120,
-    textShadowColor: 'rgba(0,0,0,0.35)',
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#fff',
+    flex: 1,
+    textShadowColor: 'rgba(0,0,0,0.6)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 2,
   },
   roleTiny: {
     fontSize: 11,
-    color: '#666',
-    maxWidth: 90,
-    textShadowColor: 'rgba(0,0,0,0.25)',
+    color: 'rgba(255,255,255,0.96)',
+    flexShrink: 1,
+    textShadowColor: 'rgba(0,0,0,0.5)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 1.5,
+  },
+  tenantTiny: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#fff',
+    flexShrink: 1,
+    textShadowColor: 'rgba(0,0,0,0.55)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 1.5,
   },
@@ -1023,13 +1156,23 @@ const styles = StyleSheet.create<Styles>({
     width: 4,
     height: 4,
     borderRadius: 2,
-    backgroundColor: '#bbb',
+    backgroundColor: 'rgba(255,255,255,0.7)',
   },
   placeTiny: {
     fontSize: 11,
     color: '#666',
     maxWidth: 90,
     textShadowColor: 'rgba(0,0,0,0.25)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 1.5,
+  },
+  placeTinyRight: {
+    fontSize: 12,
+    color: '#fff',
+    textAlign: 'right',
+    maxWidth: 140,
+    flexShrink: 1,
+    textShadowColor: 'rgba(0,0,0,0.55)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 1.5,
   },
@@ -1235,9 +1378,9 @@ const styles = StyleSheet.create<Styles>({
     alignItems: 'flex-start',
   },
   articleContent: {
-    // Let content take natural height so engagement bar sits right below
     flex: 1,
     paddingRight: 4,
+    justifyContent: 'flex-start',
   },
   title: {
     fontSize: 24,

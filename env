@@ -27,6 +27,7 @@ EXPO_PUBLIC_NEWSPAPER_FULL_BODY_LOG=false
 EXPO_PUBLIC_TRANSLIT_DEBUG=0
 EXPO_PUBLIC_NAV_DEBUG=0
 EXPO_PUBLIC_DEVELOPER_MODE=false
+SHOW_STYLE_LABELS=true
 
 # Firebase env fallbacks (used by config/firebase.ts). These mirror app.json extra.firebase.
 EXPO_PUBLIC_FIREBASE_API_KEY=AIzaSyCANwGIO9-ZYDkxs7P1JlgXRLbim1kWldQ

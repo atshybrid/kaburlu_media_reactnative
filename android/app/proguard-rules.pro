@@ -7,8 +7,38 @@
 # For more details, see
 #   http://developer.android.com/guide/developing/tools/proguard.html
 
+# React Native core
+-keep class com.facebook.react.** { *; }
+-keep class com.facebook.hermes.** { *; }
+-keep class com.facebook.jni.** { *; }
+-dontwarn com.facebook.react.**
+-dontwarn com.facebook.hermes.**
+
+# React Native new architecture (TurboModules / Fabric)
+-keep class com.facebook.react.turbomodule.** { *; }
+-keep class com.facebook.react.fabric.** { *; }
+
 # react-native-reanimated
 -keep class com.swmansion.reanimated.** { *; }
--keep class com.facebook.react.turbomodule.** { *; }
+-keep class com.swmansion.gesturehandler.** { *; }
+
+# Expo modules
+-keep class expo.modules.** { *; }
+-dontwarn expo.modules.**
+
+# Firebase / Crashlytics
+-keep class com.google.firebase.** { *; }
+-keep class com.google.android.gms.** { *; }
+-dontwarn com.google.firebase.**
+-dontwarn com.google.android.gms.**
+
+# Keep JavaScript interface classes
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
+
+# OkHttp / networking
+-dontwarn okhttp3.**
+-dontwarn okio.**
 
 # Add any project specific keep options here:

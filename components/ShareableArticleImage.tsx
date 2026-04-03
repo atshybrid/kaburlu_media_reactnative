@@ -444,7 +444,7 @@ const ShareableArticleImage = forwardRef<ShareableArticleImageRef, Props>(
                 <ExpoImage
                   source={{ uri: article.coverImageUrl }}
                   style={{ width: '100%', aspectRatio: imageAspectRatio }}
-                  contentFit="cover"
+                  contentFit="fill"
                   onLoad={onImageLoad}
                   onError={onImageLoad}
                 />
@@ -697,10 +697,9 @@ const ShareableArticleImage = forwardRef<ShareableArticleImageRef, Props>(
                   source={{ uri: article.coverImageUrl }}
                   style={{ 
                     width: '100%', 
-                    aspectRatio: imageAspectRatio > 1.5 ? imageAspectRatio : 1.33,
-                    maxHeight: 220
+                    aspectRatio: imageAspectRatio
                   }}
-                  contentFit="cover"
+                  contentFit="fill"
                   onLoad={onImageLoad}
                   onError={onImageLoad}
                 />
@@ -926,11 +925,11 @@ const ShareableArticleImage = forwardRef<ShareableArticleImageRef, Props>(
         <View style={[styles.cardBg, { backgroundColor: '#FFFFFF' }]}>
           {/* Hero Image with Gradient Overlay */}
           {article.coverImageUrl ? (
-            <View style={{ position: 'relative', height: 240 }}>
+            <View style={{ position: 'relative', aspectRatio: imageAspectRatio, width: '100%' }}>
               <ExpoImage
                 source={{ uri: article.coverImageUrl }}
                 style={{ width: '100%', height: '100%' }}
-                contentFit="cover"
+                contentFit="fill"
                 onLoad={onImageLoad}
                 onError={onImageLoad}
               />
@@ -1318,8 +1317,8 @@ const ShareableArticleImage = forwardRef<ShareableArticleImageRef, Props>(
               }}>
                 <ExpoImage
                   source={{ uri: article.coverImageUrl }}
-                  style={{ width: '100%', aspectRatio: 16/9 }}
-                  contentFit="cover"
+                  style={{ width: '100%', aspectRatio: imageAspectRatio }}
+                  contentFit="fill"
                   onLoad={onImageLoad}
                   onError={onImageLoad}
                 />
@@ -1685,8 +1684,8 @@ const ShareableArticleImage = forwardRef<ShareableArticleImageRef, Props>(
               }}>
                 <ExpoImage
                   source={{ uri: article.coverImageUrl }}
-                  style={{ width: '100%', aspectRatio: 4/3 }}
-                  contentFit="cover"
+                  style={{ width: '100%', aspectRatio: imageAspectRatio }}
+                  contentFit="fill"
                   onLoad={onImageLoad}
                   onError={onImageLoad}
                 />

@@ -13,10 +13,11 @@ import { useTabBarVisibility } from '@/context/TabBarVisibilityContext';
 import { useAutoHideBottomBar } from '@/hooks/useAutoHideBottomBar';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { useReaction } from '@/hooks/useReaction';
+import { buildArticleSharePayload } from '@/services/shareLinks';
+import ImageWithSkeleton from '@/components/ui/ImageWithSkeleton';
 import { Feather } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
-import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo } from 'react';
@@ -102,14 +103,11 @@ const MagazineCoverLayout: ArticleLayoutComponent = ({ article, index, totalArti
   const onShare = async () => {
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      // Use short URL if available, fallback to full URL
-      const shareUrl = article.shortId 
-        ? `https://s.kaburlumedia.com/${article.shortId}`
-        : `https://kaburlumedia.com/article/${article.id}`;
+      const payload = buildArticleSharePayload(article);
       await Share.share({
-        title: article.title,
-        message: `${article.title}\n\nRead more: ${shareUrl}`,
-        url: shareUrl,
+        title: payload.title,
+        message: payload.message,
+        url: payload.url,
       });
     } catch (error) {
       console.warn('Share failed:', error);
@@ -120,7 +118,7 @@ const MagazineCoverLayout: ArticleLayoutComponent = ({ article, index, totalArti
     <Pressable style={styles.container} onPress={handleScreenTap}>
       {/* Full-bleed background image */}
       {imageUrl ? (
-        <Image source={{ uri: imageUrl }} style={styles.backgroundImage} contentFit="cover" />
+        <ImageWithSkeleton uri={imageUrl} style={styles.backgroundImage} contentFit="cover" />
       ) : (
         <View style={[styles.backgroundImage, { backgroundColor: isDark ? '#1a1a1a' : '#333' }]} />
       )}

@@ -13,6 +13,7 @@ import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { getPublicFigureIdFromName, isPublicFigure } from '@/services/roles';
 import { loadTokens } from '@/services/auth';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -36,12 +37,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 // Voice file mapping
 const VOICE_FILES = {
   bandisanjay: require('@/assets/audio/sample_voice/Bandisanjay_voice.mp3'),
+  kavitha: require('@/assets/audio/sample_voice/Kavitha.mp3'),
   cm: require('@/assets/audio/sample_voice/CM_voice.mp3'),
   ktr: require('@/assets/audio/sample_voice/KTR_sample.mp3'),
 };
 
 const FIGURE_NAMES = {
   bandisanjay: 'Bandi Sanjay',
+  kavitha: 'Kavitha',
   cm: 'Chief Minister',
   ktr: 'KTR',
 };
@@ -142,6 +145,99 @@ const SAMPLE_NEWS = {
   ],
 };
 
+const KAVITHA_SAMPLE_NEWS = {
+  // News featuring Kavitha (today samples)
+  myNews: [
+    {
+      id: 'kv_my1',
+      title: 'కవిత గారి ఆధ్వర్యంలో మహిళా సాధికారత సమావేశం',
+      summary: 'హైదరాబాద్‌లో జరిగిన మహిళా సాధికారత కార్యక్రమంలో పలు కీలక అంశాలపై చర్చించారు',
+      category: 'Politics',
+      timestamp: 'today 9:30 AM',
+      source: 'కబుర్లు న్యూస్',
+      image: '📰',
+    },
+    {
+      id: 'kv_my2',
+      title: 'గ్రామీణ మహిళల స్వయం ఉపాధికి కొత్త మార్గదర్శకాలు',
+      summary: 'స్వయం సహాయక సంఘాల కోసం ప్రత్యేక శిక్షణా కేంద్రాల ఏర్పాటు పై ప్రకటన చేశారు',
+      category: 'Development',
+      timestamp: 'today 12:15 PM',
+      source: 'తెలంగాణ టుడే',
+      image: '📋',
+    },
+    {
+      id: 'kv_my3',
+      title: 'యువతీ విద్యార్థినుల కోసం స్కిల్ డెవలప్‌మెంట్ డ్రైవ్ ప్రారంభం',
+      summary: 'ఉద్యోగ అవకాశాల కోసం రాష్ట్రవ్యాప్తంగా ప్రత్యేక శిక్షణా శిబిరాలు నిర్వహించనున్నారు',
+      category: 'Employment',
+      timestamp: 'today 4:40 PM',
+      source: 'వార్తా వాణి',
+      image: '💼',
+    },
+  ],
+
+  trending: [
+    {
+      id: 'kv_tr1',
+      title: 'కవిత ప్రసంగం సోషల్ మీడియాలో ట్రెండ్ అవుతోంది',
+      summary: 'మహిళా అభివృద్ధి పై చేసిన వ్యాఖ్యలు విస్తృతంగా చర్చకు దారితీశాయి',
+      category: 'Politics',
+      timestamp: 'today 2:10 PM',
+      views: '29K వ్యూస్',
+      trending: true,
+    },
+    {
+      id: 'kv_tr2',
+      title: 'స్వయం సహాయక సంఘాల కోసం ప్రత్యేక ఆర్థిక పథకం',
+      summary: 'రాష్ట్ర మహిళా సంఘాలకు తక్కువ వడ్డీతో రుణ సదుపాయాలు కల్పించనున్నారు',
+      category: 'Development',
+      timestamp: 'today 3:30 PM',
+      views: '22K వ్యూస్',
+      trending: true,
+    },
+    {
+      id: 'kv_tr3',
+      title: 'యువ మహిళా నేతలతో కవిత సమావేశం',
+      summary: 'భవిష్యత్ నాయకత్వంపై రాష్ట్రవ్యాప్తంగా యువతితో చర్చలు కొనసాగుతున్నాయి',
+      category: 'Leadership',
+      timestamp: 'today 5:05 PM',
+      views: '18K వ్యూస్',
+      trending: true,
+    },
+  ],
+
+  podcasts: [
+    {
+      id: 'kv_pod1',
+      title: 'మహిళా సాధికారత: కవిత విజన్',
+      description: 'రాష్ట్ర మహిళా అభివృద్ధి కోసం అమలు చేయబోయే కొత్త కార్యక్రమాలపై చర్చ',
+      duration: '35 నిమిషాలు',
+      host: 'సంధ్య',
+      category: 'Politics',
+      timestamp: 'నేడు ఉదయం 10:00',
+    },
+    {
+      id: 'kv_pod2',
+      title: 'గ్రామీణ మహిళల ఉపాధి అవకాశాలు',
+      description: 'గ్రామీణ ప్రాంతాల్లో మహిళల కోసం ఉపాధి సృష్టిపై నిపుణుల విశ్లేషణ',
+      duration: '28 నిమిషాలు',
+      host: 'శిల్పా',
+      category: 'Development',
+      timestamp: 'నేడు మధ్యాహ్నం 1:30',
+    },
+    {
+      id: 'kv_pod3',
+      title: 'యువ మహిళా నాయకత్వం - ప్రత్యేక సంచిక',
+      description: 'యువతీ నాయకత్వ అభివృద్ధిపై ప్రత్యేక కార్యక్రమం',
+      duration: '32 నిమిషాలు',
+      host: 'దీప్తి',
+      category: 'Leadership',
+      timestamp: 'నేడు సాయంత్రం 6:00',
+    },
+  ],
+};
+
 export default function PublicFigureDashboard() {
   const router = useRouter();
   const colorScheme = useColorScheme() ?? 'light';
@@ -152,7 +248,6 @@ export default function PublicFigureDashboard() {
   const [figureId, setFigureId] = useState<keyof typeof VOICE_FILES>('bandisanjay');
   const [figureName, setFigureName] = useState('');
   const [playbackState, setPlaybackState] = useState<'idle' | 'question' | 'listening' | 'response' | 'done'>('done');
-  const [audioError, setAudioError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'myNews' | 'trending' | 'podcasts'>('myNews');
 
   const questionSoundRef = useRef<Audio.Sound | null>(null);
@@ -160,8 +255,13 @@ export default function PublicFigureDashboard() {
   const listeningAnim = useRef(new Animated.Value(0)).current;
   const hasPlayedOnceRef = useRef(false);
   const shouldAbortRef = useRef(false);
+  const isPlayingRef = useRef(false);
 
   const primary = useMemo(() => c.tint, [c.tint]);
+  const activeSampleNews = useMemo(
+    () => (figureId === 'kavitha' ? KAVITHA_SAMPLE_NEWS : SAMPLE_NEWS),
+    [figureId]
+  );
 
   // Check role and redirect if not PUBLIC_FIGURE
   useEffect(() => {
@@ -185,8 +285,22 @@ export default function PublicFigureDashboard() {
           return;
         }
 
-        // Detect figure ID from name
-        const fid = getPublicFigureIdFromName(name);
+        // Detect figure ID from mobile/name.
+        // Priority: explicit mobile mapping for known public figures.
+        const payloadMobile = String(
+          payload?.mobileNumber || payload?.mobile || payload?.phoneNumber || payload?.phone || ''
+        ).replace(/\D/g, '');
+        const storedMobile = String(
+          (await AsyncStorage.getItem('profile_mobile')) ||
+          (await AsyncStorage.getItem('last_login_mobile')) ||
+          ''
+        ).replace(/\D/g, '');
+
+        const effectiveMobile = payloadMobile || storedMobile;
+        const fid = effectiveMobile === '9133622005'
+          ? 'kavitha'
+          : getPublicFigureIdFromName(name);
+
         setFigureId(fid as keyof typeof VOICE_FILES);
         setFigureName(FIGURE_NAMES[fid as keyof typeof FIGURE_NAMES] || name || 'Public Figure');
         setLoading(false);
@@ -229,121 +343,119 @@ export default function PublicFigureDashboard() {
     }
   }, [playbackState, listeningAnim]);
 
+  // Play a sound and wait for it to actually finish via status callback
+  const playAndWait = useCallback((source: number, soundRef: React.MutableRefObject<Audio.Sound | null>): Promise<void> => {
+    return new Promise((resolve) => {
+      let resolved = false;
+      let capturedSound: Audio.Sound | null = null;
+
+      const finish = () => {
+        if (resolved) return;
+        resolved = true;
+        soundRef.current = null;
+        capturedSound?.unloadAsync().catch(() => {});
+        resolve();
+      };
+
+      Audio.Sound.createAsync(
+        source,
+        { shouldPlay: true, isLooping: false, volume: 1.0 },
+        (status) => {
+          if (status.isLoaded && status.didJustFinish) {
+            finish();
+          }
+        }
+      ).then(({ sound }) => {
+        capturedSound = sound;
+        soundRef.current = sound;
+        // Safety fallback: wait for duration + 500ms, then resolve anyway (max 60s)
+        sound.getStatusAsync().then((st) => {
+          const dur = (st.isLoaded && st.durationMillis && st.durationMillis > 0)
+            ? st.durationMillis + 500
+            : 60000;
+          setTimeout(finish, dur);
+        });
+      }).catch(() => {
+        if (!resolved) { resolved = true; resolve(); }
+      });
+    });
+  }, []);
+
   // Voice sequence function (called manually, not auto)
   const playVoiceSequence = useCallback(async () => {
-    if (playbackState !== 'idle' && playbackState !== 'done') {
+    if (isPlayingRef.current) {
       console.log('[Voice] Already playing, ignoring...');
       return;
     }
-    
-    // Reset abort flag
+    isPlayingRef.current = true;
     shouldAbortRef.current = false;
-    
+
     try {
       // Clean up any existing sounds first
       if (questionSoundRef.current) {
-        await questionSoundRef.current.unloadAsync();
+        await questionSoundRef.current.unloadAsync().catch(() => {});
         questionSoundRef.current = null;
       }
       if (responseSoundRef.current) {
-        await responseSoundRef.current.unloadAsync();
+        await responseSoundRef.current.unloadAsync().catch(() => {});
         responseSoundRef.current = null;
       }
 
-      // Step 1: Play question voice
-      if (shouldAbortRef.current) return;
-      setPlaybackState('question');
-      const questionFile = VOICE_FILES[figureId];
-      const { sound: qSound } = await Audio.Sound.createAsync(
-        questionFile, 
-        { 
-          shouldPlay: true,
-          isLooping: false,
-        },
-        (status) => {
-          // Monitor playback to prevent loops
-          if (status.isLoaded && status.didJustFinish && !status.isLooping) {
-            console.log('[Audio] Question finished');
-          }
-        }
-      );
-      questionSoundRef.current = qSound;
+      await Audio.setAudioModeAsync({ playsInSilentModeIOS: true, staysActiveInBackground: false });
 
-      // Wait for question to finish
-      const status = await qSound.getStatusAsync();
-      if (status.isLoaded && status.durationMillis) {
-        await new Promise((resolve) => setTimeout(resolve, status.durationMillis));
-      } else {
-        await new Promise((resolve) => setTimeout(resolve, 3000)); // fallback 3s
-      }
-
-      // Check if aborted
-      if (shouldAbortRef.current) {
-        await qSound.unloadAsync();
+      const voiceFile = VOICE_FILES[figureId as keyof typeof VOICE_FILES];
+      if (!voiceFile) {
+        console.warn('[Voice] No voice file for figureId:', figureId);
+        setPlaybackState('done');
         return;
       }
 
-      // Clean up question sound
-      await qSound.unloadAsync();
-      questionSoundRef.current = null;
+      // Step 1: Play question voice — wait for actual finish
+      if (shouldAbortRef.current) return;
+      setPlaybackState('question');
+      await playAndWait(voiceFile, questionSoundRef);
 
-      // Step 2: Show listening state
+      // Step 2: Listening state
       if (shouldAbortRef.current) return;
       setPlaybackState('listening');
       await new Promise((resolve) => setTimeout(resolve, 1500));
 
-      // Step 3: Play response (same voice or different sample)
+      // Step 3: Play response — wait for actual finish
       if (shouldAbortRef.current) return;
       setPlaybackState('response');
-      const responseFile = VOICE_FILES[figureId]; // reuse same sample
-      const { sound: rSound } = await Audio.Sound.createAsync(
-        responseFile, 
-        { 
-          shouldPlay: true,
-          isLooping: false,
-        },
-        (status) => {
-          // Monitor playback to prevent loops
-          if (status.isLoaded && status.didJustFinish && !status.isLooping) {
-            console.log('[Audio] Response finished');
-          }
-        }
-      );
-      responseSoundRef.current = rSound;
+      await playAndWait(voiceFile, responseSoundRef);
 
-      // Wait for response to finish
-      const rStatus = await rSound.getStatusAsync();
-      if (rStatus.isLoaded && rStatus.durationMillis) {
-        await new Promise((resolve) => setTimeout(resolve, rStatus.durationMillis));
-      } else {
-        await new Promise((resolve) => setTimeout(resolve, 3000));
+      // Step 4: Done
+      if (!shouldAbortRef.current) {
+        setPlaybackState('done');
+        hasPlayedOnceRef.current = true;
       }
-
-      // Check if aborted
-      if (shouldAbortRef.current) {
-        await rSound.unloadAsync();
-        return;
-      }
-
-      // Clean up response sound
-      await rSound.unloadAsync();
-      responseSoundRef.current = null;
-
-      // Step 4: Done - show news
-      if (shouldAbortRef.current) return;
-      setPlaybackState('done');
-      hasPlayedOnceRef.current = true;
     } catch (error: any) {
       console.error('[Voice Sequence] Error:', error);
-      setAudioError(error?.message || 'Audio playback failed');
       setPlaybackState('done');
+    } finally {
+      isPlayingRef.current = false;
     }
-  }, [playbackState, figureId]);
+  }, [figureId, playAndWait]);
 
-  // NOTE: Auto-play removed - voice only plays on manual button click or voice command
-  // User can trigger playback using:
-  // 1. Replay button: "మళ్లీ వినండి"
-  // 2. Voice command (future feature)
+  const stopVoicePlayback = useCallback(async () => {
+    shouldAbortRef.current = true;
+    isPlayingRef.current = false;
+
+    if (questionSoundRef.current) {
+      await questionSoundRef.current.stopAsync().catch(() => {});
+      await questionSoundRef.current.unloadAsync().catch(() => {});
+      questionSoundRef.current = null;
+    }
+
+    if (responseSoundRef.current) {
+      await responseSoundRef.current.stopAsync().catch(() => {});
+      await responseSoundRef.current.unloadAsync().catch(() => {});
+      responseSoundRef.current = null;
+    }
+  }, []);
+
+  // NOTE: Voice only plays on manual button click (Replay button: "మళ్లీ వినండి")
 
   // Cleanup sounds on unmount
   useEffect(() => {
@@ -355,28 +467,13 @@ export default function PublicFigureDashboard() {
 
   const handleReplay = useCallback(async () => {
     try {
-      // Stop and unload any playing sounds
-      if (questionSoundRef.current) {
-        await questionSoundRef.current.stopAsync();
-        await questionSoundRef.current.unloadAsync();
-        questionSoundRef.current = null;
-      }
-      if (responseSoundRef.current) {
-        await responseSoundRef.current.stopAsync();
-        await responseSoundRef.current.unloadAsync();
-        responseSoundRef.current = null;
-      }
-
-      setAudioError(null);
-      
-      // Reset to idle and then play sequence directly (no effect trigger)
-      setPlaybackState('idle');
+      await stopVoicePlayback();
       await new Promise(resolve => setTimeout(resolve, 50));
       await playVoiceSequence();
     } catch (error) {
       console.error('[Replay] Error:', error);
     }
-  }, [playVoiceSequence]);
+  }, [playVoiceSequence, stopVoicePlayback]);
 
   const handleLogout = useCallback(async () => {
     Alert.alert('Logout', 'Are you sure you want to logout?', [
@@ -513,12 +610,7 @@ export default function PublicFigureDashboard() {
             </View>
           )}
 
-          {audioError && (
-            <View style={styles.errorBox}>
-              <Ionicons name="alert-circle" size={20} color="#f44336" />
-              <ThemedText style={styles.errorText}>{audioError}</ThemedText>
-            </View>
-          )}
+          {/* audio error hidden intentionally — audio is optional */}
         </View>
 
         {/* News Feed */}
@@ -527,7 +619,10 @@ export default function PublicFigureDashboard() {
             {/* Tabs */}
             <View style={styles.tabContainer}>
               <Pressable
-                onPress={() => setActiveTab('myNews')}
+                onPress={() => {
+                  setActiveTab('myNews');
+                  playVoiceSequence();
+                }}
                 style={[styles.tab, activeTab === 'myNews' && { borderBottomColor: primary, borderBottomWidth: 3 }]}
               >
                 <Ionicons name="person" size={20} color={activeTab === 'myNews' ? primary : isDark ? '#999' : '#666'} />
@@ -561,7 +656,7 @@ export default function PublicFigureDashboard() {
             {activeTab === 'myNews' && (
               <View style={styles.tabContent}>
                 <ThemedText style={styles.sectionTitle}>మీరు ఉన్న వార్తలు</ThemedText>
-                {SAMPLE_NEWS.myNews.map((article) => (
+                {activeSampleNews.myNews.map((article) => (
                   <Pressable
                     key={article.id}
                     style={[styles.newsCard, { backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : '#fff', borderColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)' }]}
@@ -595,7 +690,7 @@ export default function PublicFigureDashboard() {
             {activeTab === 'trending' && (
               <View style={styles.tabContent}>
                 <ThemedText style={styles.sectionTitle}>ట్రెండింగ్ వార్తలు 🔥</ThemedText>
-                {SAMPLE_NEWS.trending.map((article) => (
+                {activeSampleNews.trending.map((article) => (
                   <Pressable
                     key={article.id}
                     style={[styles.newsCard, { backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : '#fff', borderColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)' }]}
@@ -626,7 +721,7 @@ export default function PublicFigureDashboard() {
             {activeTab === 'podcasts' && (
               <View style={styles.tabContent}>
                 <ThemedText style={styles.sectionTitle}>ఈ రోజు పాడ్‌కాస్ట్‌లు 🎙️</ThemedText>
-                {SAMPLE_NEWS.podcasts.map((podcast) => (
+                {activeSampleNews.podcasts.map((podcast) => (
                   <Pressable
                     key={podcast.id}
                     style={[styles.podcastCard, { backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : '#fff', borderColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)' }]}
