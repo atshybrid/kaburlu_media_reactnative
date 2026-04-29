@@ -18,11 +18,11 @@ import { getLastMobile, saveTokens } from '@/services/auth';
 import { getDeviceIdentity } from '@/services/device';
 import { requestLocationPermissionOnly } from '@/services/permissions';
 import { firebaseIdTokenFromGoogleIdToken } from '@/services/firebase';
+import { getCurrentPushToken } from '@/services/notifications';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -232,6 +232,7 @@ export default function LoginScreen() {
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [googleLoading, setGoogleLoading] = useState(false);
   const [appleLoading, setAppleLoading] = useState(false);
+  const [appleAvailable, setAppleAvailable] = useState(false);
   
   // Reset flow
   const [showReset, setShowReset] = useState(false);
@@ -303,6 +304,12 @@ export default function LoginScreen() {
     ).start();
   }, [fadeAnim, slideAnim, glowAnim]);
   
+  // Check Apple Sign-In availability (iOS 13+, entitlement required)
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+    AppleAuthentication.isAvailableAsync().then(setAppleAvailable).catch(() => setAppleAvailable(false));
+  }, []);
+
   // Keyboard listener
   useEffect(() => {
     const showEvent = Platform.OS === 'android' ? 'keyboardDidShow' : 'keyboardWillShow';
@@ -437,31 +444,22 @@ export default function LoginScreen() {
   // Navigate after auth
   const navigateAfterAuth = useCallback(async () => {
     try {
-      // Get user role from stored tokens
-      const jwt = await AsyncStorage.getItem('jwt');
-      const accessToken = await AsyncStorage.getItem('access_token');
-      
-      if (accessToken) {
-        // Decode access token to get role
-        const payload = JSON.parse(atob(accessToken.split('.')[1]));
-        const role = payload?.role;
-        
-        console.log('[Login] User role:', role);
-        
-        // Route based on role
-        if (role === 'TENANT_ADMIN' || role === 'SUPER_ADMIN') {
-          router.replace('/tenant/dashboard');
-          return;
-        } else if (role === 'REPORTER') {
-          router.replace('/reporter/dashboard');
-          return;
-        } else if (role === 'PUBLIC_FIGURE') {
-          router.replace('/public-figure/dashboard');
-          return;
-        }
+      // Primary: read role from AsyncStorage (saved reliably in persistAuth)
+      const role = await AsyncStorage.getItem('profile_role');
+      console.log('[Login] User role from storage:', role);
+
+      if (role === 'TENANT_ADMIN' || role === 'SUPER_ADMIN') {
+        router.replace('/tenant/dashboard');
+        return;
+      } else if (role === 'REPORTER') {
+        router.replace('/reporter/dashboard');
+        return;
+      } else if (role === 'PUBLIC_FIGURE') {
+        router.replace('/public-figure/dashboard');
+        return;
       }
-      
-      // Default flow for citizen reporters
+
+      // Default citizen / guest flow
       if (params.from === 'post') {
         router.replace('/explore');
       } else if (router.canGoBack()) {
@@ -471,7 +469,6 @@ export default function LoginScreen() {
       }
     } catch (error) {
       console.error('[Login] Navigate after auth error:', error);
-      // Fallback to default
       router.replace('/news');
     }
   }, [params.from, router]);
@@ -682,7 +679,8 @@ export default function LoginScreen() {
       try {
         const res = await loginWithGoogle({ 
           ...(firebaseIdToken ? { firebaseIdToken } : { googleIdToken }),
-          deviceId: device.deviceId 
+          deviceId: device.deviceId,
+          email: userInfo.user.email,
         });
         
         await persistAuth(res);
@@ -696,8 +694,9 @@ export default function LoginScreen() {
         }, 1800);
         
       } catch (loginErr: any) {
-        // 6. If 404 or USER_NOT_FOUND, create new citizen reporter
-        const is404 = loginErr.status === 404 || loginErr.message?.includes('USER_NOT_FOUND') || loginErr.message?.includes('404');
+        // 6. If 404 or USER_NOT_FOUND, or Prisma firebaseUid lookup bug (400), create new citizen reporter
+        const isPrismaFirebaseUidError = loginErr.status === 400 && loginErr.body?.message?.includes('firebaseUid');
+        const is404 = loginErr.status === 404 || loginErr.message?.includes('USER_NOT_FOUND') || loginErr.message?.includes('404') || isPrismaFirebaseUidError;
         
         if (is404) {
           // Get language
@@ -730,11 +729,16 @@ export default function LoginScreen() {
             // Location is optional for registration, continue without it
           }
           
+          // Get push token for notifications
+          let pushToken: string | undefined;
+          try { pushToken = await getCurrentPushToken(); } catch {}
+
           // Create citizen reporter account
           const res = await createCitizenReporterGoogle({
             ...(firebaseIdToken ? { firebaseIdToken } : { googleIdToken }),
             email: userInfo.user.email,
             languageId,
+            pushToken,
             location,
           });
           
@@ -955,8 +959,8 @@ export default function LoginScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mobile, resetLoading]);
   
-  const verifyOtp = useCallback(async () => {
-    const code = otpDigits.join('');
+  const verifyOtp = useCallback(async (otpOverride?: string[]) => {
+    const code = (otpOverride ?? otpDigits).join('');
     if (!/^\d{4}$/.test(code) || !resetCorrelationId || resetLoading) return;
     setResetLoading(true);
     setResetError(null);
@@ -974,9 +978,9 @@ export default function LoginScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [otpDigits, resetCorrelationId, resetLoading]);
   
-  const submitNewMpin = useCallback(async () => {
+  const submitNewMpin = useCallback(async (confirmOverride?: string[]) => {
     const newCode = resetNew.join('');
-    const confirmCode = resetConfirm.join('');
+    const confirmCode = (confirmOverride ?? resetConfirm).join('');
     if (!/^\d{4}$/.test(newCode) || newCode !== confirmCode || !resetCorrelationId || resetLoading) {
       if (newCode !== confirmCode) setResetError('MPINs do not match');
       return;
@@ -1010,7 +1014,7 @@ export default function LoginScreen() {
     idx: number,
     val: string,
     refs: React.RefObject<TextInput | null>[],
-    onComplete?: () => void
+    onComplete?: (next: string[]) => void
   ) => {
     const c = val.replace(/\D/g, '').slice(-1);
     const next = [...arr];
@@ -1018,16 +1022,17 @@ export default function LoginScreen() {
     setArr(next);
     setResetError(null);
     if (c && idx < 3) {
-      setTimeout(() => refs[idx + 1].current?.focus(), 30);
+      refs[idx + 1].current?.focus();
     }
     if (idx === 3 && c && /^\d{4}$/.test(next.join(''))) {
-      setTimeout(() => { Keyboard.dismiss(); onComplete?.(); }, 80);
+      Keyboard.dismiss();
+      onComplete?.(next);
     }
   }, []);
   
   const handleDigitKeyPress = useCallback((arr: string[], idx: number, key: string, refs: React.RefObject<TextInput | null>[]) => {
-    if (key === 'Backspace' && !arr[idx] && idx > 0) {
-      setTimeout(() => refs[idx - 1].current?.focus(), 30);
+    if (key === 'Backspace' && idx > 0) {
+      refs[idx - 1].current?.focus();
     }
   }, []);
   
@@ -1058,7 +1063,7 @@ export default function LoginScreen() {
       {/* Header */}
       <PremiumHeader onBack={() => router.canGoBack() ? router.back() : router.replace('/(tabs)')} isDark={isDark} />
       
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <ScrollView
           contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(insets.bottom, 20) + keyboardHeight }]}
           showsVerticalScrollIndicator={false}
@@ -1266,7 +1271,7 @@ export default function LoginScreen() {
             )}
             
             {/* Divider - show on iOS for Apple Sign-in, on Android for Google Sign-in */}
-            {!status && (
+            {!status && !mobile && (
               <View style={styles.divider}>
                 <View style={[styles.dividerLine, { backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' }]} />
                 <Text style={[styles.dividerText, { color: mutedColor }]}>OR</Text>
@@ -1275,7 +1280,7 @@ export default function LoginScreen() {
             )}
             
             {/* Sign in with Apple - iOS only (required by App Store guideline 4.8) */}
-            {!status && Platform.OS === 'ios' && (
+            {!status && !mobile && Platform.OS === 'ios' && appleAvailable && (
               <AppleAuthentication.AppleAuthenticationButton
                 buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
                 buttonStyle={isDark
@@ -1288,7 +1293,7 @@ export default function LoginScreen() {
             )}
 
             {/* Google Sign-In Button - Android only */}
-            {!status && Platform.OS !== 'ios' && (
+            {!status && !mobile && Platform.OS !== 'ios' && (
               <TouchableOpacity 
                 onPress={handleGoogleSignIn}
                 disabled={googleLoading || submitting}
@@ -1325,127 +1330,217 @@ export default function LoginScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
       
-      {/* Forgot MPIN Modal */}
-      <Modal visible={showReset} transparent animationType="fade" onRequestClose={closeReset}>
-        <BlurView intensity={isDark ? 40 : 20} style={StyleSheet.absoluteFill} tint={isDark ? 'dark' : 'light'}>
-          <Pressable style={styles.resetBackdrop} onPress={closeReset}>
-            <Pressable style={[styles.resetCard, { backgroundColor: isDark ? '#1e293b' : '#fff' }]} onPress={(e) => e.stopPropagation()}>
-              <View style={styles.resetHandle} />
-              
-              <View style={styles.resetHeader}>
-                <Text style={[styles.resetTitle, { color: textColor }]}>
-                  {resetStage === 'request' ? '🔐 Reset MPIN' : resetStage === 'verify' ? '📱 Verify OTP' : '🔑 New MPIN'}
-                </Text>
-                <TouchableOpacity onPress={closeReset} style={[styles.closeBtn, { backgroundColor: inputBg }]}>
-                  <Ionicons name="close" size={20} color={mutedColor} />
+      {/* Forgot MPIN Full Screen */}
+      <Modal visible={showReset} transparent={false} animationType="slide" onRequestClose={closeReset}>
+        <LinearGradient
+          colors={isDark ? ['#0a1628', '#1a2744', '#0d1a2d'] : ['#EBF4FF', '#F0F7FF', '#E8F1FF']}
+          style={{ flex: 1 }}
+        >
+          <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+          <KeyboardAvoidingView
+            style={{ flex: 1 }}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          >
+            <ScrollView
+              contentContainerStyle={{ flexGrow: 1, paddingBottom: 40 }}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              {/* Header */}
+              <View style={[styles.fpHeader, { paddingTop: insets.top + 12 }]}>
+                <TouchableOpacity onPress={closeReset} style={[styles.fpBackBtn, { backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }]}>
+                  <Ionicons name="arrow-back" size={22} color={isDark ? '#fff' : PRIMARY} />
                 </TouchableOpacity>
+                <Text style={[styles.fpPageTitle, { color: textColor }]}>
+                  {resetStage === 'request' ? 'Forgot MPIN' : resetStage === 'verify' ? 'Verify OTP' : 'Set New MPIN'}
+                </Text>
+                <View style={{ width: 44 }} />
               </View>
-              
-              {resetStage === 'request' && (
-                <View style={styles.resetContent}>
-                  <Text style={[styles.resetSubtitle, { color: mutedColor }]}>We&apos;ll send a verification code to</Text>
-                  <Text style={[styles.resetMobile, { color: PRIMARY }]}>+91 {mobile}</Text>
-                  <TouchableOpacity
-                    style={[styles.resetBtn, resetLoading && styles.btnDisabled]}
-                    onPress={requestOtp}
-                    disabled={resetLoading}
-                  >
-                    <LinearGradient colors={[PRIMARY, '#1e40af']} style={styles.btnGradient}>
-                      {resetLoading ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.btnText}>Send OTP</Text>}
-                    </LinearGradient>
-                  </TouchableOpacity>
-                </View>
-              )}
-              
-              {resetStage === 'verify' && (
-                <View style={styles.resetContent}>
-                  <Text style={[styles.resetSubtitle, { color: mutedColor }]}>Enter the 4-digit code sent to your phone</Text>
-                  <View style={styles.otpRow}>
-                    {otpRefs.map((ref, i) => (
-                      <TextInput
-                        key={i}
-                        ref={ref}
-                        value={otpDigits[i]}
-                        onChangeText={(v) => handleDigitInput(otpDigits, setOtpDigits, i, v, otpRefs, verifyOtp)}
-                        onKeyPress={({ nativeEvent }) => handleDigitKeyPress(otpDigits, i, nativeEvent.key, otpRefs)}
-                        keyboardType="number-pad"
-                        maxLength={1}
-                        style={[styles.otpBox, { backgroundColor: inputBg, borderColor, color: textColor }, otpDigits[i] && styles.otpBoxFilled]}
-                      />
-                    ))}
-                  </View>
-                  <TouchableOpacity
-                    style={[styles.resetBtn, (resetLoading || otpDigits.join('').length !== 4) && styles.btnDisabled]}
-                    onPress={verifyOtp}
-                    disabled={resetLoading || otpDigits.join('').length !== 4}
-                  >
-                    <LinearGradient colors={[PRIMARY, '#1e40af']} style={styles.btnGradient}>
-                      {resetLoading ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.btnText}>Verify</Text>}
-                    </LinearGradient>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={requestOtp} disabled={cooldown > 0 || resetLoading} style={styles.resendBtn}>
-                    <Text style={[styles.resendText, { color: cooldown > 0 ? mutedColor : SECONDARY }]}>
-                      {cooldown > 0 ? `Resend in ${cooldown}s` : 'Resend OTP'}
+
+              {/* Content Card */}
+              <View style={styles.fpContent}>
+
+                {/* Stage: Request OTP */}
+                {resetStage === 'request' && (
+                  <View style={styles.fpStageWrap}>
+                    <View style={[styles.fpIconCircle, { backgroundColor: isDark ? 'rgba(59,130,246,0.15)' : '#EBF4FF' }]}>
+                      <Ionicons name="lock-closed" size={36} color={PRIMARY} />
+                    </View>
+                    <Text style={[styles.fpStageTitle, { color: textColor }]}>Reset your MPIN</Text>
+                    <Text style={[styles.fpStageSubtitle, { color: mutedColor }]}>
+                      We'll send a 4-digit verification code to
                     </Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-              
-              {resetStage === 'set' && (
-                <View style={styles.resetContent}>
-                  <Text style={[styles.resetSubtitle, { color: mutedColor }]}>Create your new MPIN</Text>
-                  <View style={styles.otpRow}>
-                    {resetNewRefs.map((ref, i) => (
-                      <TextInput
-                        key={i}
-                        ref={ref}
-                        value={resetNew[i]}
-                        onChangeText={(v) => handleDigitInput(resetNew, setResetNew, i, v, resetNewRefs)}
-                        onKeyPress={({ nativeEvent }) => handleDigitKeyPress(resetNew, i, nativeEvent.key, resetNewRefs)}
-                        keyboardType="number-pad"
-                        maxLength={1}
-                        secureTextEntry
-                        style={[styles.otpBox, { backgroundColor: inputBg, borderColor, color: textColor }, resetNew[i] && styles.otpBoxFilled]}
-                      />
-                    ))}
+                    <View style={[styles.fpMobileBox, { backgroundColor: isDark ? 'rgba(59,130,246,0.12)' : '#EFF6FF', borderColor: isDark ? 'rgba(59,130,246,0.3)' : '#BFDBFE' }]}>
+                      <Ionicons name="phone-portrait" size={18} color={PRIMARY} />
+                      <Text style={[styles.fpMobileText, { color: PRIMARY }]}>+91 {mobile}</Text>
+                    </View>
+                    <TouchableOpacity
+                      style={[styles.fpPrimaryBtn, resetLoading && styles.btnDisabled]}
+                      onPress={requestOtp}
+                      disabled={resetLoading}
+                      activeOpacity={0.85}
+                    >
+                      <LinearGradient colors={[PRIMARY, '#1e40af']} style={styles.btnGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
+                        {resetLoading
+                          ? <ActivityIndicator size="small" color="#fff" />
+                          : <><Ionicons name="paper-plane" size={18} color="#fff" style={{ marginRight: 8 }} /><Text style={styles.btnText}>Send OTP</Text></>
+                        }
+                      </LinearGradient>
+                    </TouchableOpacity>
                   </View>
-                  <Text style={[styles.resetSubtitle, { color: mutedColor, marginTop: 16 }]}>Confirm MPIN</Text>
-                  <View style={styles.otpRow}>
-                    {resetConfirmRefs.map((ref, i) => (
-                      <TextInput
-                        key={i}
-                        ref={ref}
-                        value={resetConfirm[i]}
-                        onChangeText={(v) => handleDigitInput(resetConfirm, setResetConfirm, i, v, resetConfirmRefs, submitNewMpin)}
-                        onKeyPress={({ nativeEvent }) => handleDigitKeyPress(resetConfirm, i, nativeEvent.key, resetConfirmRefs)}
-                        keyboardType="number-pad"
-                        maxLength={1}
-                        secureTextEntry
-                        style={[styles.otpBox, { backgroundColor: inputBg, borderColor, color: textColor }, resetConfirm[i] && styles.otpBoxFilled]}
-                      />
-                    ))}
+                )}
+
+                {/* Stage: Verify OTP */}
+                {resetStage === 'verify' && (
+                  <View style={styles.fpStageWrap}>
+                    <View style={[styles.fpIconCircle, { backgroundColor: isDark ? 'rgba(16,185,129,0.15)' : '#ECFDF5' }]}>
+                      <Ionicons name="chatbubble-ellipses" size={36} color="#10B981" />
+                    </View>
+                    <Text style={[styles.fpStageTitle, { color: textColor }]}>Enter OTP</Text>
+                    <Text style={[styles.fpStageSubtitle, { color: mutedColor }]}>
+                      4-digit code sent to{' '}
+                      <Text style={{ color: PRIMARY, fontWeight: '700' }}>+91 {mobile}</Text>
+                    </Text>
+
+                    <View style={styles.fpOtpRow}>
+                      {otpRefs.map((ref, i) => (
+                        <TextInput
+                          key={i}
+                          ref={ref}
+                          value={otpDigits[i]}
+                          onChangeText={(v) => handleDigitInput(otpDigits, setOtpDigits, i, v, otpRefs, verifyOtp)}
+                          onKeyPress={({ nativeEvent }) => handleDigitKeyPress(otpDigits, i, nativeEvent.key, otpRefs)}
+                          keyboardType="number-pad"
+                          maxLength={1}
+                          style={[
+                            styles.fpOtpBox,
+                            { backgroundColor: inputBg, color: textColor },
+                            otpDigits[i]
+                              ? { borderColor: '#10B981', backgroundColor: isDark ? 'rgba(16,185,129,0.1)' : '#ECFDF5' }
+                              : { borderColor: isDark ? 'rgba(71,85,105,0.6)' : 'rgba(203,213,225,0.8)' }
+                          ]}
+                        />
+                      ))}
+                    </View>
+
+                    <TouchableOpacity
+                      style={[styles.fpPrimaryBtn, (resetLoading || otpDigits.join('').length !== 4) && styles.btnDisabled]}
+                      onPress={verifyOtp}
+                      disabled={resetLoading || otpDigits.join('').length !== 4}
+                      activeOpacity={0.85}
+                    >
+                      <LinearGradient colors={['#10B981', '#059669']} style={styles.btnGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
+                        {resetLoading
+                          ? <ActivityIndicator size="small" color="#fff" />
+                          : <><Ionicons name="checkmark-circle" size={18} color="#fff" style={{ marginRight: 8 }} /><Text style={styles.btnText}>Verify OTP</Text></>
+                        }
+                      </LinearGradient>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity onPress={requestOtp} disabled={cooldown > 0 || resetLoading} style={styles.fpResendBtn}>
+                      <Ionicons name="refresh" size={14} color={cooldown > 0 ? mutedColor : SECONDARY} style={{ marginRight: 4 }} />
+                      <Text style={[styles.resendText, { color: cooldown > 0 ? mutedColor : SECONDARY }]}>
+                        {cooldown > 0 ? `Resend in ${cooldown}s` : 'Resend OTP'}
+                      </Text>
+                    </TouchableOpacity>
                   </View>
-                  <TouchableOpacity
-                    style={[styles.resetBtn, (resetLoading || resetNew.join('') !== resetConfirm.join('') || resetNew.join('').length !== 4) && styles.btnDisabled]}
-                    onPress={submitNewMpin}
-                    disabled={resetLoading || resetNew.join('') !== resetConfirm.join('') || resetNew.join('').length !== 4}
-                  >
-                    <LinearGradient colors={[SECONDARY, '#ea580c']} style={styles.btnGradient}>
-                      {resetLoading ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.btnText}>Save MPIN</Text>}
-                    </LinearGradient>
-                  </TouchableOpacity>
-                </View>
-              )}
-              
-              {resetError && (
-                <View style={[styles.messageBox, styles.errorBox, { marginTop: 12 }]}>
-                  <Ionicons name="alert-circle" size={16} color="#DC2626" />
-                  <Text style={styles.errorText}>{resetError}</Text>
-                </View>
-              )}
-            </Pressable>
-          </Pressable>
-        </BlurView>
+                )}
+
+                {/* Stage: Set New MPIN */}
+                {resetStage === 'set' && (
+                  <View style={styles.fpStageWrap}>
+                    <View style={[styles.fpIconCircle, { backgroundColor: isDark ? 'rgba(250,124,5,0.15)' : '#FFF7ED' }]}>
+                      <Ionicons name="key" size={36} color={SECONDARY} />
+                    </View>
+                    <Text style={[styles.fpStageTitle, { color: textColor }]}>Create New MPIN</Text>
+                    <Text style={[styles.fpStageSubtitle, { color: mutedColor }]}>Choose a secure 4-digit PIN</Text>
+
+                    {/* New MPIN */}
+                    <View style={[styles.fpPinSection, { backgroundColor: isDark ? 'rgba(30,41,59,0.6)' : 'rgba(255,255,255,0.9)', borderColor: isDark ? 'rgba(71,85,105,0.4)' : 'rgba(226,232,240,0.8)' }]}>
+                      <Text style={[styles.fpPinLabel, { color: mutedColor }]}>New MPIN</Text>
+                      <View style={styles.fpOtpRow}>
+                        {resetNewRefs.map((ref, i) => (
+                          <TextInput
+                            key={i}
+                            ref={ref}
+                            value={resetNew[i]}
+                            onChangeText={(v) => handleDigitInput(resetNew, setResetNew, i, v, resetNewRefs, () => resetConfirmRefs[0].current?.focus())}
+                            onKeyPress={({ nativeEvent }) => handleDigitKeyPress(resetNew, i, nativeEvent.key, resetNewRefs)}
+                            keyboardType="number-pad"
+                            maxLength={1}
+                            secureTextEntry
+                            style={[
+                              styles.fpOtpBox,
+                              { backgroundColor: inputBg, color: textColor },
+                              resetNew[i]
+                                ? { borderColor: SECONDARY, backgroundColor: isDark ? 'rgba(250,124,5,0.1)' : '#FFF7ED' }
+                                : { borderColor: isDark ? 'rgba(71,85,105,0.6)' : 'rgba(203,213,225,0.8)' }
+                            ]}
+                          />
+                        ))}
+                      </View>
+                    </View>
+
+                    {/* Confirm MPIN */}
+                    <View style={[styles.fpPinSection, { marginTop: 16, backgroundColor: isDark ? 'rgba(30,41,59,0.6)' : 'rgba(255,255,255,0.9)', borderColor: isDark ? 'rgba(71,85,105,0.4)' : 'rgba(226,232,240,0.8)' }]}>
+                      <Text style={[styles.fpPinLabel, { color: mutedColor }]}>Confirm MPIN</Text>
+                      <View style={styles.fpOtpRow}>
+                        {resetConfirmRefs.map((ref, i) => (
+                          <TextInput
+                            key={i}
+                            ref={ref}
+                            value={resetConfirm[i]}
+                            onChangeText={(v) => handleDigitInput(resetConfirm, setResetConfirm, i, v, resetConfirmRefs, submitNewMpin)}
+                            onKeyPress={({ nativeEvent }) => handleDigitKeyPress(resetConfirm, i, nativeEvent.key, resetConfirmRefs)}
+                            keyboardType="number-pad"
+                            maxLength={1}
+                            secureTextEntry
+                            style={[
+                              styles.fpOtpBox,
+                              { backgroundColor: inputBg, color: textColor },
+                              resetConfirm[i]
+                                ? {
+                                    borderColor: resetNew.join('').length === 4 && resetConfirm.slice(0, i + 1).join('') === resetNew.slice(0, i + 1).join('') ? '#10B981' : '#EF4444',
+                                    backgroundColor: isDark ? 'rgba(16,185,129,0.08)' : '#ECFDF5'
+                                  }
+                                : { borderColor: isDark ? 'rgba(71,85,105,0.6)' : 'rgba(203,213,225,0.8)' }
+                            ]}
+                          />
+                        ))}
+                      </View>
+                      {resetNew.join('').length === 4 && resetConfirm.join('').length === 4 && resetNew.join('') !== resetConfirm.join('') && (
+                        <Text style={{ color: '#EF4444', fontSize: 13, marginTop: 8, textAlign: 'center' }}>MPINs do not match</Text>
+                      )}
+                    </View>
+
+                    <TouchableOpacity
+                      style={[styles.fpPrimaryBtn, { marginTop: 24 }, (resetLoading || resetNew.join('') !== resetConfirm.join('') || resetNew.join('').length !== 4) && styles.btnDisabled]}
+                      onPress={submitNewMpin}
+                      disabled={resetLoading || resetNew.join('') !== resetConfirm.join('') || resetNew.join('').length !== 4}
+                      activeOpacity={0.85}
+                    >
+                      <LinearGradient colors={[SECONDARY, '#ea580c']} style={styles.btnGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
+                        {resetLoading
+                          ? <ActivityIndicator size="small" color="#fff" />
+                          : <><Ionicons name="shield-checkmark" size={18} color="#fff" style={{ marginRight: 8 }} /><Text style={styles.btnText}>Save MPIN</Text></>
+                        }
+                      </LinearGradient>
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                {/* Error */}
+                {resetError && (
+                  <View style={[styles.messageBox, styles.errorBox, { marginTop: 16, marginHorizontal: 0 }]}>
+                    <Ionicons name="alert-circle" size={16} color="#DC2626" />
+                    <Text style={styles.errorText}>{resetError}</Text>
+                  </View>
+                )}
+
+              </View>
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </LinearGradient>
       </Modal>
       
       {/* Success Celebration */}
@@ -1827,67 +1922,112 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '500',
   },
-  // Reset Modal
-  resetBackdrop: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  resetCard: {
-    width: '100%',
-    maxWidth: 380,
-    borderRadius: 28,
-    padding: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 16 },
-    shadowOpacity: 0.2,
-    shadowRadius: 32,
-    elevation: 24,
-  },
-  resetHandle: {
-    width: 40,
-    height: 4,
-    backgroundColor: '#D1D5DB',
-    borderRadius: 2,
-    alignSelf: 'center',
-    marginBottom: 20,
-  },
-  resetHeader: {
+  // Forgot MPIN Full Page
+  fpHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 20,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
   },
-  resetTitle: {
-    fontSize: 20,
-    fontWeight: '800',
-  },
-  closeBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+  fpBackBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  resetContent: {
-    alignItems: 'center',
-  },
-  resetSubtitle: {
-    fontSize: 14,
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  resetMobile: {
-    fontSize: 20,
+  fpPageTitle: {
+    fontSize: 18,
     fontWeight: '700',
-    marginBottom: 24,
   },
-  resetBtn: {
+  fpContent: {
+    flex: 1,
+    paddingHorizontal: 24,
+    paddingTop: 8,
+    paddingBottom: 32,
+    justifyContent: 'center',
+  },
+  fpStageWrap: {
+    alignItems: 'center',
+    gap: 6,
+  },
+  fpIconCircle: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+  },
+  fpStageTitle: {
+    fontSize: 26,
+    fontWeight: '800',
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+  fpStageSubtitle: {
+    fontSize: 14,
+    textAlign: 'center',
+    marginBottom: 24,
+    lineHeight: 20,
+  },
+  fpMobileBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 28,
+  },
+  fpMobileText: {
+    fontSize: 18,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  fpPrimaryBtn: {
     width: '100%',
     borderRadius: 14,
     overflow: 'hidden',
     marginTop: 8,
+  },
+  fpOtpRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 14,
+    marginBottom: 24,
+  },
+  fpOtpBox: {
+    width: 58,
+    height: 66,
+    borderRadius: 14,
+    borderWidth: 2,
+    fontSize: 26,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  fpResendBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+  },
+  fpPinSection: {
+    width: '100%',
+    padding: 20,
+    borderRadius: 16,
+    borderWidth: 1,
+    alignItems: 'center',
+  },
+  fpPinLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    letterSpacing: 0.5,
+    marginBottom: 14,
+    alignSelf: 'flex-start',
   },
   resendBtn: {
     marginTop: 16,
@@ -1897,6 +2037,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
+  // Legacy OTP styles (used in login OTP flow)
   otpRow: {
     flexDirection: 'row',
     justifyContent: 'center',

@@ -3,11 +3,11 @@
     "name": "kaburlu",
     "slug": "kaburlu",
     "version": "1.1.7",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/images/app-icon.png",
     "scheme": "kaburlu",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": false,
+    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.media.kaburlu",
@@ -15,7 +15,8 @@
       "associatedDomains": [
         "applinks:s.kaburlumedia.com",
         "applinks:kaburlumedia.com",
-        "applinks:www.kaburlumedia.com"
+        "applinks:www.kaburlumedia.com",
+        "applinks:*.kaburlumedia.com"
       ],
       "googleServicesFile": "./GoogleService-Info.plist",
       "infoPlist": {
@@ -29,7 +30,7 @@
       }
     },
     "android": {
-      "versionCode": 9,
+      "versionCode": 18,
       "icon": "./assets/images/app-icon.png",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/app-icon-foreground.png",
@@ -39,7 +40,6 @@
       "edgeToEdgeEnabled": true,
       "package": "com.media.kaburlu",
       "googleServicesFile": "./google-services.json",
-      "softwareKeyboardLayoutMode": "pan",
       "permissions": [
         "android.permission.RECORD_AUDIO"
       ],
@@ -88,6 +88,11 @@
           "action": "VIEW",
           "autoVerify": true,
           "data": [
+            {
+              "scheme": "https",
+              "host": "*.kaburlumedia.com",
+              "pathPrefix": "/"
+            },
             {
               "scheme": "https",
               "host": "www.kaburlumedia.com",

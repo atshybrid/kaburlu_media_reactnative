@@ -3,7 +3,7 @@ import LoginBottomSheet from '@/components/LoginBottomSheet';
 import Toast from '@/components/Toast';
 import ErrorBoundary from '@/components/ErrorBoundary';
 import { initCrashlytics } from '@/services/crashlytics';
-import { checkForAppUpdates } from '@/services/appUpdates';
+import { checkForAppUpdates, checkPlayStoreUpdate } from '@/services/appUpdates';
 import { ensureFirebaseAuthAsync, isFirebaseConfigComplete, logFirebaseGoogleAlignment } from '@/services/firebaseClient';
 import { setupNotificationListeners, syncPushTokenOnForeground } from '@/services/notifications';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
@@ -139,6 +139,15 @@ function ThemedApp() {
     return () => clearTimeout(timer);
   }, []);
 
+  // Check for Play Store native app updates (Android only)
+  // Uses Google Play In-App Update API – FLEXIBLE flow downloads silently
+  React.useEffect(() => {
+    const timer = setTimeout(() => {
+      checkPlayStoreUpdate(false).catch(() => {});
+    }, 5000); // slightly after OTA check
+    return () => clearTimeout(timer);
+  }, []);
+
   // Deep link & App Link handler for:
   // - https://s.kaburlumedia.com/<shortId>          → article
   // - https://kaburlumedia.com/article/<id>          → article
@@ -164,13 +173,13 @@ function ThemedApp() {
         }
 
         // ── 2. Main / www domain ──────────────────────────────────────────
-        if (url.match(/(?:www\.)?kaburlumedia\.com/)) {
+        if (url.match(/(?:[a-z0-9-]+\.)*kaburlumedia\.com/i)) {
           let pathname = '';
           try {
             pathname = new URL(url).pathname;
           } catch {
             // fallback: extract path manually
-            pathname = url.replace(/^https?:\/\/(?:www\.)?kaburlumedia\.com/, '') || '/';
+            pathname = url.replace(/^https?:\/\/(?:[a-z0-9-]+\.)*kaburlumedia\.com/i, '') || '/';
           }
 
           // /article/<id>
