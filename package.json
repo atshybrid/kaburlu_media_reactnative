@@ -8,6 +8,7 @@
   "main": "expo-router/entry",
   "version": "1.1.7",
   "scripts": {
+    "postinstall": "patch-package",
     "agent:smoke": "node ./scripts/agent-smoke.test.mjs",
     "start": "expo start",
     "server": "node server.js",
@@ -99,6 +100,7 @@
     "react-native": "0.81.5",
     "react-native-copilot": "^3.3.3",
     "react-native-gesture-handler": "~2.28.0",
+    "react-native-in-app-updates": "^0.2.2",
     "react-native-pager-view": "6.9.1",
     "react-native-razorpay": "^2.3.1",
     "react-native-reanimated": "~4.1.0",
@@ -124,6 +126,7 @@
     "expo-module-scripts": "^5.0.8",
     "fflate": "^0.8.2",
     "jimp": "^1.6.0",
+    "patch-package": "^8.0.1",
     "react-native-svg-transformer": "^1.5.0",
     "typescript": "~5.9.2"
   },

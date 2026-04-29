@@ -18,3 +18,29 @@ ios/kaburlu.xcworkspace/
 *.jks
 .env.local
 .env.*.local
+
+# Large build artifacts
+*.aab
+*.apk
+*.ipa
+build-*.aab
+kaburlu-release-*.aab
+
+# Credentials (never upload these)
+credentials.json
+google-services.json
+GoogleService-Info.plist
+
+# Docs / reports
+docs/
+examples/
+*.md
+!README.md
+
+# Test files
+tests/
+__tests__/
+coverage/
+
+# iOS xcworkspace (auto-generated from Podfile.lock)
+ios/kaburlu.xcworkspace/
