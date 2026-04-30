@@ -26,10 +26,8 @@ ios/kaburlu.xcworkspace/
 build-*.aab
 kaburlu-release-*.aab
 
-# Credentials (never upload these)
+# Credentials
 credentials.json
-google-services.json
-GoogleService-Info.plist
 
 # Docs / reports
 docs/
